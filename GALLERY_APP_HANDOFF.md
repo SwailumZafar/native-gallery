@@ -76,10 +76,15 @@ Local Git status:
 GitHub status:
 
 - Code is committed locally.
-- GitHub push is not complete yet.
-- No GitHub remote is configured yet.
-- No `GITHUB_TOKEN` or `GH_TOKEN` was available in the environment.
-- To push to GitHub, use either an existing empty GitHub repo URL or authenticate with GitHub CLI / token.
+- GitHub push is complete.
+- Remote `origin` is configured:
+
+```text
+https://github.com/SwailumZafar/native-gallery.git
+```
+
+- Repository visibility: private.
+- Local branch `main` tracks `origin/main`.
 
 Long-running process cleanup:
 
@@ -96,12 +101,11 @@ ADB is the Android tool that talks to an emulator or physical phone. It is used 
 
 Current next steps:
 
-1. Push the committed project to GitHub after authentication or an empty repo URL is available.
-2. Install the debug APK on a real phone for hands-on visual review.
-3. Start the next app milestone: Android media permissions and MediaStore loading.
-4. Replace fake gallery data with real device media.
-5. Add thumbnail loading/caching and performance work.
-6. Add private/locked album later as a separate feature, not mixed with hidden items.
+1. Install the debug APK on a real phone for hands-on visual review.
+2. Start the next app milestone: Android media permissions and MediaStore loading.
+3. Replace fake gallery data with real device media.
+4. Add thumbnail loading/caching and performance work.
+5. Add private/locked album later as a separate feature, not mixed with hidden items.
 
 ## Current Status
 
@@ -499,7 +503,7 @@ After the visual shell feels right:
 4. Apply hidden album filtering to real albums.
 5. Add performance work: lazy grids, stable keys, thumbnail prefetch, baseline profiles.
 6. Add private/locked album separately.
-7. Push the existing local commit to GitHub after authentication is available.
+7. Keep milestone commits pushed to GitHub as work continues.
 
 ## Tooling Notes
 
@@ -521,7 +525,7 @@ Tooling located or set up during implementation:
 - AVD used for QA: `Medium_Phone_API_36.1`
 - Portable Git: `F:\App\Gallery\tools\mingit\cmd\git.exe`
 
-GitHub CLI is still not set up. GitHub push needs authentication or an existing remote URL.
+GitHub CLI is still not set up, but Git Credential Manager is authenticated for Git operations.
 
 ## GitHub Plan
 
@@ -531,14 +535,13 @@ Current GitHub state:
 
 - Local repository exists.
 - Local branch: `main`.
-- Local commit: `6f2ae39 Initial Android gallery visual shell`.
-- Remote: not configured yet.
-- Push: pending GitHub authentication.
+- Remote: `origin` -> `https://github.com/SwailumZafar/native-gallery.git`.
+- Push: complete.
+- Repository: private `SwailumZafar/native-gallery`.
 
-Default GitHub setup when auth is available:
+GitHub setup:
 
-- New private repo.
-- Suggested repo name: `native-gallery`.
+- Private repo name: `native-gallery`.
 - Milestone commits, not noisy tiny commits.
 
 Suggested milestones:
@@ -550,7 +553,7 @@ Suggested milestones:
 - `Add MediaStore gallery loading`
 - `Add performance tuning`
 
-No GitHub account was used yet. The user will need to authenticate with the GitHub account that should own the repo, or provide an existing empty repo URL.
+GitHub account used for push: `SwailumZafar`.
 
 ## Implementation Guardrails
 
@@ -582,7 +585,7 @@ Performance philosophy:
 Use this prompt in the implementation chat:
 
 ```text
-Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed first Android native Compose visual shell milestone. First push the local commit to GitHub after authentication is available, then start the MediaStore/device media loading milestone. Keep the design locked to Set A.
+Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed first Android native Compose visual shell milestone. GitHub is already configured at https://github.com/SwailumZafar/native-gallery.git. Start the MediaStore/device media loading milestone next. Keep the design locked to Set A.
 ```
 
 
