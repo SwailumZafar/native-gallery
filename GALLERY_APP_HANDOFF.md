@@ -2,7 +2,7 @@
 
 ## Latest Implementation Update - 2026-06-21
 
-The first Android native Compose visual-shell milestone has been implemented and verified. The first MediaStore/device media loading milestone is now implemented and build-verified. A follow-up completeness fix now removes the initial 600-item MediaStore cap and renders all loaded photo rows in the Photos timeline. A visual tuning pass then reduced Photos date label size, softened date weight/color, and made timeline tiles larger.
+The first Android native Compose visual-shell milestone has been implemented and verified. The first MediaStore/device media loading milestone is now implemented and build-verified. A follow-up completeness fix now removes the initial 600-item MediaStore cap and renders all loaded photo rows in the Photos timeline. A visual tuning pass then reduced Photos date label size, softened date weight/color, and made timeline tiles larger. Thumbnail caching, shimmer skeleton loaders, and a full-screen photo viewer are now implemented.
 
 Current workspace:
 
@@ -28,6 +28,9 @@ Current implementation status:
 - Photos timeline now renders all loaded rows instead of visual-preview slices.
 - Android 14+ partial library access is detected and shown as "selected photos only" in the UI.
 - Photos date labels are reduced to 14sp medium/muted and timeline rows use larger 4-column image tiles with tighter gaps.
+- Thumbnail loading now uses an in-memory LRU cache and shimmer skeleton placeholders.
+- Photos and Albums show skeleton states during the first real-media load.
+- Tapping a Photos tile opens a full-screen photo viewer with fade/scale animation and back-button close support.
 
 Debug APK:
 
@@ -39,7 +42,7 @@ Last verified APK details:
 
 ```text
 Size: 18,880,013 bytes
-Last write time: 2026-06-21 8:43:51 PM
+Last write time: 2026-06-21 9:07:14 PM
 ```
 
 This APK is a debug build. It can be installed on an Android phone for review, but the phone may require allowing installs from unknown sources or USB debugging, depending on the install method.
@@ -107,11 +110,12 @@ ADB is the Android tool that talks to an emulator or physical phone. It is used 
 
 Current next steps:
 
-1. Reinstall the latest debug APK and verify the Photos timeline now scrolls through the full granted library.
-2. If Android shows `selected photos only`, tap `Allow all` or change the app permission to all photos in Android settings.
-3. Improve thumbnail caching/performance beyond the initial `loadThumbnail` path.
-4. Apply hidden album filtering more deeply to real device buckets.
-5. Add private/locked album later as a separate feature, not mixed with hidden items.
+1. Test the shimmer/cache/photo-viewer APK on a real phone using `scripts\rebuild-install-debug.ps1`.
+2. Check that skeletons appear during initial load and that thumbnail scrolling feels smoother.
+3. Verify tapping a photo opens the full-screen viewer and back closes it smoothly.
+4. Improve viewer gestures next: swipe between photos, pinch zoom, and video playback.
+5. Apply hidden album filtering more deeply to real device buckets.
+6. Add private/locked album later as a separate feature, not mixed with hidden items.
 
 ## Current Status
 
@@ -591,7 +595,7 @@ Performance philosophy:
 Use this prompt in the implementation chat:
 
 ```text
-Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed visual shell plus initial MediaStore loading milestone. GitHub is configured at https://github.com/SwailumZafar/native-gallery.git. The latest APK includes the photo-completeness fix: no 600-item cap, all loaded timeline rows render, and Android partial-photo access is surfaced. Next, verify on a real phone and improve thumbnail caching/performance. Keep the design locked to Set A.
+Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed visual shell plus MediaStore loading milestone. GitHub is configured at https://github.com/SwailumZafar/native-gallery.git. The latest APK includes shimmer skeleton loaders, thumbnail memory caching, and a full-screen tap-to-open photo viewer. Next, test on a real phone, then add viewer gestures such as swipe between photos and pinch zoom. Keep the design locked to Set A.
 ```
 
 

@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,6 +44,7 @@ import com.example.nativegallery.model.AlbumLayoutMode
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.MediaAccessNotice
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 private enum class GalleryTab {
@@ -66,6 +68,8 @@ fun GalleryApp() {
     var albumLayoutMode by rememberSaveable { mutableStateOf(AlbumLayoutMode.BigTiles) }
     var mediaAccess by remember { mutableStateOf(MediaPermissions.currentAccess(context)) }
     var mediaStoreSnapshot by remember { mutableStateOf<GallerySnapshot?>(null) }
+    var viewerMediaItem by remember { mutableStateOf<MediaItem?>(null) }
+    var viewerVisible by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -75,6 +79,7 @@ fun GalleryApp() {
 
     LaunchedEffect(mediaAccess) {
         if (mediaAccess.hasAccess) {
+            mediaStoreSnapshot = null
             mediaStoreSnapshot = withContext(Dispatchers.IO) {
                 mediaStoreRepository.loadGallery(mediaAccess.mediaKinds)
             }
@@ -83,8 +88,17 @@ fun GalleryApp() {
         }
     }
 
+    LaunchedEffect(viewerVisible) {
+        if (!viewerVisible && viewerMediaItem != null) {
+            delay(180)
+            viewerMediaItem = null
+        }
+    }
+
     val fakeSnapshot = remember { FakeGalleryRepository.snapshot() }
+    val isLoadingMedia = mediaAccess.hasAccess && mediaStoreSnapshot == null
     val activeSnapshot = when {
+        isLoadingMedia -> GallerySnapshot(emptyList(), emptyList())
         mediaAccess.hasAccess && !mediaStoreSnapshot?.mediaItems.isNullOrEmpty() -> mediaStoreSnapshot ?: fakeSnapshot
         else -> fakeSnapshot
     }
@@ -127,43 +141,57 @@ fun GalleryApp() {
         else -> null
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            if (destination == GalleryDestination.Main) {
-                GalleryBottomBar(
-                    selectedTab = selectedTab,
-                    onTabSelected = { selectedTab = it }
-                )
-            }
-        }
-    ) { innerPadding ->
-        when (destination) {
-            GalleryDestination.Main -> {
-                when (selectedTab) {
-                    GalleryTab.Photos -> PhotosScreen(
-                        mediaItems = visibleMedia,
-                        contentPadding = innerPadding,
-                        mediaAccessNotice = mediaAccessNotice
-                    )
-                    GalleryTab.Albums -> AlbumsScreen(
-                        albums = visibleAlbums,
-                        layoutMode = albumLayoutMode,
-                        onLayoutModeChange = { albumLayoutMode = it },
-                        onOpenHiddenItems = { destination = GalleryDestination.HiddenItems },
-                        contentPadding = innerPadding,
-                        mediaAccessNotice = mediaAccessNotice
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = MaterialTheme.colorScheme.background,
+            bottomBar = {
+                if (destination == GalleryDestination.Main && !viewerVisible) {
+                    GalleryBottomBar(
+                        selectedTab = selectedTab,
+                        onTabSelected = { selectedTab = it }
                     )
                 }
             }
-            GalleryDestination.HiddenItems -> HiddenItemsScreen(
-                albums = hideableAlbums,
-                hiddenStates = hiddenStates,
-                onBack = { destination = GalleryDestination.Main },
-                contentPadding = PaddingValues()
-            )
+        ) { innerPadding ->
+            when (destination) {
+                GalleryDestination.Main -> {
+                    when (selectedTab) {
+                        GalleryTab.Photos -> PhotosScreen(
+                            mediaItems = visibleMedia,
+                            contentPadding = innerPadding,
+                            mediaAccessNotice = mediaAccessNotice,
+                            isLoading = isLoadingMedia,
+                            onMediaClick = { mediaItem ->
+                                viewerMediaItem = mediaItem
+                                viewerVisible = true
+                            }
+                        )
+                        GalleryTab.Albums -> AlbumsScreen(
+                            albums = visibleAlbums,
+                            layoutMode = albumLayoutMode,
+                            onLayoutModeChange = { albumLayoutMode = it },
+                            onOpenHiddenItems = { destination = GalleryDestination.HiddenItems },
+                            contentPadding = innerPadding,
+                            mediaAccessNotice = mediaAccessNotice,
+                            isLoading = isLoadingMedia
+                        )
+                    }
+                }
+                GalleryDestination.HiddenItems -> HiddenItemsScreen(
+                    albums = hideableAlbums,
+                    hiddenStates = hiddenStates,
+                    onBack = { destination = GalleryDestination.Main },
+                    contentPadding = PaddingValues()
+                )
+            }
         }
+
+        PhotoViewerOverlay(
+            mediaItem = viewerMediaItem,
+            visible = viewerVisible,
+            onClose = { viewerVisible = false }
+        )
     }
 }
 

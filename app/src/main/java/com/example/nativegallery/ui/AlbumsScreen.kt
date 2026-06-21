@@ -52,6 +52,7 @@ import com.example.nativegallery.ui.components.HeaderActionButton
 import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
 import com.example.nativegallery.ui.components.SearchPill
+import com.example.nativegallery.ui.components.SkeletonBlock
 
 @Composable
 fun AlbumsScreen(
@@ -60,7 +61,8 @@ fun AlbumsScreen(
     onLayoutModeChange: (AlbumLayoutMode) -> Unit,
     onOpenHiddenItems: () -> Unit,
     contentPadding: PaddingValues,
-    mediaAccessNotice: (@Composable () -> Unit)? = null
+    mediaAccessNotice: (@Composable () -> Unit)? = null,
+    isLoading: Boolean = false
 ) {
     var overflowExpanded by rememberSaveable { mutableStateOf(false) }
     var layoutExpanded by rememberSaveable { mutableStateOf(false) }
@@ -160,7 +162,11 @@ fun AlbumsScreen(
             Spacer(Modifier.height(18.dp))
         }
 
-        if (layoutMode == AlbumLayoutMode.BigTiles) {
+        if (isLoading) {
+            item {
+                AlbumsLoadingState(layoutMode = layoutMode)
+            }
+        } else if (layoutMode == AlbumLayoutMode.BigTiles) {
             if (allPhotos != null) {
                 item {
                     AlbumHeroCard(album = allPhotos)
@@ -346,6 +352,62 @@ private fun BasicAlbumGrid(albums: List<Album>) {
     }
 }
 
+@Composable
+private fun AlbumsLoadingState(layoutMode: AlbumLayoutMode) {
+    if (layoutMode == AlbumLayoutMode.BigTiles) {
+        SkeletonBlock(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(176.dp),
+            cornerRadius = 24.dp
+        )
+        Spacer(Modifier.height(12.dp))
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val spacing = 12.dp
+            val cellWidth = (maxWidth - spacing) / 2
+            Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                repeat(3) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+                        repeat(2) {
+                            SkeletonBlock(
+                                modifier = Modifier
+                                    .width(cellWidth)
+                                    .height(176.dp),
+                                cornerRadius = 22.dp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val spacing = 14.dp
+            val cellWidth = (maxWidth - spacing * 2) / 3
+            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                repeat(3) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+                        repeat(3) {
+                            Column(modifier = Modifier.width(cellWidth)) {
+                                SkeletonBlock(
+                                    modifier = Modifier.size(cellWidth),
+                                    cornerRadius = 18.dp
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                SkeletonBlock(
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.82f)
+                                        .height(14.dp),
+                                    cornerRadius = 7.dp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 @Composable
 private fun AlbumImageCard(
     album: Album,

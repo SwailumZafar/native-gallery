@@ -6,8 +6,14 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Size
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -34,6 +40,8 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -137,15 +145,23 @@ fun SectionTitle(
 fun MediaThumbnail(
     mediaItem: MediaItem,
     modifier: Modifier = Modifier,
-    cornerRadius: Dp = 10.dp
+    cornerRadius: Dp = 10.dp,
+    onClick: (() -> Unit)? = null
 ) {
-    Box(modifier = modifier) {
+    val containerModifier = if (onClick != null) {
+        modifier.clickable(onClick = onClick)
+    } else {
+        modifier
+    }
+
+    Box(modifier = containerModifier) {
         GalleryImage(
             imageRes = mediaItem.imageRes,
             imageUri = mediaItem.contentUri,
             contentDescription = mediaItem.title,
             modifier = Modifier.fillMaxSize(),
-            cornerRadius = cornerRadius
+            cornerRadius = cornerRadius,
+            thumbnailSize = 384
         )
         if (mediaItem.isVideo && mediaItem.contentUri != null) {
             VideoBadge(
@@ -164,14 +180,16 @@ fun ResourceImage(
     contentDescription: String,
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 16.dp,
-    imageUri: Uri? = null
+    imageUri: Uri? = null,
+    thumbnailSize: Int = 512
 ) {
     GalleryImage(
         imageRes = imageRes,
         imageUri = imageUri,
         contentDescription = contentDescription,
         modifier = modifier,
-        cornerRadius = cornerRadius
+        cornerRadius = cornerRadius,
+        thumbnailSize = thumbnailSize
     )
 }
 
@@ -181,9 +199,11 @@ fun GalleryImage(
     imageUri: Uri?,
     contentDescription: String,
     modifier: Modifier = Modifier,
-    cornerRadius: Dp = 16.dp
+    cornerRadius: Dp = 16.dp,
+    contentScale: ContentScale = ContentScale.Crop,
+    thumbnailSize: Int = 512
 ) {
-    val bitmap = rememberContentUriBitmap(imageUri)
+    val bitmap = rememberContentUriBitmap(imageUri, thumbnailSize)
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(cornerRadius))
@@ -194,7 +214,7 @@ fun GalleryImage(
                 Image(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = contentDescription,
-                    contentScale = ContentScale.Crop,
+                    contentScale = contentScale,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -202,12 +222,48 @@ fun GalleryImage(
                 Image(
                     painter = painterResource(imageRes),
                     contentDescription = contentDescription,
-                    contentScale = ContentScale.Crop,
+                    contentScale = contentScale,
                     modifier = Modifier.fillMaxSize()
+                )
+            }
+            else -> {
+                SkeletonBlock(
+                    modifier = Modifier.fillMaxSize(),
+                    cornerRadius = 0.dp
                 )
             }
         }
     }
+}
+
+@Composable
+fun SkeletonBlock(
+    modifier: Modifier = Modifier,
+    cornerRadius: Dp = 16.dp
+) {
+    val base = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
+    val highlight = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+    val transition = rememberInfiniteTransition(label = "skeleton shimmer")
+    val offset = transition.animateFloat(
+        initialValue = -420f,
+        targetValue = 840f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1150, easing = LinearEasing)
+        ),
+        label = "skeleton shimmer offset"
+    )
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(cornerRadius))
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(base, highlight, base),
+                    start = Offset(offset.value, 0f),
+                    end = Offset(offset.value + 360f, 360f)
+                )
+            )
+    )
 }
 
 @Composable
@@ -275,23 +331,28 @@ fun VideoBadge(
 }
 
 @Composable
-private fun rememberContentUriBitmap(imageUri: Uri?): Bitmap? {
+private fun rememberContentUriBitmap(imageUri: Uri?, thumbnailSize: Int): Bitmap? {
     val context = LocalContext.current.applicationContext
-    val bitmapState = produceState<Bitmap?>(initialValue = null, imageUri) {
-        value = null
-        if (imageUri != null) {
+    val cacheKey = imageUri?.let { ThumbnailMemoryCache.key(it, thumbnailSize) }
+    val cachedBitmap = cacheKey?.let { ThumbnailMemoryCache.get(it) }
+
+    val bitmapState = produceState<Bitmap?>(initialValue = cachedBitmap, imageUri, thumbnailSize) {
+        value = cachedBitmap
+        if (imageUri != null && cacheKey != null && cachedBitmap == null) {
             value = withContext(Dispatchers.IO) {
-                loadThumbnail(context, imageUri)
+                loadThumbnail(context, imageUri, thumbnailSize)?.also { loaded ->
+                    ThumbnailMemoryCache.put(cacheKey, loaded)
+                }
             }
         }
     }
     return bitmapState.value
 }
 
-private fun loadThumbnail(context: Context, imageUri: Uri): Bitmap? {
+private fun loadThumbnail(context: Context, imageUri: Uri, thumbnailSize: Int): Bitmap? {
     return try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            context.contentResolver.loadThumbnail(imageUri, Size(512, 512), null)
+            context.contentResolver.loadThumbnail(imageUri, Size(thumbnailSize, thumbnailSize), null)
         } else {
             @Suppress("DEPRECATION")
             MediaStore.Images.Media.getBitmap(context.contentResolver, imageUri)

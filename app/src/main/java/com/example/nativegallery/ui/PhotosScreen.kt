@@ -2,7 +2,6 @@ package com.example.nativegallery.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,12 +23,15 @@ import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.ScreenHeader
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SectionTitle
+import com.example.nativegallery.ui.components.SkeletonBlock
 
 @Composable
 fun PhotosScreen(
     mediaItems: List<MediaItem>,
     contentPadding: PaddingValues,
-    mediaAccessNotice: (@Composable () -> Unit)? = null
+    mediaAccessNotice: (@Composable () -> Unit)? = null,
+    isLoading: Boolean = false,
+    onMediaClick: (MediaItem) -> Unit = {}
 ) {
     val sections = mediaItems
         .groupBy { it.dateLabel }
@@ -68,12 +70,17 @@ fun PhotosScreen(
             }
         }
 
-        sections.forEachIndexed { index, section ->
-            photoSection(
-                title = section.key,
-                mediaItems = section.value,
-                columns = 4
-            )
+        if (isLoading) {
+            loadingPhotoSections()
+        } else {
+            sections.forEach { section ->
+                photoSection(
+                    title = section.key,
+                    mediaItems = section.value,
+                    columns = 4,
+                    onMediaClick = onMediaClick
+                )
+            }
         }
     }
 }
@@ -81,7 +88,8 @@ fun PhotosScreen(
 private fun LazyListScope.photoSection(
     title: String,
     mediaItems: List<MediaItem>,
-    columns: Int
+    columns: Int,
+    onMediaClick: (MediaItem) -> Unit
 ) {
     if (mediaItems.isEmpty()) {
         return
@@ -98,7 +106,8 @@ private fun LazyListScope.photoSection(
         PhotoGridRow(
             mediaItems = rowItems,
             columns = columns,
-            spacing = 5.dp
+            spacing = 5.dp,
+            onMediaClick = onMediaClick
         )
         Spacer(Modifier.height(5.dp))
     }
@@ -107,11 +116,36 @@ private fun LazyListScope.photoSection(
     }
 }
 
+private fun LazyListScope.loadingPhotoSections() {
+    repeat(4) { sectionIndex ->
+        item(key = "loading-section-$sectionIndex") {
+            SkeletonBlock(
+                modifier = Modifier
+                    .fillMaxWidth(0.28f)
+                    .height(14.dp),
+                cornerRadius = 7.dp
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        items(
+            items = List(if (sectionIndex == 0) 3 else 2) { it },
+            key = { rowIndex -> "loading-row-$sectionIndex-$rowIndex" }
+        ) {
+            PhotoSkeletonRow(columns = 4, spacing = 5.dp)
+            Spacer(Modifier.height(5.dp))
+        }
+        item(key = "loading-section-end-$sectionIndex") {
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
 @Composable
 private fun PhotoGridRow(
     mediaItems: List<MediaItem>,
     columns: Int,
-    spacing: androidx.compose.ui.unit.Dp
+    spacing: androidx.compose.ui.unit.Dp,
+    onMediaClick: (MediaItem) -> Unit
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val cellSize = (maxWidth - spacing * (columns - 1)) / columns
@@ -119,11 +153,30 @@ private fun PhotoGridRow(
             mediaItems.forEach { mediaItem ->
                 MediaThumbnail(
                     mediaItem = mediaItem,
-                    modifier = Modifier.size(cellSize)
+                    modifier = Modifier.size(cellSize),
+                    onClick = { onMediaClick(mediaItem) }
                 )
             }
             repeat(columns - mediaItems.size) {
                 Spacer(Modifier.size(cellSize))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoSkeletonRow(
+    columns: Int,
+    spacing: androidx.compose.ui.unit.Dp
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+            repeat(columns) {
+                SkeletonBlock(
+                    modifier = Modifier.size(cellSize),
+                    cornerRadius = 10.dp
+                )
             }
         }
     }
