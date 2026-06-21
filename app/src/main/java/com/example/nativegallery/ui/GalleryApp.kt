@@ -1,5 +1,7 @@
 package com.example.nativegallery.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +20,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -27,11 +30,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.nativegallery.data.FakeGalleryRepository
+import com.example.nativegallery.data.GallerySnapshot
 import com.example.nativegallery.data.HiddenAlbumsRepository
+import com.example.nativegallery.data.MediaPermissions
+import com.example.nativegallery.data.MediaStoreGalleryRepository
+import com.example.nativegallery.model.Album
 import com.example.nativegallery.model.AlbumLayoutMode
+import com.example.nativegallery.model.MediaItem
+import com.example.nativegallery.ui.components.MediaAccessNotice
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private enum class GalleryTab {
     Photos,
@@ -45,19 +57,62 @@ private enum class GalleryDestination {
 
 @Composable
 fun GalleryApp() {
+    val context = LocalContext.current
+    val mediaStoreRepository = remember(context) { MediaStoreGalleryRepository(context) }
     val hiddenRepository = remember { HiddenAlbumsRepository() }
-    val hiddenStates = remember {
-        mutableStateMapOf<String, Boolean>().apply {
-            FakeGalleryRepository.hideableAlbums.forEach { album ->
-                put(album.id, hiddenRepository.initialHiddenAlbumIds().contains(album.id))
-            }
-        }
-    }
+    val hiddenStates = remember { mutableStateMapOf<String, Boolean>() }
     var selectedTab by rememberSaveable { mutableStateOf(GalleryTab.Photos) }
     var destination by rememberSaveable { mutableStateOf(GalleryDestination.Main) }
     var albumLayoutMode by rememberSaveable { mutableStateOf(AlbumLayoutMode.BigTiles) }
+    var hasMediaAccess by remember { mutableStateOf(MediaPermissions.hasMediaAccess(context)) }
+    var mediaStoreSnapshot by remember { mutableStateOf<GallerySnapshot?>(null) }
 
-    val hiddenAlbumIds = hiddenStates.filterValues { it }.keys
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        hasMediaAccess = MediaPermissions.hasMediaAccess(context)
+    }
+
+    LaunchedEffect(hasMediaAccess) {
+        if (hasMediaAccess) {
+            val mediaKinds = MediaPermissions.allowedMediaKinds(context)
+            mediaStoreSnapshot = withContext(Dispatchers.IO) {
+                mediaStoreRepository.loadGallery(mediaKinds)
+            }
+        } else {
+            mediaStoreSnapshot = null
+        }
+    }
+
+    val fakeSnapshot = remember { FakeGalleryRepository.snapshot() }
+    val activeSnapshot = when {
+        hasMediaAccess && !mediaStoreSnapshot?.mediaItems.isNullOrEmpty() -> mediaStoreSnapshot ?: fakeSnapshot
+        else -> fakeSnapshot
+    }
+    val hideableAlbums = activeSnapshot.albums.filterNot { it.isAllPhotos }
+
+    LaunchedEffect(hideableAlbums.map { it.id }) {
+        hideableAlbums.forEach { album ->
+            if (!hiddenStates.containsKey(album.id)) {
+                hiddenStates[album.id] = hiddenRepository.initialHiddenAlbumIds().contains(album.id)
+            }
+        }
+    }
+
+    val hiddenAlbumIds = hiddenStates.filterValues { it }.keys.toSet()
+    val visibleMedia = visibleMedia(activeSnapshot.mediaItems, hiddenAlbumIds)
+    val visibleAlbums = visibleAlbums(activeSnapshot.albums, visibleMedia, hiddenAlbumIds)
+    val mediaAccessNotice: (@Composable () -> Unit)? = if (!hasMediaAccess) {
+        {
+            MediaAccessNotice(
+                onRequestAccess = {
+                    permissionLauncher.launch(MediaPermissions.requestPermissions())
+                }
+            )
+        }
+    } else {
+        null
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -75,24 +130,55 @@ fun GalleryApp() {
             GalleryDestination.Main -> {
                 when (selectedTab) {
                     GalleryTab.Photos -> PhotosScreen(
-                        mediaItems = FakeGalleryRepository.visibleMedia(hiddenAlbumIds),
-                        contentPadding = innerPadding
+                        mediaItems = visibleMedia,
+                        contentPadding = innerPadding,
+                        mediaAccessNotice = mediaAccessNotice
                     )
                     GalleryTab.Albums -> AlbumsScreen(
-                        albums = FakeGalleryRepository.visibleAlbums(hiddenAlbumIds),
+                        albums = visibleAlbums,
                         layoutMode = albumLayoutMode,
                         onLayoutModeChange = { albumLayoutMode = it },
                         onOpenHiddenItems = { destination = GalleryDestination.HiddenItems },
-                        contentPadding = innerPadding
+                        contentPadding = innerPadding,
+                        mediaAccessNotice = mediaAccessNotice
                     )
                 }
             }
             GalleryDestination.HiddenItems -> HiddenItemsScreen(
-                albums = FakeGalleryRepository.hideableAlbums,
+                albums = hideableAlbums,
                 hiddenStates = hiddenStates,
                 onBack = { destination = GalleryDestination.Main },
                 contentPadding = PaddingValues()
             )
+        }
+    }
+}
+
+private fun visibleMedia(
+    mediaItems: List<MediaItem>,
+    hiddenAlbumIds: Set<String>
+): List<MediaItem> {
+    return mediaItems.filterNot { hiddenAlbumIds.contains(it.albumId) }
+}
+
+private fun visibleAlbums(
+    albums: List<Album>,
+    visibleMedia: List<MediaItem>,
+    hiddenAlbumIds: Set<String>
+): List<Album> {
+    return albums.mapNotNull { album ->
+        when {
+            album.isAllPhotos -> {
+                val cover = visibleMedia.firstOrNull()
+                album.copy(
+                    itemCount = visibleMedia.size,
+                    coverMediaIds = visibleMedia.take(4).map { it.id },
+                    coverRes = cover?.imageRes ?: album.coverRes,
+                    coverUri = cover?.contentUri ?: album.coverUri
+                )
+            }
+            hiddenAlbumIds.contains(album.id) -> null
+            else -> album
         }
     }
 }

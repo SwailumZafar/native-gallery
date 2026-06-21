@@ -2,7 +2,7 @@
 
 ## Latest Implementation Update - 2026-06-21
 
-The first Android native Compose visual-shell milestone has been implemented and verified.
+The first Android native Compose visual-shell milestone has been implemented and verified. The first MediaStore/device media loading milestone is now implemented and build-verified.
 
 Current workspace:
 
@@ -21,7 +21,10 @@ Current implementation status:
 - Album overflow menu is implemented with `Sort albums`, `Hidden items`, and `Settings`.
 - Hidden items screen is implemented with album toggles.
 - Runtime QA passed for the first visual-shell milestone.
-- Real MediaStore/device photo loading is not implemented yet. That is the next app milestone.
+- Android media permissions are implemented.
+- Initial MediaStore/device photo and video loading is implemented.
+- Real device thumbnails can render from `content://` URIs.
+- Fake local gallery data remains as the fallback when media access is not granted or no device media is available.
 
 Debug APK:
 
@@ -33,7 +36,7 @@ Last verified APK details:
 
 ```text
 Size: 18,880,013 bytes
-Last write time: 2026-06-21 4:57:30 PM
+Last write time: 2026-06-21 5:58:42 PM
 ```
 
 This APK is a debug build. It can be installed on an Android phone for review, but the phone may require allowing installs from unknown sources or USB debugging, depending on the install method.
@@ -101,10 +104,10 @@ ADB is the Android tool that talks to an emulator or physical phone. It is used 
 
 Current next steps:
 
-1. Install the debug APK on a real phone for hands-on visual review.
-2. Start the next app milestone: Android media permissions and MediaStore loading.
-3. Replace fake gallery data with real device media.
-4. Add thumbnail loading/caching and performance work.
+1. Install the debug APK on a real phone for hands-on visual review with the Android photo permission prompt.
+2. Verify real device media loads correctly on a phone with photos and videos.
+3. Improve thumbnail caching/performance beyond the initial `loadThumbnail` path.
+4. Apply hidden album filtering more deeply to real device buckets.
 5. Add private/locked album later as a separate feature, not mixed with hidden items.
 
 ## Current Status
@@ -470,9 +473,9 @@ Repositories:
 
 - `FakeGalleryRepository`: supplies prototype media and albums.
 - `HiddenAlbumsRepository`: stores hidden state in memory first.
-- `MediaStoreGalleryRepository`: later replacement for real device media.
+- `MediaStoreGalleryRepository`: loads initial real device image/video data from Android MediaStore.
 
-UI state should be exposed through ViewModels or a simple state holder, so fake data can be swapped for real MediaStore data later.
+UI state is currently held in Compose state so fake data can fall back cleanly when real MediaStore data is unavailable. A ViewModel can be added later as the data layer grows.
 
 ## First Implementation Milestone
 
@@ -497,8 +500,8 @@ MediaStore was intentionally not connected in this milestone.
 
 After the visual shell feels right:
 
-1. Add real Android media permissions.
-2. Load media with MediaStore.
+1. Add real Android media permissions. Status: initial implementation complete.
+2. Load media with MediaStore. Status: initial implementation complete.
 3. Add thumbnail loading and caching.
 4. Apply hidden album filtering to real albums.
 5. Add performance work: lazy grids, stable keys, thumbnail prefetch, baseline profiles.
@@ -585,7 +588,7 @@ Performance philosophy:
 Use this prompt in the implementation chat:
 
 ```text
-Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed first Android native Compose visual shell milestone. GitHub is already configured at https://github.com/SwailumZafar/native-gallery.git. Start the MediaStore/device media loading milestone next. Keep the design locked to Set A.
+Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed visual shell plus initial MediaStore loading milestone. GitHub is configured at https://github.com/SwailumZafar/native-gallery.git. Next, verify on a real phone and improve thumbnail caching/performance. Keep the design locked to Set A.
 ```
 
 

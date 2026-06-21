@@ -1,6 +1,5 @@
 package com.example.nativegallery.ui
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,7 +26,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -46,8 +44,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.nativegallery.model.Album
@@ -63,7 +59,8 @@ fun AlbumsScreen(
     layoutMode: AlbumLayoutMode,
     onLayoutModeChange: (AlbumLayoutMode) -> Unit,
     onOpenHiddenItems: () -> Unit,
-    contentPadding: PaddingValues
+    contentPadding: PaddingValues,
+    mediaAccessNotice: (@Composable () -> Unit)? = null
 ) {
     var overflowExpanded by rememberSaveable { mutableStateOf(false) }
     var layoutExpanded by rememberSaveable { mutableStateOf(false) }
@@ -144,6 +141,10 @@ fun AlbumsScreen(
             }
             Spacer(Modifier.height(22.dp))
             SearchPill()
+            if (mediaAccessNotice != null) {
+                Spacer(Modifier.height(18.dp))
+                mediaAccessNotice()
+            }
             Spacer(Modifier.height(18.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -193,7 +194,7 @@ fun AlbumsScreen(
         AlertDialog(
             onDismissRequest = { showSettingsDialog = false },
             title = { Text("Settings") },
-            text = { Text("Theme follows your phone setting. Media permissions will be requested when device photos are connected.") },
+            text = { Text("Theme follows your phone setting. Photo access can be changed in Android app settings.") },
             confirmButton = {
                 TextButton(onClick = { showSettingsDialog = false }) {
                     Text("Done")
@@ -319,6 +320,7 @@ private fun BasicAlbumGrid(albums: List<Album>) {
                         Column(modifier = Modifier.width(cellWidth)) {
                             ResourceImage(
                                 imageRes = album.coverRes,
+                                imageUri = album.coverUri,
                                 contentDescription = album.name,
                                 modifier = Modifier.size(cellWidth),
                                 cornerRadius = 18.dp
@@ -355,11 +357,12 @@ private fun AlbumImageCard(
             .clip(RoundedCornerShape(cornerRadius))
             .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        Image(
-            painter = painterResource(album.coverRes),
+        ResourceImage(
+            imageRes = album.coverRes,
+            imageUri = album.coverUri,
             contentDescription = album.name,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            cornerRadius = 0.dp
         )
         Box(
             modifier = Modifier

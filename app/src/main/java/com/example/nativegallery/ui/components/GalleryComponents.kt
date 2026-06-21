@@ -1,5 +1,11 @@
 package com.example.nativegallery.ui.components
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import android.util.Size
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -17,23 +23,29 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.nativegallery.model.MediaItem
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun ScreenHeader(
@@ -122,35 +134,104 @@ fun MediaThumbnail(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 10.dp
 ) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(cornerRadius))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Image(
-            painter = painterResource(mediaItem.imageRes),
+    Box(modifier = modifier) {
+        GalleryImage(
+            imageRes = mediaItem.imageRes,
+            imageUri = mediaItem.contentUri,
             contentDescription = mediaItem.title,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            cornerRadius = cornerRadius
         )
+        if (mediaItem.isVideo && mediaItem.contentUri != null) {
+            VideoBadge(
+                duration = mediaItem.durationLabel.orEmpty(),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+            )
+        }
     }
 }
 
 @Composable
 fun ResourceImage(
-    imageRes: Int,
+    imageRes: Int?,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    cornerRadius: Dp = 16.dp,
+    imageUri: Uri? = null
+) {
+    GalleryImage(
+        imageRes = imageRes,
+        imageUri = imageUri,
+        contentDescription = contentDescription,
+        modifier = modifier,
+        cornerRadius = cornerRadius
+    )
+}
+
+@Composable
+fun GalleryImage(
+    imageRes: Int?,
+    imageUri: Uri?,
     contentDescription: String,
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 16.dp
 ) {
-    Image(
-        painter = painterResource(imageRes),
-        contentDescription = contentDescription,
-        contentScale = ContentScale.Crop,
+    val bitmap = rememberContentUriBitmap(imageUri)
+    Box(
         modifier = modifier
             .clip(RoundedCornerShape(cornerRadius))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-    )
+    ) {
+        when {
+            bitmap != null -> {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = contentDescription,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            imageRes != null -> {
+                Image(
+                    painter = painterResource(imageRes),
+                    contentDescription = contentDescription,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun MediaAccessNotice(
+    onRequestAccess: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 1.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Allow photo access to show your device gallery.",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.width(14.dp))
+            Button(onClick = onRequestAccess) {
+                Text("Allow")
+            }
+        }
+    }
 }
 
 @Composable
@@ -183,5 +264,32 @@ fun VideoBadge(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun rememberContentUriBitmap(imageUri: Uri?): Bitmap? {
+    val context = LocalContext.current.applicationContext
+    val bitmapState = produceState<Bitmap?>(initialValue = null, imageUri) {
+        value = null
+        if (imageUri != null) {
+            value = withContext(Dispatchers.IO) {
+                loadThumbnail(context, imageUri)
+            }
+        }
+    }
+    return bitmapState.value
+}
+
+private fun loadThumbnail(context: Context, imageUri: Uri): Bitmap? {
+    return try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            context.contentResolver.loadThumbnail(imageUri, Size(512, 512), null)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaStore.Images.Media.getBitmap(context.contentResolver, imageUri)
+        }
+    } catch (_: Exception) {
+        null
     }
 }

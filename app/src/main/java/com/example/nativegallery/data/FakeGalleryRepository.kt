@@ -42,6 +42,11 @@ object FakeGalleryRepository {
 
     val hideableAlbums = albums.filterNot { it.isAllPhotos || it.id == "favorites" || it.id == "others" }
 
+    fun snapshot(): GallerySnapshot = GallerySnapshot(
+        mediaItems = mediaItems,
+        albums = albums
+    )
+
     fun visibleAlbums(hiddenAlbumIds: Set<String>): List<Album> {
         return albums.filter { it.isAllPhotos || !hiddenAlbumIds.contains(it.id) }
     }

@@ -27,11 +27,15 @@ import com.example.nativegallery.ui.components.SectionTitle
 @Composable
 fun PhotosScreen(
     mediaItems: List<MediaItem>,
-    contentPadding: PaddingValues
+    contentPadding: PaddingValues,
+    mediaAccessNotice: (@Composable () -> Unit)? = null
 ) {
     val todayItems = mediaItems.filter { it.dateLabel == "Today" }
-    val june14Items = mediaItems.filter { it.dateLabel == "14 June 2026" }
-    val june11Items = mediaItems.filter { it.dateLabel == "11 June 2026" }
+    val otherSections = mediaItems
+        .filterNot { it.dateLabel == "Today" }
+        .groupBy { it.dateLabel }
+        .entries
+        .toList()
 
     LazyColumn(
         contentPadding = PaddingValues(
@@ -56,44 +60,38 @@ fun PhotosScreen(
             }
             Spacer(Modifier.height(24.dp))
             SearchPill()
-            Spacer(Modifier.height(30.dp))
-        }
-
-        item {
-            SectionTitle("Today")
-            Spacer(Modifier.height(16.dp))
-            PhotoGrid(
-                mediaItems = todayItems.take(12),
-                columns = 4,
-                spacing = 8.dp
-            )
-            Spacer(Modifier.height(28.dp))
-        }
-
-        if (june14Items.isNotEmpty()) {
-            item {
-                SectionTitle("14 June 2026")
-                Spacer(Modifier.height(16.dp))
-                Row {
-                    MediaThumbnail(
-                        mediaItem = june14Items.first(),
-                        modifier = Modifier.size(134.dp),
-                        cornerRadius = 10.dp
-                    )
-                }
+            if (mediaAccessNotice != null) {
+                Spacer(Modifier.height(18.dp))
+                mediaAccessNotice()
+                Spacer(Modifier.height(24.dp))
+            } else {
                 Spacer(Modifier.height(30.dp))
             }
         }
 
-        if (june11Items.isNotEmpty()) {
+        if (todayItems.isNotEmpty()) {
             item {
-                SectionTitle("11 June 2026")
+                SectionTitle("Today")
                 Spacer(Modifier.height(16.dp))
                 PhotoGrid(
-                    mediaItems = june11Items,
-                    columns = 5,
+                    mediaItems = todayItems.take(12),
+                    columns = 4,
                     spacing = 8.dp
                 )
+                Spacer(Modifier.height(28.dp))
+            }
+        }
+
+        otherSections.take(6).forEachIndexed { index, section ->
+            item {
+                SectionTitle(section.key)
+                Spacer(Modifier.height(16.dp))
+                PhotoGrid(
+                    mediaItems = section.value.take(if (index == 0) 1 else 10),
+                    columns = if (index == 0) 3 else 5,
+                    spacing = 8.dp
+                )
+                Spacer(Modifier.height(30.dp))
             }
         }
     }
