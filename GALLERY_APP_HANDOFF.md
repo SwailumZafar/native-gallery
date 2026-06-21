@@ -1,8 +1,111 @@
 # Native Gallery App Handoff
 
+## Latest Implementation Update - 2026-06-21
+
+The first Android native Compose visual-shell milestone has been implemented and verified.
+
+Current workspace:
+
+```text
+F:\App\Gallery
+```
+
+Current implementation status:
+
+- Android project scaffold is complete.
+- Compose Material 3 setup is complete.
+- Light theme visual shell is implemented from the approved Set A / Design 1 direction.
+- Fake local gallery data is implemented.
+- Photos screen is implemented.
+- Albums screen is implemented with `Big tiles` and `Basic` layout switching.
+- Album overflow menu is implemented with `Sort albums`, `Hidden items`, and `Settings`.
+- Hidden items screen is implemented with album toggles.
+- Runtime QA passed for the first visual-shell milestone.
+- Real MediaStore/device photo loading is not implemented yet. That is the next app milestone.
+
+Debug APK:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+```
+
+Last verified APK details:
+
+```text
+Size: 18,880,013 bytes
+Last write time: 2026-06-21 4:57:30 PM
+```
+
+This APK is a debug build. It can be installed on an Android phone for review, but the phone may require allowing installs from unknown sources or USB debugging, depending on the install method.
+
+Final runtime screenshots:
+
+```text
+F:\App\Gallery\qa-screenshots\27-photos-final-wait.png
+F:\App\Gallery\qa-screenshots\31-albums-big-tiles-final2.png
+F:\App\Gallery\qa-screenshots\34-hidden-items-final3.png
+```
+
+Final comparison screenshots:
+
+```text
+F:\App\Gallery\qa-screenshots\comparisons\photos-final-wait-comparison.png
+F:\App\Gallery\qa-screenshots\comparisons\albums-final2-comparison.png
+F:\App\Gallery\qa-screenshots\comparisons\hidden-items-final3-comparison.png
+```
+
+QA report:
+
+```text
+F:\App\Gallery\design-qa.md
+```
+
+QA result:
+
+```text
+passed
+```
+
+Local Git status:
+
+- Git was not available on PATH, so portable MinGit was downloaded from the official Git for Windows release and extracted under `F:\App\Gallery\tools\mingit`.
+- The local repository was initialized on branch `main`.
+- Current commit: `6f2ae39 Initial Android gallery visual shell`.
+- The worktree was clean after the commit.
+
+GitHub status:
+
+- Code is committed locally.
+- GitHub push is not complete yet.
+- No GitHub remote is configured yet.
+- No `GITHUB_TOKEN` or `GH_TOKEN` was available in the environment.
+- To push to GitHub, use either an existing empty GitHub repo URL or authenticate with GitHub CLI / token.
+
+Long-running process cleanup:
+
+- Emulator and ADB were stopped after runtime QA.
+- Final process checks showed no `java`, `gradle`, `adb`, `emulator`, `qemu-system`, or `studio64` process still running.
+
+What ADB is:
+
+```text
+ADB means Android Debug Bridge.
+```
+
+ADB is the Android tool that talks to an emulator or physical phone. It is used to install APKs, launch apps, capture logs, take screenshots, and control Android devices during development. It should not be left running for hours during this workflow. Future Android tasks should be run with short checkpoints, usually 5 minutes, and stopped or redirected if no useful progress is happening.
+
+Current next steps:
+
+1. Push the committed project to GitHub after authentication or an empty repo URL is available.
+2. Install the debug APK on a real phone for hands-on visual review.
+3. Start the next app milestone: Android media permissions and MediaStore loading.
+4. Replace fake gallery data with real device media.
+5. Add thumbnail loading/caching and performance work.
+6. Add private/locked album later as a separate feature, not mixed with hidden items.
+
 ## Current Status
 
-This project is ready to move from design planning into implementation.
+The project has moved from design planning into the first native Android implementation.
 
 The approved direction is **Set A / Design 1**: a simple Android-native gallery inspired by Huawei Gallery style and other OEM gallery apps, but not copying any brand exactly. The app should feel fast, clean, and native. It should focus on ordinary gallery behavior, not AI features.
 
@@ -15,7 +118,13 @@ F:\App\Gallery
 Current workspace contents:
 
 ```text
+Approved Design\
 Refrence Pictures\
+app\
+gradle.properties
+settings.gradle.kts
+build.gradle.kts
+design-qa.md
 ```
 
 The folder name is intentionally spelled as it exists on disk.
@@ -363,7 +472,9 @@ UI state should be exposed through ViewModels or a simple state holder, so fake 
 
 ## First Implementation Milestone
 
-Build only the visual shell:
+Status: complete.
+
+Built visual shell:
 
 - Android project scaffold.
 - Compose Material 3 setup.
@@ -376,7 +487,7 @@ Build only the visual shell:
 - `Hidden items` toggle screen.
 - Navigation between Photos, Albums, and Hidden items.
 
-Do not connect MediaStore yet.
+MediaStore was intentionally not connected in this milestone.
 
 ## Later Milestones
 
@@ -388,7 +499,7 @@ After the visual shell feels right:
 4. Apply hidden album filtering to real albums.
 5. Add performance work: lazy grids, stable keys, thumbnail prefetch, baseline profiles.
 6. Add private/locked album separately.
-7. Set up GitHub private repo and milestone commits.
+7. Push the existing local commit to GitHub after authentication is available.
 
 ## Tooling Notes
 
@@ -402,23 +513,29 @@ git
 gh
 ```
 
-Before full Android implementation, locate or install:
+Tooling located or set up during implementation:
 
-- Android Studio
-- JDK
-- Android SDK
-- Gradle or Gradle wrapper
-- adb/emulator or physical Android device
-- Git
-- GitHub CLI or normal GitHub remote setup
+- JDK: `C:\Program Files\Android\Android Studio\jbr`
+- Android SDK: `%LOCALAPPDATA%\Android\Sdk`
+- Gradle: `C:\Users\Amazon\.gradle\wrapper\dists\gradle-9.0.0-bin\d6wjpkvcgsg3oed0qlfss3wgl\gradle-9.0.0\bin\gradle.bat`
+- AVD used for QA: `Medium_Phone_API_36.1`
+- Portable Git: `F:\App\Gallery\tools\mingit\cmd\git.exe`
 
-If Android tooling is still unavailable, a temporary static Compose-like prototype or web mock can be made, but the real target remains native Android.
+GitHub CLI is still not set up. GitHub push needs authentication or an existing remote URL.
 
 ## GitHub Plan
 
 User wants code on GitHub to review changes.
 
-Default GitHub setup:
+Current GitHub state:
+
+- Local repository exists.
+- Local branch: `main`.
+- Local commit: `6f2ae39 Initial Android gallery visual shell`.
+- Remote: not configured yet.
+- Push: pending GitHub authentication.
+
+Default GitHub setup when auth is available:
 
 - New private repo.
 - Suggested repo name: `native-gallery`.
@@ -433,7 +550,7 @@ Suggested milestones:
 - `Add MediaStore gallery loading`
 - `Add performance tuning`
 
-No GitHub account was used yet. The user will need to authenticate with the GitHub account that should own the repo.
+No GitHub account was used yet. The user will need to authenticate with the GitHub account that should own the repo, or provide an existing empty repo URL.
 
 ## Implementation Guardrails
 
@@ -465,6 +582,7 @@ Performance philosophy:
 Use this prompt in the implementation chat:
 
 ```text
-Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and implement the first Android native Compose visual shell milestone. Start by checking available Android/Git tooling, then scaffold the app or explain the exact blocker if tooling is missing. Keep the design locked to Set A.
+Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed first Android native Compose visual shell milestone. First push the local commit to GitHub after authentication is available, then start the MediaStore/device media loading milestone. Keep the design locked to Set A.
 ```
+
 
