@@ -38,9 +38,9 @@ fun PhotosScreen(
 
     LazyColumn(
         contentPadding = PaddingValues(
-            start = 20.dp,
-            top = 58.dp,
-            end = 20.dp,
+            start = 16.dp,
+            top = 56.dp,
+            end = 16.dp,
             bottom = contentPadding.calculateBottomPadding() + 28.dp
         )
     ) {
@@ -72,7 +72,7 @@ fun PhotosScreen(
             photoSection(
                 title = section.key,
                 mediaItems = section.value,
-                columns = if (index == 0) 4 else 5
+                columns = 4
             )
         }
     }
@@ -89,7 +89,7 @@ private fun LazyListScope.photoSection(
 
     item(key = "section-$title") {
         SectionTitle(title)
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(10.dp))
     }
     items(
         items = mediaItems.chunked(columns),
@@ -98,12 +98,12 @@ private fun LazyListScope.photoSection(
         PhotoGridRow(
             mediaItems = rowItems,
             columns = columns,
-            spacing = 8.dp
+            spacing = 7.dp
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(7.dp))
     }
     item(key = "section-end-$title") {
-        Spacer(Modifier.height(22.dp))
+        Spacer(Modifier.height(18.dp))
     }
 }
 
