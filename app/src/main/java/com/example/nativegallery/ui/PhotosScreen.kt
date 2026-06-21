@@ -8,9 +8,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MoreVert
@@ -30,9 +31,7 @@ fun PhotosScreen(
     contentPadding: PaddingValues,
     mediaAccessNotice: (@Composable () -> Unit)? = null
 ) {
-    val todayItems = mediaItems.filter { it.dateLabel == "Today" }
-    val otherSections = mediaItems
-        .filterNot { it.dateLabel == "Today" }
+    val sections = mediaItems
         .groupBy { it.dateLabel }
         .entries
         .toList()
@@ -69,52 +68,62 @@ fun PhotosScreen(
             }
         }
 
-        if (todayItems.isNotEmpty()) {
-            item {
-                SectionTitle("Today")
-                Spacer(Modifier.height(16.dp))
-                PhotoGrid(
-                    mediaItems = todayItems.take(12),
-                    columns = 4,
-                    spacing = 8.dp
-                )
-                Spacer(Modifier.height(28.dp))
-            }
-        }
-
-        otherSections.take(6).forEachIndexed { index, section ->
-            item {
-                SectionTitle(section.key)
-                Spacer(Modifier.height(16.dp))
-                PhotoGrid(
-                    mediaItems = section.value.take(if (index == 0) 1 else 10),
-                    columns = if (index == 0) 3 else 5,
-                    spacing = 8.dp
-                )
-                Spacer(Modifier.height(30.dp))
-            }
+        sections.forEachIndexed { index, section ->
+            photoSection(
+                title = section.key,
+                mediaItems = section.value,
+                columns = if (index == 0) 4 else 5
+            )
         }
     }
 }
 
+private fun LazyListScope.photoSection(
+    title: String,
+    mediaItems: List<MediaItem>,
+    columns: Int
+) {
+    if (mediaItems.isEmpty()) {
+        return
+    }
+
+    item(key = "section-$title") {
+        SectionTitle(title)
+        Spacer(Modifier.height(16.dp))
+    }
+    items(
+        items = mediaItems.chunked(columns),
+        key = { rowItems -> "row-$title-${rowItems.first().id}" }
+    ) { rowItems ->
+        PhotoGridRow(
+            mediaItems = rowItems,
+            columns = columns,
+            spacing = 8.dp
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+    item(key = "section-end-$title") {
+        Spacer(Modifier.height(22.dp))
+    }
+}
+
 @Composable
-private fun PhotoGrid(
+private fun PhotoGridRow(
     mediaItems: List<MediaItem>,
     columns: Int,
     spacing: androidx.compose.ui.unit.Dp
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-        Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
-            mediaItems.chunked(columns).forEach { rowItems ->
-                Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                    rowItems.forEach { mediaItem ->
-                        MediaThumbnail(
-                            mediaItem = mediaItem,
-                            modifier = Modifier.size(cellSize)
-                        )
-                    }
-                }
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+            mediaItems.forEach { mediaItem ->
+                MediaThumbnail(
+                    mediaItem = mediaItem,
+                    modifier = Modifier.size(cellSize)
+                )
+            }
+            repeat(columns - mediaItems.size) {
+                Spacer(Modifier.size(cellSize))
             }
         }
     }

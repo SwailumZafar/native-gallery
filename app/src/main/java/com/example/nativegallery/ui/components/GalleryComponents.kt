@@ -207,6 +207,8 @@ fun GalleryImage(
 
 @Composable
 fun MediaAccessNotice(
+    message: String,
+    actionLabel: String,
     onRequestAccess: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -221,14 +223,14 @@ fun MediaAccessNotice(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Allow photo access to show your device gallery.",
+                text = message,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.width(14.dp))
             Button(onClick = onRequestAccess) {
-                Text("Allow")
+                Text(actionLabel)
             }
         }
     }

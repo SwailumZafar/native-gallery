@@ -64,20 +64,19 @@ fun GalleryApp() {
     var selectedTab by rememberSaveable { mutableStateOf(GalleryTab.Photos) }
     var destination by rememberSaveable { mutableStateOf(GalleryDestination.Main) }
     var albumLayoutMode by rememberSaveable { mutableStateOf(AlbumLayoutMode.BigTiles) }
-    var hasMediaAccess by remember { mutableStateOf(MediaPermissions.hasMediaAccess(context)) }
+    var mediaAccess by remember { mutableStateOf(MediaPermissions.currentAccess(context)) }
     var mediaStoreSnapshot by remember { mutableStateOf<GallerySnapshot?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) {
-        hasMediaAccess = MediaPermissions.hasMediaAccess(context)
+        mediaAccess = MediaPermissions.currentAccess(context)
     }
 
-    LaunchedEffect(hasMediaAccess) {
-        if (hasMediaAccess) {
-            val mediaKinds = MediaPermissions.allowedMediaKinds(context)
+    LaunchedEffect(mediaAccess) {
+        if (mediaAccess.hasAccess) {
             mediaStoreSnapshot = withContext(Dispatchers.IO) {
-                mediaStoreRepository.loadGallery(mediaKinds)
+                mediaStoreRepository.loadGallery(mediaAccess.mediaKinds)
             }
         } else {
             mediaStoreSnapshot = null
@@ -86,7 +85,7 @@ fun GalleryApp() {
 
     val fakeSnapshot = remember { FakeGalleryRepository.snapshot() }
     val activeSnapshot = when {
-        hasMediaAccess && !mediaStoreSnapshot?.mediaItems.isNullOrEmpty() -> mediaStoreSnapshot ?: fakeSnapshot
+        mediaAccess.hasAccess && !mediaStoreSnapshot?.mediaItems.isNullOrEmpty() -> mediaStoreSnapshot ?: fakeSnapshot
         else -> fakeSnapshot
     }
     val hideableAlbums = activeSnapshot.albums.filterNot { it.isAllPhotos }
@@ -102,16 +101,30 @@ fun GalleryApp() {
     val hiddenAlbumIds = hiddenStates.filterValues { it }.keys.toSet()
     val visibleMedia = visibleMedia(activeSnapshot.mediaItems, hiddenAlbumIds)
     val visibleAlbums = visibleAlbums(activeSnapshot.albums, visibleMedia, hiddenAlbumIds)
-    val mediaAccessNotice: (@Composable () -> Unit)? = if (!hasMediaAccess) {
-        {
-            MediaAccessNotice(
-                onRequestAccess = {
-                    permissionLauncher.launch(MediaPermissions.requestPermissions())
-                }
-            )
+    val mediaAccessNotice: (@Composable () -> Unit)? = when {
+        !mediaAccess.hasAccess -> {
+            {
+                MediaAccessNotice(
+                    message = "Allow photo access to show your device gallery.",
+                    actionLabel = "Allow",
+                    onRequestAccess = {
+                        permissionLauncher.launch(MediaPermissions.requestPermissions())
+                    }
+                )
+            }
         }
-    } else {
-        null
+        mediaAccess.isLimited -> {
+            {
+                MediaAccessNotice(
+                    message = "Showing selected photos only. Allow all photos to include your full gallery.",
+                    actionLabel = "Allow all",
+                    onRequestAccess = {
+                        permissionLauncher.launch(MediaPermissions.requestPermissions())
+                    }
+                )
+            }
+        }
+        else -> null
     }
 
     Scaffold(

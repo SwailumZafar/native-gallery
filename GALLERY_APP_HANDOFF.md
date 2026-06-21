@@ -2,7 +2,7 @@
 
 ## Latest Implementation Update - 2026-06-21
 
-The first Android native Compose visual-shell milestone has been implemented and verified. The first MediaStore/device media loading milestone is now implemented and build-verified.
+The first Android native Compose visual-shell milestone has been implemented and verified. The first MediaStore/device media loading milestone is now implemented and build-verified. A follow-up completeness fix now removes the initial 600-item MediaStore cap and renders all loaded photo rows in the Photos timeline.
 
 Current workspace:
 
@@ -25,6 +25,8 @@ Current implementation status:
 - Initial MediaStore/device photo and video loading is implemented.
 - Real device thumbnails can render from `content://` URIs.
 - Fake local gallery data remains as the fallback when media access is not granted or no device media is available.
+- Photos timeline now renders all loaded rows instead of visual-preview slices.
+- Android 14+ partial library access is detected and shown as "selected photos only" in the UI.
 
 Debug APK:
 
@@ -36,7 +38,7 @@ Last verified APK details:
 
 ```text
 Size: 18,880,013 bytes
-Last write time: 2026-06-21 5:58:42 PM
+Last write time: 2026-06-21 6:11:16 PM
 ```
 
 This APK is a debug build. It can be installed on an Android phone for review, but the phone may require allowing installs from unknown sources or USB debugging, depending on the install method.
@@ -104,8 +106,8 @@ ADB is the Android tool that talks to an emulator or physical phone. It is used 
 
 Current next steps:
 
-1. Install the debug APK on a real phone for hands-on visual review with the Android photo permission prompt.
-2. Verify real device media loads correctly on a phone with photos and videos.
+1. Reinstall the latest debug APK and verify the Photos timeline now scrolls through the full granted library.
+2. If Android shows `selected photos only`, tap `Allow all` or change the app permission to all photos in Android settings.
 3. Improve thumbnail caching/performance beyond the initial `loadThumbnail` path.
 4. Apply hidden album filtering more deeply to real device buckets.
 5. Add private/locked album later as a separate feature, not mixed with hidden items.
@@ -588,7 +590,7 @@ Performance philosophy:
 Use this prompt in the implementation chat:
 
 ```text
-Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed visual shell plus initial MediaStore loading milestone. GitHub is configured at https://github.com/SwailumZafar/native-gallery.git. Next, verify on a real phone and improve thumbnail caching/performance. Keep the design locked to Set A.
+Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed visual shell plus initial MediaStore loading milestone. GitHub is configured at https://github.com/SwailumZafar/native-gallery.git. The latest APK includes the photo-completeness fix: no 600-item cap, all loaded timeline rows render, and Android partial-photo access is surfaced. Next, verify on a real phone and improve thumbnail caching/performance. Keep the design locked to Set A.
 ```
 
 

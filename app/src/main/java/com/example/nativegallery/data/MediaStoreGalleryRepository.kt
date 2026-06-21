@@ -74,7 +74,7 @@ class MediaStoreGalleryRepository(
             val bucketNameColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
             val durationColumn = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
 
-            while (cursor.moveToNext() && rows.size < MaxMediaItems) {
+            while (cursor.moveToNext()) {
                 val id = cursor.getLong(idColumn)
                 val mediaTypeValue = cursor.getInt(typeColumn)
                 val mediaType = if (mediaTypeValue == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO) {
@@ -181,7 +181,6 @@ class MediaStoreGalleryRepository(
     )
 
     private companion object {
-        const val MaxMediaItems = 600
         val DateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.getDefault())
     }
 }
