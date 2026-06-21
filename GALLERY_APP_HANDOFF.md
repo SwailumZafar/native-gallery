@@ -1,164 +1,133 @@
 # Native Gallery App Handoff
 
-## Latest Implementation Update - 2026-06-21
+Last updated: 2026-06-21
 
-The first Android native Compose visual-shell milestone has been implemented and verified. The first MediaStore/device media loading milestone is now implemented and build-verified. A follow-up completeness fix now removes the initial 600-item MediaStore cap and renders all loaded photo rows in the Photos timeline. A visual tuning pass then reduced Photos date label size, softened date weight/color, and made timeline tiles larger. Thumbnail caching, shimmer skeleton loaders, and a full-screen photo viewer are now implemented.
+This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
-Current workspace:
+## Quick Status
+
+Workspace:
 
 ```text
 F:\App\Gallery
 ```
 
-Current implementation status:
-
-- Android project scaffold is complete.
-- Compose Material 3 setup is complete.
-- Light theme visual shell is implemented from the approved Set A / Design 1 direction.
-- Fake local gallery data is implemented.
-- Photos screen is implemented.
-- Albums screen is implemented with `Big tiles` and `Basic` layout switching.
-- Album overflow menu is implemented with `Sort albums`, `Hidden items`, and `Settings`.
-- Hidden items screen is implemented with album toggles.
-- Runtime QA passed for the first visual-shell milestone.
-- Android media permissions are implemented.
-- Initial MediaStore/device photo and video loading is implemented.
-- Real device thumbnails can render from `content://` URIs.
-- Fake local gallery data remains as the fallback when media access is not granted or no device media is available.
-- Photos timeline now renders all loaded rows instead of visual-preview slices.
-- Android 14+ partial library access is detected and shown as "selected photos only" in the UI.
-- Photos date labels are reduced to 14sp medium/muted and timeline rows use larger 4-column image tiles with tighter gaps.
-- Thumbnail loading now uses an in-memory LRU cache and shimmer skeleton placeholders.
-- Photos and Albums show skeleton states during the first real-media load.
-- Tapping a Photos tile opens a full-screen photo viewer with fade/scale animation and back-button close support.
-
-Debug APK:
-
-```text
-F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
-```
-
-Last verified APK details:
-
-```text
-Size: 18,880,013 bytes
-Last write time: 2026-06-21 9:07:14 PM
-```
-
-This APK is a debug build. It can be installed on an Android phone for review, but the phone may require allowing installs from unknown sources or USB debugging, depending on the install method.
-
-Final runtime screenshots:
-
-```text
-F:\App\Gallery\qa-screenshots\27-photos-final-wait.png
-F:\App\Gallery\qa-screenshots\31-albums-big-tiles-final2.png
-F:\App\Gallery\qa-screenshots\34-hidden-items-final3.png
-```
-
-Final comparison screenshots:
-
-```text
-F:\App\Gallery\qa-screenshots\comparisons\photos-final-wait-comparison.png
-F:\App\Gallery\qa-screenshots\comparisons\albums-final2-comparison.png
-F:\App\Gallery\qa-screenshots\comparisons\hidden-items-final3-comparison.png
-```
-
-QA report:
-
-```text
-F:\App\Gallery\design-qa.md
-```
-
-QA result:
-
-```text
-passed
-```
-
-Local Git status:
-
-- Git was not available on PATH, so portable MinGit was downloaded from the official Git for Windows release and extracted under `F:\App\Gallery\tools\mingit`.
-- The local repository was initialized on branch `main`.
-- Current commit: `6f2ae39 Initial Android gallery visual shell`.
-- The worktree was clean after the commit.
-
-GitHub status:
-
-- Code is committed locally.
-- GitHub push is complete.
-- Remote `origin` is configured:
+GitHub repository:
 
 ```text
 https://github.com/SwailumZafar/native-gallery.git
 ```
 
-- Repository visibility: private.
-- Local branch `main` tracks `origin/main`.
-
-Long-running process cleanup:
-
-- Emulator and ADB were stopped after runtime QA.
-- Final process checks showed no `java`, `gradle`, `adb`, `emulator`, `qemu-system`, or `studio64` process still running.
-
-What ADB is:
+Repository state before this handoff update:
 
 ```text
-ADB means Android Debug Bridge.
+Branch: main
+Remote tracking branch: origin/main
+Latest feature commit: 5035c7c Add skeleton loading and photo viewer
+Repository visibility: private
 ```
 
-ADB is the Android tool that talks to an emulator or physical phone. It is used to install APKs, launch apps, capture logs, take screenshots, and control Android devices during development. It should not be left running for hours during this workflow. Future Android tasks should be run with short checkpoints, usually 5 minutes, and stopped or redirected if no useful progress is happening.
-
-Current next steps:
-
-1. Test the shimmer/cache/photo-viewer APK on a real phone using `scripts\rebuild-install-debug.ps1`.
-2. Check that skeletons appear during initial load and that thumbnail scrolling feels smoother.
-3. Verify tapping a photo opens the full-screen viewer and back closes it smoothly.
-4. Improve viewer gestures next: swipe between photos, pinch zoom, and video playback.
-5. Apply hidden album filtering more deeply to real device buckets.
-6. Add private/locked album later as a separate feature, not mixed with hidden items.
-
-## Current Status
-
-The project has moved from design planning into the first native Android implementation.
-
-The approved direction is **Set A / Design 1**: a simple Android-native gallery inspired by Huawei Gallery style and other OEM gallery apps, but not copying any brand exactly. The app should feel fast, clean, and native. It should focus on ordinary gallery behavior, not AI features.
-
-Workspace root:
+Current APK:
 
 ```text
-F:\App\Gallery
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-Current workspace contents:
+Last verified APK:
 
 ```text
-Approved Design\
-Refrence Pictures\
-app\
-gradle.properties
-settings.gradle.kts
-build.gradle.kts
-design-qa.md
+Last write time: 2026-06-21 9:07:14 PM
+Size: 18,880,013 bytes
+Build result: passed
 ```
 
-The folder name is intentionally spelled as it exists on disk.
+Fast rebuild and install helper:
 
-## Product Goal
+```powershell
+.\scripts\rebuild-install-debug.ps1
+```
 
-Build a native Android gallery app that feels like it belongs on the phone:
+Install-only helper:
 
-- Fast photo browsing.
-- Simple albums.
-- Clean light and dark theme support.
-- Basic customization for album tile size.
-- Hidden albums/items managed quietly through the album overflow menu.
-- Private/locked album support later, separate from hidden items.
+```powershell
+.\scripts\install-debug-apk.ps1
+```
 
-The app should not feel like Google Photos or Apple Photos. It should feel closer to Huawei/Samsung/Oppo/Vivo gallery apps: simple, practical, visual, and quick.
+## Current Implementation
 
-## Explicit Non-Goals
+Completed so far:
 
-Do not build these in v1:
+- Android project scaffold.
+- Kotlin native Android app.
+- Jetpack Compose UI.
+- Material 3 setup.
+- Light/dark theme tokens.
+- Approved Set A / Design 1 visual shell.
+- Fake local gallery fallback data.
+- Photos tab.
+- Albums tab.
+- Albums `Big tiles` and `Basic` layout switching.
+- Album overflow menu with practical actions.
+- Hidden items screen.
+- Hidden album toggle UI.
+- Runtime Android media permissions.
+- Real MediaStore image/video loading.
+- Android 14+ partial photo access detection.
+- Real `content://` thumbnail rendering.
+- Removed the initial 600-item MediaStore cap.
+- Photos timeline renders all loaded photo rows.
+- Date label visual tuning for real user libraries.
+- Larger photo tiles in the Photos timeline.
+- Debug APK install scripts.
+- In-memory thumbnail LRU cache.
+- Shimmer skeleton placeholders.
+- Photos and Albums loading skeleton states.
+- Full-screen tap-to-open photo viewer.
+- Smooth fade/scale viewer animation.
+- Android back-button close support for the viewer.
+
+Latest user feedback already addressed:
+
+- Real device photos made the date labels look too big and bold.
+- Date labels were reduced and softened.
+- Photo tiles were made slightly bigger.
+- Loading polish was added with shimmer skeletons.
+- A full-screen photo viewer was added when tapping a photo.
+
+Still to do next:
+
+- Test the latest APK on the real phone.
+- Confirm skeleton loaders appear during first real-media load.
+- Confirm thumbnail scrolling feels smoother on a large library.
+- Confirm tapping a photo opens the viewer smoothly.
+- Add swipe-between-photos in the viewer.
+- Add pinch-to-zoom in the viewer.
+- Add double-tap zoom.
+- Add proper video playback in the viewer.
+- Apply hidden-album filtering more deeply to real MediaStore buckets.
+- Add private/locked albums later as a separate feature.
+
+## Product Direction
+
+The approved direction is **Set A / Design 1**.
+
+The app should feel like a clean OEM Android gallery inspired by Huawei/Samsung/Oppo/Vivo gallery patterns, without copying any brand exactly.
+
+It should feel:
+
+- fast
+- native
+- visual
+- quiet
+- practical
+- photo-first
+- light by default, with dark theme support
+
+It should not feel like Google Photos or Apple Photos. It should not become an AI or memories app. It should stay focused on local photo browsing, albums, hidden visibility controls, and later a separate private/locked area.
+
+## Explicit Non-Goals For V1
+
+Do not build these into v1:
 
 - AI features.
 - Face/person grouping.
@@ -169,22 +138,21 @@ Do not build these in v1:
 - Big promotional banners.
 - Heavy privacy/vault branding.
 - C++ or Rust modules.
+- A persistent `Menu` tab.
 
 Do not make the app identity only dark/black. It must support both light and dark themes.
 
 ## Approved Visual Direction
 
-The user approved **Design 1 / Set A** from the six generated design frames.
-
 Set A palette:
 
 - Main background: soft icy off-white.
-- Surfaces: white search pills, simple white panels.
-- Text: black/charcoal primary text, gray secondary text.
+- Surfaces: white search pills and simple white panels.
+- Text: black/charcoal primary text and gray secondary text.
 - Accent: cool blue for active navigation, enabled controls, and small state indicators.
 - Style: refined OEM Android, simple, quiet, native-feeling.
 
-Set B, the 60/30/10 palette, was generated but not selected. It can be kept as a fallback idea, but implementation should start from Set A.
+Set B, the 60/30/10 palette, was generated but not selected. It can remain as a fallback idea, but implementation should continue from Set A.
 
 ## Reference Images
 
@@ -194,25 +162,27 @@ Reference images are in:
 F:\App\Gallery\Refrence Pictures
 ```
 
+The folder name is intentionally spelled as it exists on disk.
+
 Important references:
 
 ```text
 WhatsApp Image 2026-06-19 at 7.38.48 PM.jpeg
 ```
 
-Official Huawei-style Photos reference:
+Photos reference notes:
 
 - Large `Photos` title.
 - Search pill under title.
-- Timeline sections such as `Today`, `14 June 2026`, `11 June 2026`.
+- Timeline sections such as `Today`, `14 June 2026`, and `11 June 2026`.
 - Simple two-tab bottom navigation: `Photos` and `Albums`.
-- Light theme with large spacing and calm layout.
+- Light theme with calm spacing.
 
 ```text
 WhatsApp Image 2026-06-19 at 7.38.48 PM (1).jpeg
 ```
 
-Official Huawei-style Albums reference:
+Albums reference notes:
 
 - Large `Albums` title.
 - Search pill under title.
@@ -221,9 +191,9 @@ Official Huawei-style Albums reference:
 - Album names and counts overlaid on image covers.
 - Overflow menu includes hidden-item style access.
 
-Other references in the folder include earlier Oppo/Vivo/Samsung-like inspiration, album grids, dark theme examples, menu sheets, and photo timeline examples.
+Other reference images include Oppo/Vivo/Samsung-like inspiration, album grids, dark theme examples, menu sheets, and photo timeline examples.
 
-## Locked App Structure
+## App Structure
 
 Use two main tabs only:
 
@@ -232,65 +202,73 @@ Photos
 Albums
 ```
 
-Do not add a persistent `Menu` tab. Menu actions live in top-right overflow.
+Do not add a persistent `Menu` tab. Menu actions live in top-right overflow menus.
 
-## Screen 1: Photos
+Current major source files:
 
-Purpose:
+```text
+app/src/main/java/com/example/nativegallery/data/FakeGalleryRepository.kt
+app/src/main/java/com/example/nativegallery/data/GallerySnapshot.kt
+app/src/main/java/com/example/nativegallery/data/MediaPermissions.kt
+app/src/main/java/com/example/nativegallery/data/MediaStoreGalleryRepository.kt
+app/src/main/java/com/example/nativegallery/model/MediaModels.kt
+app/src/main/java/com/example/nativegallery/ui/GalleryApp.kt
+app/src/main/java/com/example/nativegallery/ui/PhotosScreen.kt
+app/src/main/java/com/example/nativegallery/ui/AlbumsScreen.kt
+app/src/main/java/com/example/nativegallery/ui/HiddenItemsScreen.kt
+app/src/main/java/com/example/nativegallery/ui/PhotoViewerOverlay.kt
+app/src/main/java/com/example/nativegallery/ui/components/GalleryComponents.kt
+app/src/main/java/com/example/nativegallery/ui/components/ThumbnailMemoryCache.kt
+app/src/main/java/com/example/nativegallery/ui/theme/Color.kt
+app/src/main/java/com/example/nativegallery/ui/theme/Theme.kt
+app/src/main/java/com/example/nativegallery/ui/theme/Type.kt
+```
 
-Show the photo timeline immediately and cleanly.
+Scripts:
 
-Layout:
+```text
+scripts/install-debug-apk.ps1
+scripts/rebuild-install-debug.ps1
+```
 
-- Large `Photos` title near top left.
-- Top-right icons:
-  - location/pin-style icon or similar utility icon
-  - overflow/menu icon
-- Wide rounded search pill under the title:
-  - search icon
-  - placeholder text `Search`
-- Timeline content:
-  - `Today`
-  - thumbnail cluster
-  - `14 June 2026`
-  - larger photo thumbnail
-  - `11 June 2026`
-  - dense thumbnail row/grid
-- Bottom navigation:
-  - `Photos` active
-  - `Albums` inactive
-
-Implementation notes:
-
-- Make the page visually interesting through date grouping, spacing, and thumbnail rhythm.
-- Do not add memory cards or AI sections.
-- Keep thumbnails the main visual focus.
-- Support video badges on video thumbnails.
-
-## Screen 2: Albums
+## Screen: Photos
 
 Purpose:
 
-Show regular albums first, with user-customizable album tile sizing.
+Show the local photo timeline immediately and cleanly.
 
-Layout:
+Current behavior:
 
-- Large `Albums` title near top left.
-- Top-right icons:
-  - plus
-  - grid/layout switch
-  - overflow/menu
-- Wide rounded search pill under title.
-- Album layout mode:
-  - `Basic` grid
-  - `Big tiles`
-- Start implementation with `Big tiles` matching the approved Set A design.
-- Big tiles mode:
-  - large rounded image cards
-  - 2-column layout
-  - optional wide `All photos` card near top
-  - album name and item count overlaid near bottom-left
-  - subtle dark gradient overlay on image bottom for readability
+- Large `Photos` title.
+- Top utility icons.
+- Wide rounded search pill.
+- Date-grouped timeline.
+- Real media thumbnails when permission is granted.
+- Fake fallback media when permission is not granted or no device media is available.
+- Larger 4-column photo rows with tighter gaps.
+- Smaller, softer date labels.
+- Video badge support on video thumbnails.
+- Shimmer skeletons while real media is loading.
+- Tap a photo tile to open it in the full-screen viewer.
+
+## Screen: Albums
+
+Purpose:
+
+Show normal albums first, with user-customizable album tile sizing.
+
+Current behavior:
+
+- Large `Albums` title.
+- Top actions: plus, layout switch, overflow.
+- Wide rounded search pill.
+- `Big tiles` layout.
+- `Basic` grid layout.
+- Rounded album covers.
+- Album names and counts overlaid near the bottom-left.
+- Subtle bottom overlay for readability.
+- Overflow menu includes `Sort albums`, `Hidden items`, and `Settings`.
+- Shimmer skeletons while real media is loading.
 
 Important album examples:
 
@@ -304,18 +282,7 @@ Important album examples:
 - Documents
 - Wallpapers
 
-Bottom navigation:
-
-- `Photos` inactive
-- `Albums` active
-
-Implementation notes:
-
-- Hidden albums/items must not appear as a normal visible album tile.
-- The user wants customization, but it should not feel heavy. Use the grid/layout icon to switch modes.
-- Basic grid can be added after the big-tile shell if time is tight, but the data model should support both from the start.
-
-## Screen 3: Hidden Items
+## Screen: Hidden Items
 
 Purpose:
 
@@ -327,93 +294,65 @@ Access path:
 Albums > overflow menu > Hidden items
 ```
 
-Do not show a persistent `Hidden` album tile.
+Rules:
 
-Layout:
-
-- Top app bar:
-  - back arrow
-  - title `Hidden items`
-  - small overflow icon
-- Helper text:
-
-```text
-Choose albums to hide from Photos and Albums.
-```
-
-- Album rows:
-  - small rounded thumbnail
-  - album name
-  - item count
-  - toggle switch
-- Some toggles can be on, some off in prototype data.
-- Footer note:
-
-```text
-Hidden items can be shown again anytime.
-```
-
-Example rows:
-
-- Camera
-- Screenshots
-- Download
-- WhatsApp Images
-- Videos
-- Documents
-- Wallpapers
-
-Behavior:
-
-- Toggle on: hide that album from normal Photos/Albums.
-- Toggle off: show that album again.
+- Do not show a persistent `Hidden` album tile.
 - This is visibility control, not encryption.
+- Hidden items can be shown again anytime.
 
-## Overflow Menu
+Current behavior:
 
-Album overflow menu should be simple and practical.
+- Back arrow.
+- `Hidden items` title.
+- Helper text.
+- Album rows with thumbnails, names, counts, and toggles.
+- Some prototype toggles can be on and some off.
 
-Include:
+## Screen: Photo Viewer
 
-- Sort albums
-- Hidden items
-- Settings
+Purpose:
 
-Optional later:
+Open a tapped photo in a focused full-screen viewer.
 
-- Clean up
+Current behavior:
 
-Do not include v1 creative features unless explicitly requested:
+- Opens from Photos tile tap.
+- Full-screen black background.
+- Uses fit scaling for the opened image.
+- Fade/scale animation.
+- Top bar with back and more icons.
+- Android back button closes the viewer.
 
-- Create video
-- Create collage
+Next viewer work:
 
-Those appeared in the Huawei screenshot, but the user said they were showing layout and style, not asking for those features.
+- Swipe between photos.
+- Pinch zoom.
+- Double-tap zoom.
+- Video playback.
 
 ## Privacy Model
 
-There are two separate privacy concepts:
+There are two separate privacy concepts.
 
-### Hidden items
+Hidden items:
 
 - App-level visibility control.
 - Managed through `Albums > overflow > Hidden items`.
 - Uses toggles.
-- Not shown as a tile.
+- Not shown as a normal album tile.
 - Not encrypted.
 
-### Private / Locked album
+Private/locked albums:
 
-- Stronger privacy feature.
+- Future feature.
 - Separate from hidden items.
-- Later feature, not part of the first visual shell.
-- Should use PIN/biometric and encrypted app-private storage when implemented.
-
-Do not mix these two concepts in v1.
+- Should use PIN/biometric.
+- Should use encrypted app-private storage.
+- Should not be mixed with hidden items.
 
 ## Data Models
 
-Use these starting models:
+Core concepts:
 
 ```kotlin
 data class MediaItem(
@@ -423,6 +362,7 @@ data class MediaItem(
     val title: String,
     val dateLabel: String,
     val colorSeed: Long,
+    val uri: Uri? = null,
     val isVideo: Boolean = false
 )
 
@@ -450,120 +390,108 @@ data class HiddenAlbumState(
 )
 ```
 
-These can be adjusted to match the implementation style, but keep the same concepts.
+Exact implementation may differ slightly, but these concepts should remain stable.
 
-## Architecture
+## Architecture Notes
 
-Initial implementation should be a Compose visual shell with fake local data.
+Current architecture:
 
-Recommended structure:
+- Compose UI state is held in `GalleryApp` and screen-level composables.
+- `FakeGalleryRepository` supplies prototype fallback data.
+- `MediaStoreGalleryRepository` loads real device image/video data.
+- `MediaPermissions` handles access state and Android 14+ partial access.
+- `GallerySnapshot` carries loaded media/albums for UI display.
+- `ThumbnailMemoryCache` keeps decoded thumbnails in an in-memory LRU cache.
+- UI components live under `ui/components`.
 
-```text
-app/
-  data/
-    FakeGalleryRepository
-    HiddenAlbumsRepository
-  model/
-    MediaItem
-    Album
-    AlbumLayoutMode
-  ui/
-    GalleryApp
-    PhotosScreen
-    AlbumsScreen
-    HiddenItemsScreen
-    components/
-    theme/
-```
+Future architecture improvement:
 
-Repositories:
+- Add a ViewModel once the data layer grows.
+- Add deeper repository/state separation for hidden album filtering.
+- Add paging/prefetching if very large libraries need more performance work.
 
-- `FakeGalleryRepository`: supplies prototype media and albums.
-- `HiddenAlbumsRepository`: stores hidden state in memory first.
-- `MediaStoreGalleryRepository`: loads initial real device image/video data from Android MediaStore.
+## Tooling
 
-UI state is currently held in Compose state so fake data can fall back cleanly when real MediaStore data is unavailable. A ViewModel can be added later as the data layer grows.
-
-## First Implementation Milestone
-
-Status: complete.
-
-Built visual shell:
-
-- Android project scaffold.
-- Compose Material 3 setup.
-- Light/dark theme tokens.
-- Fake media/albums.
-- `Photos` screen.
-- `Albums` screen with `Big tiles` mode.
-- `Basic` vs `Big tiles` layout state.
-- Overflow menu.
-- `Hidden items` toggle screen.
-- Navigation between Photos, Albums, and Hidden items.
-
-MediaStore was intentionally not connected in this milestone.
-
-## Later Milestones
-
-After the visual shell feels right:
-
-1. Add real Android media permissions. Status: initial implementation complete.
-2. Load media with MediaStore. Status: initial implementation complete.
-3. Add thumbnail loading and caching.
-4. Apply hidden album filtering to real albums.
-5. Add performance work: lazy grids, stable keys, thumbnail prefetch, baseline profiles.
-6. Add private/locked album separately.
-7. Keep milestone commits pushed to GitHub as work continues.
-
-## Tooling Notes
-
-Earlier checks showed these were not visible on PATH in the current shell:
+Tooling located or configured:
 
 ```text
-java
-gradle
-adb
-git
-gh
+JDK: C:\Program Files\Android\Android Studio\jbr
+Android SDK: %LOCALAPPDATA%\Android\Sdk
+Gradle: C:\Users\Amazon\.gradle\wrapper\dists\gradle-9.0.0-bin\d6wjpkvcgsg3oed0qlfss3wgl\gradle-9.0.0\bin\gradle.bat
+Portable Git: F:\App\Gallery\tools\mingit\cmd\git.exe
 ```
 
-Tooling located or set up during implementation:
+Build command used successfully:
 
-- JDK: `C:\Program Files\Android\Android Studio\jbr`
-- Android SDK: `%LOCALAPPDATA%\Android\Sdk`
-- Gradle: `C:\Users\Amazon\.gradle\wrapper\dists\gradle-9.0.0-bin\d6wjpkvcgsg3oed0qlfss3wgl\gradle-9.0.0\bin\gradle.bat`
-- AVD used for QA: `Medium_Phone_API_36.1`
-- Portable Git: `F:\App\Gallery\tools\mingit\cmd\git.exe`
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"; & 'C:\Users\Amazon\.gradle\wrapper\dists\gradle-9.0.0-bin\d6wjpkvcgsg3oed0qlfss3wgl\gradle-9.0.0\bin\gradle.bat' --no-daemon :app:assembleDebug --stacktrace
+```
 
-GitHub CLI is still not set up, but Git Credential Manager is authenticated for Git operations.
+Git command path:
 
-## GitHub Plan
+```powershell
+& 'F:\App\Gallery\tools\mingit\cmd\git.exe' status --short --branch
+```
 
-User wants code on GitHub to review changes.
+ADB means Android Debug Bridge. It is the Android tool that talks to an emulator or physical phone. It is used to install APKs, launch apps, capture logs, take screenshots, and control Android devices during development.
 
-Current GitHub state:
+## Git History
 
-- Local repository exists.
-- Local branch: `main`.
-- Remote: `origin` -> `https://github.com/SwailumZafar/native-gallery.git`.
-- Push: complete.
-- Repository: private `SwailumZafar/native-gallery`.
+Recent pushed commits before this handoff update:
 
-GitHub setup:
+```text
+5035c7c Add skeleton loading and photo viewer
+fcc41f2 Add debug APK install helpers
+86ed1f7 Soften photos timeline date labels
+d50d92e Tune photos timeline visual scale
+7589034 Fix full gallery media display
+a87366a Add MediaStore gallery loading
+b121f2b Record GitHub push status
+ff46c7b Update gallery handoff status
+6f2ae39 Initial Android gallery visual shell
+```
 
-- Private repo name: `native-gallery`.
-- Milestone commits, not noisy tiny commits.
+Commit meanings:
 
-Suggested milestones:
+- `6f2ae39`: initial Compose visual shell.
+- `a87366a`: real MediaStore permissions and loading.
+- `7589034`: full gallery display fix and removal of row cap.
+- `d50d92e`: timeline scale tuning.
+- `86ed1f7`: date label softening.
+- `fcc41f2`: faster debug APK install scripts.
+- `5035c7c`: shimmer skeleton loaders, thumbnail cache, and full-screen viewer.
 
-- `Initial Android project scaffold`
-- `Add gallery visual shell`
-- `Add albums big tile layout`
-- `Add hidden items flow`
-- `Add MediaStore gallery loading`
-- `Add performance tuning`
+## QA Artifacts
 
-GitHub account used for push: `SwailumZafar`.
+QA report:
+
+```text
+F:\App\Gallery\design-qa.md
+```
+
+Earlier runtime screenshots:
+
+```text
+F:\App\Gallery\qa-screenshots\27-photos-final-wait.png
+F:\App\Gallery\qa-screenshots\31-albums-big-tiles-final2.png
+F:\App\Gallery\qa-screenshots\34-hidden-items-final3.png
+```
+
+Earlier comparison screenshots:
+
+```text
+F:\App\Gallery\qa-screenshots\comparisons\photos-final-wait-comparison.png
+F:\App\Gallery\qa-screenshots\comparisons\albums-final2-comparison.png
+F:\App\Gallery\qa-screenshots\comparisons\hidden-items-final3-comparison.png
+```
+
+Earlier QA result:
+
+```text
+passed
+```
+
+The latest skeleton/viewer work was build-verified, but still needs real-phone visual QA.
 
 ## Implementation Guardrails
 
@@ -573,6 +501,9 @@ Use:
 - Jetpack Compose
 - Material 3
 - Native Android navigation/state
+- Lazy lists/grids where appropriate
+- Stable keys for media lists
+- Real MediaStore APIs for device media
 
 Avoid:
 
@@ -581,21 +512,47 @@ Avoid:
 - over-designed privacy-first UI
 - AI features
 - marketing-page style screens
+- decorative features that distract from normal gallery browsing
 
 Performance philosophy:
 
 - The app should feel like a native OEM gallery.
 - Keep lists/grids lazy.
-- Use stable item keys.
 - Avoid expensive recomposition.
-- Add real benchmarking once the native project is runnable.
+- Cache thumbnails where reasonable.
+- Add benchmarking or profiling once the main flows are stable.
 
-## Recommended Next Chat Prompt
+## Recommended Next Step
 
-Use this prompt in the implementation chat:
+Install/test the latest APK on the real phone:
 
-```text
-Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed visual shell plus MediaStore loading milestone. GitHub is configured at https://github.com/SwailumZafar/native-gallery.git. The latest APK includes shimmer skeleton loaders, thumbnail memory caching, and a full-screen tap-to-open photo viewer. Next, test on a real phone, then add viewer gestures such as swipe between photos and pinch zoom. Keep the design locked to Set A.
+```powershell
+.\scripts\rebuild-install-debug.ps1
 ```
 
+Verify:
 
+- Permission request appears correctly.
+- All photos appear.
+- Android partial-access state is shown correctly if only selected photos are granted.
+- Skeleton loaders appear during initial load.
+- Thumbnail scrolling feels smoother.
+- Photo tiles are the approved size.
+- Date labels are no longer too large or bold.
+- Tapping a photo opens the full-screen viewer.
+- Back closes the viewer smoothly.
+
+Then implement viewer gestures:
+
+1. Swipe between photos.
+2. Pinch zoom.
+3. Double-tap zoom.
+4. Video playback.
+
+## Resume Prompt
+
+Use this prompt to continue in a new chat:
+
+```text
+Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed native Android gallery milestone. The project is pushed to https://github.com/SwailumZafar/native-gallery.git. Latest feature commit is 5035c7c, which added shimmer skeleton loaders, thumbnail memory caching, and a full-screen tap-to-open photo viewer. Keep the design locked to Set A / Design 1. Next, test the latest APK on a real phone, then add photo viewer gestures: swipe between photos, pinch zoom, double-tap zoom, and video playback.
+```
