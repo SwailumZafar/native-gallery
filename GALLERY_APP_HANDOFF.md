@@ -2,7 +2,7 @@
 
 ## Latest Implementation Update - 2026-06-21
 
-The first Android native Compose visual-shell milestone has been implemented and verified. The first MediaStore/device media loading milestone is now implemented and build-verified. A follow-up completeness fix now removes the initial 600-item MediaStore cap and renders all loaded photo rows in the Photos timeline. A visual tuning pass then reduced Photos date label size and made timeline tiles larger.
+The first Android native Compose visual-shell milestone has been implemented and verified. The first MediaStore/device media loading milestone is now implemented and build-verified. A follow-up completeness fix now removes the initial 600-item MediaStore cap and renders all loaded photo rows in the Photos timeline. A visual tuning pass then reduced Photos date label size, softened date weight/color, and made timeline tiles larger.
 
 Current workspace:
 
@@ -27,7 +27,7 @@ Current implementation status:
 - Fake local gallery data remains as the fallback when media access is not granted or no device media is available.
 - Photos timeline now renders all loaded rows instead of visual-preview slices.
 - Android 14+ partial library access is detected and shown as "selected photos only" in the UI.
-- Photos date labels are reduced to 18sp and timeline rows use larger 4-column image tiles.
+- Photos date labels are reduced to 14sp medium/muted and timeline rows use larger 4-column image tiles with tighter gaps.
 
 Debug APK:
 
@@ -39,7 +39,7 @@ Last verified APK details:
 
 ```text
 Size: 18,880,013 bytes
-Last write time: 2026-06-21 8:29:30 PM
+Last write time: 2026-06-21 8:43:51 PM
 ```
 
 This APK is a debug build. It can be installed on an Android phone for review, but the phone may require allowing installs from unknown sources or USB debugging, depending on the install method.

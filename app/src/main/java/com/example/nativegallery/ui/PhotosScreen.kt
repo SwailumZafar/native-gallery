@@ -38,9 +38,9 @@ fun PhotosScreen(
 
     LazyColumn(
         contentPadding = PaddingValues(
-            start = 16.dp,
+            start = 12.dp,
             top = 56.dp,
-            end = 16.dp,
+            end = 12.dp,
             bottom = contentPadding.calculateBottomPadding() + 28.dp
         )
     ) {
@@ -60,7 +60,7 @@ fun PhotosScreen(
             Spacer(Modifier.height(24.dp))
             SearchPill()
             if (mediaAccessNotice != null) {
-                Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.height(16.dp))
                 mediaAccessNotice()
                 Spacer(Modifier.height(24.dp))
             } else {
@@ -89,7 +89,7 @@ private fun LazyListScope.photoSection(
 
     item(key = "section-$title") {
         SectionTitle(title)
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
     }
     items(
         items = mediaItems.chunked(columns),
@@ -98,12 +98,12 @@ private fun LazyListScope.photoSection(
         PhotoGridRow(
             mediaItems = rowItems,
             columns = columns,
-            spacing = 7.dp
+            spacing = 5.dp
         )
-        Spacer(Modifier.height(7.dp))
+        Spacer(Modifier.height(5.dp))
     }
     item(key = "section-end-$title") {
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
     }
 }
 

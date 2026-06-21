@@ -124,12 +124,12 @@ fun SectionTitle(
     Text(
         text = title,
         modifier = modifier,
-        style = MaterialTheme.typography.titleMedium.copy(
-            fontSize = 18.sp,
-            lineHeight = 23.sp,
-            fontWeight = FontWeight.SemiBold
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 14.sp,
+            lineHeight = 18.sp,
+            fontWeight = FontWeight.Medium
         ),
-        color = MaterialTheme.colorScheme.onBackground
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.82f)
     )
 }
 
