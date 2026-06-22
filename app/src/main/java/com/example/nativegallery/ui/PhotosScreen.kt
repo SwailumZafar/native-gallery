@@ -86,19 +86,19 @@ private fun PicturesHeader(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 22.dp, top = 92.dp, end = 22.dp),
+            .padding(start = 10.dp, top = 88.dp, end = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = "Pictures",
             style = MaterialTheme.typography.headlineLarge.copy(
-                fontSize = 42.sp,
-                lineHeight = 48.sp,
-                fontWeight = FontWeight.Black
+                fontSize = 32.sp,
+                lineHeight = 38.sp,
+                fontWeight = FontWeight.Bold
             ),
             color = MaterialTheme.colorScheme.onBackground
         )
-        Spacer(Modifier.height(78.dp))
+        Spacer(Modifier.height(72.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
@@ -115,7 +115,7 @@ private fun PicturesHeader(
                         imageVector = Icons.Filled.MoreVert,
                         contentDescription = "More options",
                         tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(28.dp)
                     )
                 }
             }
@@ -124,7 +124,7 @@ private fun PicturesHeader(
             Spacer(Modifier.height(18.dp))
             mediaAccessNotice()
         }
-        Spacer(Modifier.height(46.dp))
+        Spacer(Modifier.height(40.dp))
     }
 }
 
@@ -136,13 +136,13 @@ private fun GallerySearchBubble() {
         shadowElevation = 1.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 13.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = Icons.Filled.Search,
                 contentDescription = null,
-                tint = Color(0xFF26A8FF),
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.size(7.dp))
@@ -160,8 +160,8 @@ private fun GallerySearchBubble() {
 private fun SearchCircle() {
     Surface(
         modifier = Modifier
-            .size(58.dp)
-            .border(3.dp, Color(0xFF26A8FF), CircleShape),
+            .size(54.dp)
+            .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape),
         color = Color.White,
         shape = CircleShape,
         shadowElevation = 2.dp
@@ -170,7 +170,7 @@ private fun SearchCircle() {
             imageVector = Icons.Filled.Search,
             contentDescription = "Search",
             tint = Color.Black,
-            modifier = Modifier.padding(13.dp)
+            modifier = Modifier.padding(12.dp)
         )
     }
 }
@@ -188,11 +188,11 @@ private fun LazyListScope.photoSection(
     item(key = "section-$title", contentType = "photo-section-title") {
         Text(
             text = title,
-            modifier = Modifier.padding(horizontal = 26.dp),
+            modifier = Modifier.padding(horizontal = 10.dp),
             style = MaterialTheme.typography.titleLarge.copy(
-                fontSize = 23.sp,
-                lineHeight = 28.sp,
-                fontWeight = FontWeight.Black
+                fontSize = 18.sp,
+                lineHeight = 24.sp,
+                fontWeight = FontWeight.Bold
             ),
             color = MaterialTheme.colorScheme.onBackground
         )
@@ -206,10 +206,10 @@ private fun LazyListScope.photoSection(
         PhotoGridRow(
             mediaItems = rowItems,
             columns = columns,
-            spacing = 2.dp,
+            spacing = 1.dp,
             onMediaClick = onMediaClick
         )
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(1.dp))
     }
     item(key = "section-end-$title", contentType = "photo-section-end") {
         Spacer(Modifier.height(30.dp))
@@ -221,7 +221,7 @@ private fun LazyListScope.loadingPhotoSections() {
         item(key = "loading-section-$sectionIndex", contentType = "loading-section-title") {
             SkeletonBlock(
                 modifier = Modifier
-                    .padding(horizontal = 26.dp)
+                    .padding(horizontal = 10.dp)
                     .fillMaxWidth(0.28f)
                     .height(18.dp),
                 cornerRadius = 9.dp
@@ -233,8 +233,8 @@ private fun LazyListScope.loadingPhotoSections() {
             key = { rowIndex -> "loading-row-$sectionIndex-$rowIndex" },
             contentType = { "loading-photo-row" }
         ) {
-            PhotoSkeletonRow(columns = 4, spacing = 2.dp)
-            Spacer(Modifier.height(2.dp))
+            PhotoSkeletonRow(columns = 4, spacing = 1.dp)
+            Spacer(Modifier.height(1.dp))
         }
         item(key = "loading-section-end-$sectionIndex", contentType = "loading-section-end") {
             Spacer(Modifier.height(30.dp))
@@ -252,7 +252,7 @@ private fun PhotoGridRow(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 22.dp)
+            .padding(horizontal = 8.dp)
     ) {
         val cellSize = (maxWidth - spacing * (columns - 1)) / columns
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
@@ -281,7 +281,7 @@ private fun PhotoSkeletonRow(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 22.dp)
+            .padding(horizontal = 8.dp)
     ) {
         val cellSize = (maxWidth - spacing * (columns - 1)) / columns
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {

@@ -14,7 +14,7 @@ private val LightColorScheme = lightColorScheme(
     onBackground = Color.Black,
     surface = GallerySurface,
     onSurface = Color.Black,
-    surfaceVariant = Color(0xFFE6E0D2),
+    surfaceVariant = Color(0xFFF2F2F2),
     onSurfaceVariant = GalleryTextMuted,
     outline = GalleryLine
 )
