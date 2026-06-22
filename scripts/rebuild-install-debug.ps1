@@ -4,6 +4,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Invoke-NativeChecked {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FilePath failed with exit code $LASTEXITCODE."
+    }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $gradle = "C:\Users\Amazon\.gradle\wrapper\dists\gradle-9.0.0-bin\d6wjpkvcgsg3oed0qlfss3wgl\gradle-9.0.0\bin\gradle.bat"
 
@@ -17,11 +31,10 @@ if (-not (Test-Path -LiteralPath $gradle)) {
 Push-Location $repoRoot
 try {
     Write-Host "Building debug APK..."
-    & $gradle --no-daemon :app:assembleDebug
+    Invoke-NativeChecked $gradle --no-daemon :app:assembleDebug
 
     $installScript = Join-Path $PSScriptRoot "install-debug-apk.ps1"
     & $installScript -Device $Device
 } finally {
     Pop-Location
 }
-

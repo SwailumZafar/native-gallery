@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -36,9 +36,10 @@ F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
 Last verified APK:
 
 ```text
-Last write time: 2026-06-21 9:07:14 PM
+Last write time: 2026-06-22 7:14:26 PM
 Size: 18,880,013 bytes
 Build result: passed
+Install result: not installed in latest attempt because ADB reported no connected devices
 ```
 
 Fast rebuild and install helper:
@@ -52,6 +53,8 @@ Install-only helper:
 ```powershell
 .\scripts\install-debug-apk.ps1
 ```
+
+Latest install attempt after the 3:57 AM build did not complete because ADB reported no connected devices. Reconnect the phone and rerun the helper.
 
 ## Current Implementation
 
@@ -85,6 +88,29 @@ Completed so far:
 - Full-screen tap-to-open photo viewer.
 - Smooth fade/scale viewer animation.
 - Android back-button close support for the viewer.
+- Floating compact bottom navigation pill.
+- Compact pill-rounded floating bottom navigation bar restored after the over-stretched version.
+- Animated Photos/Albums tab transition.
+- Premium fade/scale Photos/Albums tab transition tuned for 60/90/120Hz displays.
+- Album cards open a real album detail view.
+- Android back from Albums returns to Photos instead of closing the app.
+- Lazy row rendering for Albums and album detail grids to reduce startup and scroll jank.
+- Album detail media tiles open the viewer.
+- Album detail header stays pinned while scrolling media.
+- Slightly larger Photos timeline tiles with unchanged section text.
+- Viewer swipe navigation between photos in the current list.
+- Viewer supports double-tap zoom and two-finger pinch/pan zoom.
+- High-quality viewer image decode with cached thumbnail fallback.
+- Real video items open in the viewer with a TextureView/MediaPlayer playback path to avoid black SurfaceView video.
+- Video pages keep the same viewer back and left/right swipe gestures as photo pages.
+- Photos and Albums can be switched by horizontal swipe, with a springy pager settle.
+- Album open/close now uses direct destination switching to avoid the choppy list-scale animation and close-time white flash.
+- MainActivity requests the highest available display mode/refresh rate on create and resume when Android allows it.
+- Bottom navigation was retuned smaller and more rounded after real-device feedback.
+- Photos/Albums pager no longer scales/fades pages during finger drag, reducing swipe-start jitter.
+- Album detail and full-screen viewer open/close motion was retuned with shorter, lighter easing.
+- Viewer chrome can be tapped to show/hide while browsing photos or videos.
+- Video viewer controls now include a scrubber, elapsed/total time, and 10-second rewind/forward buttons.
 
 Latest user feedback already addressed:
 
@@ -93,6 +119,34 @@ Latest user feedback already addressed:
 - Photo tiles were made slightly bigger.
 - Loading polish was added with shimmer skeletons.
 - A full-screen photo viewer was added when tapping a photo.
+- Bottom navigation was made smaller and floating.
+- Album cards now open album detail grids.
+- Photos timeline tiles were made a little larger without changing date text.
+- Viewer image loading now uses a high-quality decode path for opened photos.
+- Viewer supports left/right swiping through the current photo list.
+- Photos/Albums tab switching now uses a premium fade/scale transition.
+- Albums performance was improved with lazy row rendering and stable row keys.
+- Album-detail open/close now uses a fade/scale transition.
+- Viewer close/open animation was tuned with a deeper scale/fade.
+- Bottom navigation width was restored closer to the older compact version while keeping the newer roundness.
+- Video playback was moved from VideoView to TextureView/MediaPlayer after audio played but the video surface rendered black.
+- Video pages now preserve the viewer pager/back gesture behavior.
+- Bottom navigation items were brought closer together inside the compact pill.
+- Photos/Albums can now be changed by horizontal swipe, not only by tapping the bottom buttons.
+- Album detail open/close animation was removed in favor of direct switching to avoid close flashes on real devices.
+- The activity now prefers the highest supported display refresh mode to help 90/120Hz devices run smoother.
+- Bottom navigation was made a little smaller and more pill-rounded.
+- Photos/Albums swipe startup jitter was reduced by removing per-page scale/fade during direct drag.
+- Album/viewer open and close animation was retuned to feel lighter and smoother.
+- Videos can now be scrubbed, rewound 10 seconds, and forwarded 10 seconds from the viewer.
+- Viewer controls can be tapped hidden or shown again for cleaner media viewing.
+- Bottom navigation inner Photos/Albums items were made slightly larger while keeping the pill shape.
+- Album detail overflow menu now supports newest/oldest/name sorting.
+- Album detail overflow menu now supports compact 4-column and comfortable 3-column grids.
+- Light mode background changed to #F0EDE4 and primary/accent changed to #004741.
+- Album opening/closing now uses a touch-origin container overlay that expands from and returns toward the tapped album tile.
+- Album cards and bottom navigation now use a small press-bounce micro-interaction.
+- Viewer overflow now includes Delete; after deletion, the viewer moves to the next nearby item based on swipe direction.
 
 Still to do next:
 
@@ -100,10 +154,27 @@ Still to do next:
 - Confirm skeleton loaders appear during first real-media load.
 - Confirm thumbnail scrolling feels smoother on a large library.
 - Confirm tapping a photo opens the viewer smoothly.
-- Add swipe-between-photos in the viewer.
-- Add pinch-to-zoom in the viewer.
-- Add double-tap zoom.
-- Add proper video playback in the viewer.
+- Confirm opened photos look high quality on the real device.
+- Confirm left/right viewer swiping feels natural.
+- Confirm Albums opens quickly and scrolls smoothly on a real large library.
+- Confirm the compact rounded floating bottom bar feels balanced and not too stretched.
+- Confirm horizontal Photos/Albums swiping feels smooth and settles with a subtle bounce.
+- Confirm album detail opens/closes without choppy motion or white/picture flash.
+- Confirm Android back on Albums returns to Photos.
+- Confirm the album-detail back action stays visible after scrolling down.
+- Confirm double-tap zoom and pinch zoom work without breaking left/right photo swiping.
+- Confirm videos show picture as well as audio, and viewer back/swipe gestures still work on video pages.
+- Confirm the app chooses 90/120Hz on the real phone when the system allows app-requested high refresh.
+- Confirm the smaller, rounder bottom navigation feels balanced and not too tiny.
+- Confirm Photos/Albums swipe begins without the initial jitter.
+- Confirm album and viewer open/close motion feels smooth on-device.
+- Confirm video scrubbing, 10-second rewind, and 10-second forward work on real videos.
+- Confirm Photos/Albums labels inside the bottom pill are bigger but not cramped.
+- Confirm album detail sort options and compact/comfortable grid options work on device.
+- Confirm light mode uses #F0EDE4 surfaces and #004741 accents across Photos, Albums, Hidden, controls, toggles, and sliders.
+- Confirm album open expands from the tapped tile and close returns toward the tile without flashing.
+- Confirm album/nav press bounce feels polished and not distracting.
+- Confirm viewer Delete requests Android permission when needed and advances to the next nearby photo/video in the swipe direction.
 - Apply hidden-album filtering more deeply to real MediaStore buckets.
 - Add private/locked albums later as a separate feature.
 
@@ -246,6 +317,7 @@ Current behavior:
 - Real media thumbnails when permission is granted.
 - Fake fallback media when permission is not granted or no device media is available.
 - Larger 4-column photo rows with tighter gaps.
+- Slightly larger photo tiles from reduced side padding and grid gaps.
 - Smaller, softer date labels.
 - Video badge support on video thumbnails.
 - Shimmer skeletons while real media is loading.
@@ -269,6 +341,8 @@ Current behavior:
 - Subtle bottom overlay for readability.
 - Overflow menu includes `Sort albums`, `Hidden items`, and `Settings`.
 - Shimmer skeletons while real media is loading.
+- Album cards open album detail grids.
+- Subtle slide/fade transition when switching between Photos and Albums.
 
 Important album examples:
 
@@ -316,19 +390,18 @@ Open a tapped photo in a focused full-screen viewer.
 
 Current behavior:
 
-- Opens from Photos tile tap.
+- Opens from Photos and album-detail tile taps.
 - Full-screen black background.
 - Uses fit scaling for the opened image.
+- Uses high-quality opened-photo decode with cached thumbnail fallback.
+- Supports left/right swipe navigation through the current photo list.
+- Opens real video items through TextureView/MediaPlayer playback with a small Compose play/pause control.
+- Pauses video playback when swiping away from a video page.
 - Fade/scale animation.
 - Top bar with back and more icons.
 - Android back button closes the viewer.
-
-Next viewer work:
-
-- Swipe between photos.
-- Pinch zoom.
-- Double-tap zoom.
-- Video playback.
+- Tap on media toggles viewer controls/chrome.
+- Video playback includes scrubber, elapsed/total time, and 10-second rewind/forward controls.
 
 ## Privacy Model
 
@@ -493,6 +566,14 @@ passed
 
 The latest skeleton/viewer work was build-verified, but still needs real-phone visual QA.
 
+## Implementation Workflow Preference
+
+For bigger future changes, show a detailed implementation plan before editing, then give a walkthrough in the side panel after the build is implemented and verified.
+
+The implementation plan should be detailed enough for the user to review the intended changes before work begins.
+
+After every implementation/build handoff, include the install command the user can run on the connected phone.
+
 ## Implementation Guardrails
 
 Use:
@@ -540,19 +621,58 @@ Verify:
 - Photo tiles are the approved size.
 - Date labels are no longer too large or bold.
 - Tapping a photo opens the full-screen viewer.
+- Opened photos look sharp compared with the official gallery.
+- Left/right viewer swiping feels smooth.
 - Back closes the viewer smoothly.
-
-Then implement viewer gestures:
-
-1. Swipe between photos.
-2. Pinch zoom.
-3. Double-tap zoom.
-4. Video playback.
+- Video items show picture plus audio, keep viewer gestures, and pause when swiping away.
+- Video scrubber and 10-second skip controls seek accurately.
+- Tap-to-hide/show viewer controls works without breaking double-tap zoom or video controls.
+- Photos/Albums swipe navigation feels smooth and springy.
+- Album detail opens/closes without choppy motion or white/picture flash.
+- The app prefers the highest supported refresh mode without forcing the phone setting globally.
 
 ## Resume Prompt
 
 Use this prompt to continue in a new chat:
 
 ```text
-Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed native Android gallery milestone. The project is pushed to https://github.com/SwailumZafar/native-gallery.git. Latest feature commit is 5035c7c, which added shimmer skeleton loaders, thumbnail memory caching, and a full-screen tap-to-open photo viewer. Keep the design locked to Set A / Design 1. Next, test the latest APK on a real phone, then add photo viewer gestures: swipe between photos, pinch zoom, double-tap zoom, and video playback.
+Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed native Android gallery milestone. The project is pushed to https://github.com/SwailumZafar/native-gallery.git. Latest pushed feature commit is 5035c7c. The current working tree includes an uncommitted polish pass: compact rounded floating bottom nav with closer tab items, swipeable Photos/Albums pager with springy settle, Android back navigation fixes, lazy album grids for smoother scrolling, slightly larger photo tiles, high-quality viewer decode, viewer swipe navigation, double-tap zoom, pinch zoom, TextureView/MediaPlayer video playback, high-refresh display-mode preference, smaller rounder bottom nav, touch-origin album container transition, reduced Photos/Albums swipe-start jitter, tap-to-toggle viewer controls, video scrub/skip controls, viewer delete-to-neighbor behavior, #F0EDE4/#004741 light theme, and album detail sort/grid controls. Keep the design locked to Set A / Design 1. Next, test the latest APK on a real phone, especially video picture/audio, viewer gestures on videos, tab swipe feel, album touch-origin open/close feel, viewer delete behavior, new light colors, and whether the device honors the app refresh-rate request.
+```
+
+## 2026-06-22 ColorOS Motion / Recently Deleted Pass
+
+Build verified after this pass:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 2026-06-22 11:11:09 PM
+Build result: passed (:app:assembleDebug)
+```
+
+Implemented in this pass:
+
+- Dark mode accent now uses `#004741` instead of the previous blue token.
+- Album open now waits to reveal album detail until the touch-origin cover expansion finishes, preventing destination photos from flashing during open.
+- Album overlay no longer fades out before completion, removing the picture/white-flash leak path.
+- Photos and album-detail media thumbnails now report their bounds and use the same press-bounce interaction.
+- Viewer open/close now has a shared touch-origin media overlay that expands from the tapped thumbnail and returns toward it on close when bounds are known.
+- Bottom Photos/Albums bar was rebuilt as a compact rounded segmented pill with a sliding selected capsule.
+- Delete is now an app-level soft delete, moving media into a Recently Deleted section instead of immediately destroying the device file.
+- Added `RecentlyDeletedScreen` with open, restore, and restore-all actions.
+- Hidden album toggles now persist through `HiddenAlbumsRepository` instead of only updating the in-memory map.
+- Albums three-dot menu now uses the animated gallery action sheet and includes Recently Deleted.
+- Viewer three-dot menu now uses the animated gallery action sheet.
+- Viewer vertical gestures were added: drag down to close, drag up to reveal media details.
+- Viewer details panel shows title, type, date label, album name when known, and video duration when available.
+
+Install command to hand to the user after this build:
+
+```powershell
+.\scripts\rebuild-install-debug.ps1
+```
+
+Bypass form:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "F:\App\Gallery\scripts\rebuild-install-debug.ps1"
 ```

@@ -1,4 +1,4 @@
-package com.example.nativegallery.model
+﻿package com.example.nativegallery.model
 
 import android.net.Uri
 
@@ -12,6 +12,11 @@ data class MediaItem(
     val contentUri: Uri? = null,
     val isVideo: Boolean = false,
     val durationLabel: String? = null
+)
+
+data class RecentlyDeletedMedia(
+    val mediaItem: MediaItem,
+    val deletedAtMillis: Long
 )
 
 enum class MediaType {
@@ -40,3 +45,5 @@ data class HiddenAlbumState(
     val albumId: String,
     val isHidden: Boolean
 )
+
+

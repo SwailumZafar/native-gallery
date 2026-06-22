@@ -1,4 +1,4 @@
-package com.example.nativegallery.ui
+﻿package com.example.nativegallery.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -36,6 +36,7 @@ fun HiddenItemsScreen(
     albums: List<Album>,
     hiddenStates: SnapshotStateMap<String, Boolean>,
     onBack: () -> Unit,
+    onHiddenChange: (Album, Boolean) -> Unit,
     contentPadding: PaddingValues
 ) {
     LazyColumn(
@@ -93,7 +94,7 @@ fun HiddenItemsScreen(
                         HiddenAlbumRow(
                             album = album,
                             checked = hiddenStates[album.id] == true,
-                            onCheckedChange = { checked -> hiddenStates[album.id] = checked }
+                            onCheckedChange = { checked -> onHiddenChange(album, checked) }
                         )
                         if (index != albums.lastIndex) {
                             Spacer(Modifier.height(1.dp))
@@ -161,3 +162,4 @@ private fun HiddenAlbumRow(
         )
     }
 }
+

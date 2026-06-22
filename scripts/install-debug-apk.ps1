@@ -4,6 +4,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Invoke-NativeChecked {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FilePath failed with exit code $LASTEXITCODE."
+    }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
 $apk = Join-Path $repoRoot "app\build\outputs\apk\debug\app-debug.apk"
@@ -22,11 +36,10 @@ if ($Device.Trim().Length -gt 0) {
 }
 
 Write-Host "Checking connected devices..."
-& $adb devices
+Invoke-NativeChecked $adb @deviceArgs devices
 
 Write-Host "Installing debug APK..."
-& $adb @deviceArgs install -r -d $apk
+Invoke-NativeChecked $adb @deviceArgs install -r -d $apk
 
 Write-Host "Launching Native Gallery..."
-& $adb @deviceArgs shell monkey -p com.example.nativegallery 1
-
+Invoke-NativeChecked $adb @deviceArgs shell monkey -p com.example.nativegallery 1

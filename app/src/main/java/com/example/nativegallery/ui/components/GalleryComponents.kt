@@ -2,6 +2,8 @@ package com.example.nativegallery.ui.components
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -13,7 +15,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -41,11 +42,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +59,14 @@ import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.max
+import kotlin.math.roundToInt
+
+
+enum class ImageLoadQuality {
+    Thumbnail,
+    HighQuality
+}
 
 @Composable
 fun ScreenHeader(
@@ -146,12 +158,16 @@ fun MediaThumbnail(
     mediaItem: MediaItem,
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 10.dp,
+    onBoundsChanged: ((Rect) -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
+    val measuredModifier = modifier.onGloballyPositioned { coordinates ->
+        onBoundsChanged?.invoke(coordinates.boundsInRoot())
+    }
     val containerModifier = if (onClick != null) {
-        modifier.clickable(onClick = onClick)
+        measuredModifier.bouncyClickable(onClick = onClick)
     } else {
-        modifier
+        measuredModifier
     }
 
     Box(modifier = containerModifier) {
@@ -201,9 +217,10 @@ fun GalleryImage(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 16.dp,
     contentScale: ContentScale = ContentScale.Crop,
-    thumbnailSize: Int = 512
+    thumbnailSize: Int = 512,
+    loadQuality: ImageLoadQuality = ImageLoadQuality.Thumbnail
 ) {
-    val bitmap = rememberContentUriBitmap(imageUri, thumbnailSize)
+    val bitmap = rememberContentUriBitmap(imageUri, thumbnailSize, loadQuality)
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(cornerRadius))
@@ -241,14 +258,14 @@ fun SkeletonBlock(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 16.dp
 ) {
-    val base = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
-    val highlight = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+    val base = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f)
+    val highlight = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
     val transition = rememberInfiniteTransition(label = "skeleton shimmer")
     val offset = transition.animateFloat(
         initialValue = -420f,
         targetValue = 840f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1150, easing = LinearEasing)
+            animation = tween(durationMillis = 1350, easing = LinearEasing)
         ),
         label = "skeleton shimmer offset"
     )
@@ -331,22 +348,89 @@ fun VideoBadge(
 }
 
 @Composable
-private fun rememberContentUriBitmap(imageUri: Uri?, thumbnailSize: Int): Bitmap? {
+private fun rememberContentUriBitmap(
+    imageUri: Uri?,
+    thumbnailSize: Int,
+    loadQuality: ImageLoadQuality
+): Bitmap? {
     val context = LocalContext.current.applicationContext
     val cacheKey = imageUri?.let { ThumbnailMemoryCache.key(it, thumbnailSize) }
     val cachedBitmap = cacheKey?.let { ThumbnailMemoryCache.get(it) }
+    val fastFallback = if (loadQuality == ImageLoadQuality.HighQuality && imageUri != null && cachedBitmap == null) {
+        listOf(1440, 512, 384).firstNotNullOfOrNull { fallbackSize ->
+            ThumbnailMemoryCache.get(ThumbnailMemoryCache.key(imageUri, fallbackSize))
+        }
+    } else {
+        null
+    }
 
-    val bitmapState = produceState<Bitmap?>(initialValue = cachedBitmap, imageUri, thumbnailSize) {
-        value = cachedBitmap
+    val bitmapState = produceState<Bitmap?>(initialValue = cachedBitmap ?: fastFallback, imageUri, thumbnailSize, loadQuality) {
+        value = cachedBitmap ?: fastFallback
         if (imageUri != null && cacheKey != null && cachedBitmap == null) {
             value = withContext(Dispatchers.IO) {
-                loadThumbnail(context, imageUri, thumbnailSize)?.also { loaded ->
+                val loadedBitmap = when (loadQuality) {
+                    ImageLoadQuality.Thumbnail -> loadThumbnail(context, imageUri, thumbnailSize)
+                    ImageLoadQuality.HighQuality -> loadHighQualityBitmap(context, imageUri, thumbnailSize)
+                        ?: loadThumbnail(context, imageUri, thumbnailSize)
+                }
+                loadedBitmap?.also { loaded ->
                     ThumbnailMemoryCache.put(cacheKey, loaded)
                 }
             }
         }
     }
     return bitmapState.value
+}
+
+private fun loadHighQualityBitmap(context: Context, imageUri: Uri, maxSide: Int): Bitmap? {
+    return try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val source = ImageDecoder.createSource(context.contentResolver, imageUri)
+            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val width = info.size.width
+                val height = info.size.height
+                val largestSide = max(width, height)
+                if (largestSide > maxSide) {
+                    val scale = maxSide.toFloat() / largestSide.toFloat()
+                    decoder.setTargetSize(
+                        (width * scale).roundToInt().coerceAtLeast(1),
+                        (height * scale).roundToInt().coerceAtLeast(1)
+                    )
+                }
+            }
+        } else {
+            loadSampledBitmap(context, imageUri, maxSide)
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun loadSampledBitmap(context: Context, imageUri: Uri, maxSide: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(imageUri)?.use { stream ->
+        BitmapFactory.decodeStream(stream, null, bounds)
+    }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+        return null
+    }
+
+    val decodeOptions = BitmapFactory.Options().apply {
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+        inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, maxSide)
+    }
+    return context.contentResolver.openInputStream(imageUri)?.use { stream ->
+        BitmapFactory.decodeStream(stream, null, decodeOptions)
+    }
+}
+
+private fun sampleSizeFor(width: Int, height: Int, maxSide: Int): Int {
+    var sampleSize = 1
+    while (max(width / sampleSize, height / sampleSize) > maxSide) {
+        sampleSize *= 2
+    }
+    return sampleSize
 }
 
 private fun loadThumbnail(context: Context, imageUri: Uri, thumbnailSize: Int): Bitmap? {
