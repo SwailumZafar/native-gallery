@@ -6,6 +6,9 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GridView
@@ -46,6 +50,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
@@ -72,13 +78,14 @@ import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
+import kotlinx.coroutines.delay
 
-private enum class AlbumDetailGridMode {
+enum class AlbumDetailGridMode {
     Compact,
     Comfortable
 }
 
-private enum class AlbumDetailSortMode {
+enum class AlbumDetailSortMode {
     Newest,
     Oldest,
     Name
@@ -94,8 +101,11 @@ fun AlbumsScreen(
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit,
     contentPadding: PaddingValues,
+    activeTransitionAlbumId: String? = null,
     mediaAccessNotice: (@Composable () -> Unit)? = null,
-    isLoading: Boolean = false
+    isLoading: Boolean = false,
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {}
 ) {
     var overflowExpanded by rememberSaveable { mutableStateOf(false) }
     var layoutExpanded by rememberSaveable { mutableStateOf(false) }
@@ -175,7 +185,11 @@ fun AlbumsScreen(
                 }
             }
             Spacer(Modifier.height(22.dp))
-            SearchPill(placeholder = "Search albums")
+            SearchPill(
+                placeholder = "Search albums",
+                query = searchQuery,
+                onQueryChange = onSearchQueryChange
+            )
             if (mediaAccessNotice != null) {
                 Spacer(Modifier.height(18.dp))
                 mediaAccessNotice()
@@ -199,11 +213,21 @@ fun AlbumsScreen(
             item(key = "albums-loading", contentType = "albums-loading") {
                 AlbumsLoadingState(layoutMode = layoutMode)
             }
+        } else if (sortedAlbums.isEmpty()) {
+            item(key = "albums-empty", contentType = "albums-empty") {
+                Text(
+                    text = if (searchQuery.isNotBlank()) "No matching albums." else "No albums yet.",
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 22.dp),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         } else if (layoutMode == AlbumLayoutMode.BigTiles) {
             if (allPhotos != null) {
                 item(key = "album-hero-${allPhotos.id}", contentType = "album-hero") {
                     AlbumHeroCard(
                         album = allPhotos,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
                         onAlbumClick = onAlbumClick,
                         onAlbumBoundsChanged = onAlbumBoundsChanged
                     )
@@ -212,12 +236,14 @@ fun AlbumsScreen(
             }
             bigAlbumRows(
                 albums = regularAlbums,
+                activeTransitionAlbumId = activeTransitionAlbumId,
                 onAlbumClick = onAlbumClick,
                 onAlbumBoundsChanged = onAlbumBoundsChanged
             )
         } else {
             basicAlbumRows(
                 albums = sortedAlbums,
+                activeTransitionAlbumId = activeTransitionAlbumId,
                 onAlbumClick = onAlbumClick,
                 onAlbumBoundsChanged = onAlbumBoundsChanged
             )
@@ -377,8 +403,9 @@ private fun LayoutSelector(
 
 private fun LazyListScope.bigAlbumRows(
     albums: List<Album>,
+    activeTransitionAlbumId: String?,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     items(
         items = albums.chunked(2),
         key = { rowAlbums -> "big-album-row-${rowAlbums.joinToString("-") { it.id }}" },
@@ -386,6 +413,7 @@ private fun LazyListScope.bigAlbumRows(
     ) { rowAlbums ->
         BigAlbumRow(
             albums = rowAlbums,
+            activeTransitionAlbumId = activeTransitionAlbumId,
             onAlbumClick = onAlbumClick,
             onAlbumBoundsChanged = onAlbumBoundsChanged
         )
@@ -395,8 +423,9 @@ private fun LazyListScope.bigAlbumRows(
 
 private fun LazyListScope.basicAlbumRows(
     albums: List<Album>,
+    activeTransitionAlbumId: String?,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     items(
         items = albums.chunked(3),
         key = { rowAlbums -> "basic-album-row-${rowAlbums.joinToString("-") { it.id }}" },
@@ -404,6 +433,7 @@ private fun LazyListScope.basicAlbumRows(
     ) { rowAlbums ->
         BasicAlbumRow(
             albums = rowAlbums,
+            activeTransitionAlbumId = activeTransitionAlbumId,
             onAlbumClick = onAlbumClick,
             onAlbumBoundsChanged = onAlbumBoundsChanged
         )
@@ -414,14 +444,16 @@ private fun LazyListScope.basicAlbumRows(
 @Composable
 private fun AlbumHeroCard(
     album: Album,
+    activeTransitionAlbumId: String?,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     AlbumImageCard(
         album = album,
         modifier = Modifier
             .fillMaxWidth()
             .height(176.dp),
         cornerRadius = 24.dp,
+        activeTransitionAlbumId = activeTransitionAlbumId,
         onAlbumClick = onAlbumClick,
         onAlbumBoundsChanged = onAlbumBoundsChanged
     )
@@ -430,8 +462,9 @@ private fun AlbumHeroCard(
 @Composable
 private fun BigAlbumRow(
     albums: List<Album>,
+    activeTransitionAlbumId: String?,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val spacing = 12.dp
         val cellWidth = (maxWidth - spacing) / 2
@@ -443,6 +476,7 @@ private fun BigAlbumRow(
                         .width(cellWidth)
                         .height(176.dp),
                     cornerRadius = 22.dp,
+                    activeTransitionAlbumId = activeTransitionAlbumId,
                     onAlbumClick = onAlbumClick,
                     onAlbumBoundsChanged = onAlbumBoundsChanged
                 )
@@ -457,8 +491,9 @@ private fun BigAlbumRow(
 @Composable
 private fun BasicAlbumRow(
     albums: List<Album>,
+    activeTransitionAlbumId: String?,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val spacing = 14.dp
         val cellWidth = (maxWidth - spacing * 2) / 3
@@ -468,6 +503,7 @@ private fun BasicAlbumRow(
                 Column(
                     modifier = Modifier
                         .width(cellWidth)
+                        .graphicsLayer { alpha = if (album.id == activeTransitionAlbumId) 0f else 1f }
                         .onGloballyPositioned { coordinates ->
                             val bounds = coordinates.boundsInRoot()
                             albumBounds = bounds
@@ -522,9 +558,17 @@ fun AlbumDetailScreen(
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
-    onMediaClick: (MediaItem, Rect) -> Unit
+    activeSharedElementKey: Any? = null,
+    gridMode: AlbumDetailGridMode,
+    onGridModeChange: (AlbumDetailGridMode) -> Unit,
+    selectedMediaIds: Set<String> = emptySet(),
+    onMediaLongClick: (MediaItem) -> Unit = {},
+    onMediaSelectionToggle: (MediaItem) -> Unit = {},
+    onSelectionClear: () -> Unit = {},
+    onSelectAllVisible: () -> Unit = {},
+    onDeleteSelected: () -> Unit = {},
+    onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
-    var gridMode by rememberSaveable(album.id) { mutableStateOf(AlbumDetailGridMode.Compact) }
     var sortMode by rememberSaveable(album.id) { mutableStateOf(AlbumDetailSortMode.Newest) }
     val sortedMediaItems = when (sortMode) {
         AlbumDetailSortMode.Newest -> mediaItems
@@ -535,9 +579,24 @@ fun AlbumDetailScreen(
         AlbumDetailGridMode.Compact -> 4
         AlbumDetailGridMode.Comfortable -> 3
     }
+    var contentEntered by remember(album.id) { mutableStateOf(false) }
+    LaunchedEffect(album.id) {
+        contentEntered = false
+        delay(115)
+        contentEntered = true
+    }
+    val contentProgress by animateFloatAsState(
+        targetValue = if (contentEntered) 1f else 0f,
+        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        label = "album detail content reveal"
+    )
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
+            modifier = Modifier.graphicsLayer {
+                alpha = contentProgress
+                translationY = (1f - contentProgress) * 42f
+            },
             contentPadding = PaddingValues(
                 start = 10.dp,
                 top = 150.dp,
@@ -561,6 +620,11 @@ fun AlbumDetailScreen(
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = animatedVisibilityScope,
                     sharedBoundsTransform = sharedBoundsTransform,
+                    sharedElementPrefix = "album-${album.id}",
+                    activeSharedElementKey = activeSharedElementKey,
+                    selectedMediaIds = selectedMediaIds,
+                    onMediaLongClick = onMediaLongClick,
+                    onMediaSelectionToggle = onMediaSelectionToggle,
                     onMediaClick = onMediaClick
                 )
             }
@@ -579,7 +643,12 @@ fun AlbumDetailScreen(
                 sortMode = sortMode,
                 gridMode = gridMode,
                 onSortModeChange = { sortMode = it },
-                onGridModeChange = { gridMode = it },
+                onGridModeChange = onGridModeChange,
+                selectedCount = selectedMediaIds.size,
+                totalVisibleCount = sortedMediaItems.size,
+                onSelectionClear = onSelectionClear,
+                onSelectAllVisible = onSelectAllVisible,
+                onDeleteSelected = onDeleteSelected,
                 onBack = onBack,
                 modifier = Modifier.padding(start = 10.dp, top = 42.dp, end = 10.dp, bottom = 14.dp)
             )
@@ -595,6 +664,11 @@ private fun AlbumDetailHeader(
     gridMode: AlbumDetailGridMode,
     onSortModeChange: (AlbumDetailSortMode) -> Unit,
     onGridModeChange: (AlbumDetailGridMode) -> Unit,
+    selectedCount: Int,
+    totalVisibleCount: Int,
+    onSelectionClear: () -> Unit,
+    onSelectAllVisible: () -> Unit,
+    onDeleteSelected: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -707,16 +781,79 @@ private fun AlbumDetailHeader(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (selectedCount > 0) {
+            Spacer(Modifier.height(12.dp))
+            AlbumSelectionToolbar(
+                selectedCount = selectedCount,
+                totalVisibleCount = totalVisibleCount,
+                onClear = onSelectionClear,
+                onSelectAll = onSelectAllVisible,
+                onDelete = onDeleteSelected
+            )
+        }
     }
 }
 
+
+@Composable
+private fun AlbumSelectionToolbar(
+    selectedCount: Int,
+    totalVisibleCount: Int,
+    onClear: () -> Unit,
+    onSelectAll: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+        shape = RoundedCornerShape(28.dp),
+        shadowElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 8.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onClear) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Clear selection",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            Text(
+                text = "%1$,d selected".format(selectedCount),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.primary
+            )
+            TextButton(
+                enabled = selectedCount < totalVisibleCount,
+                onClick = onSelectAll
+            ) {
+                Text("Select all")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = "Delete selected",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
 private fun LazyListScope.albumDetailRows(
     mediaItems: List<MediaItem>,
     columns: Int,
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
-    onMediaClick: (MediaItem, Rect) -> Unit
+    sharedElementPrefix: String,
+    activeSharedElementKey: Any? = null,
+    selectedMediaIds: Set<String>,
+    onMediaLongClick: (MediaItem) -> Unit,
+    onMediaSelectionToggle: (MediaItem) -> Unit,
+    onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
     val spacing = if (columns == 3) 5.dp else 3.dp
     items(
@@ -731,6 +868,11 @@ private fun LazyListScope.albumDetailRows(
             sharedTransitionScope = sharedTransitionScope,
             animatedVisibilityScope = animatedVisibilityScope,
             sharedBoundsTransform = sharedBoundsTransform,
+            sharedElementPrefix = sharedElementPrefix,
+            activeSharedElementKey = activeSharedElementKey,
+            selectedMediaIds = selectedMediaIds,
+            onMediaLongClick = onMediaLongClick,
+            onMediaSelectionToggle = onMediaSelectionToggle,
             onMediaClick = onMediaClick
         )
         Spacer(Modifier.height(spacing))
@@ -745,22 +887,37 @@ private fun AlbumDetailRow(
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
-    onMediaClick: (MediaItem, Rect) -> Unit
+    sharedElementPrefix: String,
+    activeSharedElementKey: Any? = null,
+    selectedMediaIds: Set<String>,
+    onMediaLongClick: (MediaItem) -> Unit,
+    onMediaSelectionToggle: (MediaItem) -> Unit,
+    onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val cellSize = (maxWidth - spacing * (columns - 1)) / columns
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
             mediaItems.forEach { mediaItem ->
+                val sharedElementKey = "$sharedElementPrefix-media-${mediaItem.id}"
                 var mediaBounds by remember(mediaItem.id) { mutableStateOf(Rect.Zero) }
                 MediaThumbnail(
                     mediaItem = mediaItem,
                     modifier = Modifier.size(cellSize),
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = animatedVisibilityScope,
-                    sharedElementKey = "media-${mediaItem.id}",
+                    sharedElementKey = sharedElementKey,
                     sharedBoundsTransform = sharedBoundsTransform,
+                    isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
+                    selected = selectedMediaIds.contains(mediaItem.id),
                     onBoundsChanged = { bounds -> mediaBounds = bounds },
-                    onClick = { onMediaClick(mediaItem, mediaBounds) }
+                    onLongClick = { onMediaLongClick(mediaItem) },
+                    onClick = {
+                        if (selectedMediaIds.isNotEmpty()) {
+                            onMediaSelectionToggle(mediaItem)
+                        } else {
+                            onMediaClick(mediaItem, mediaBounds, sharedElementKey, sharedElementPrefix)
+                        }
+                    }
                 )
             }
             repeat(columns - mediaItems.size) {
@@ -832,8 +989,9 @@ private fun AlbumImageCard(
     album: Album,
     modifier: Modifier,
     cornerRadius: androidx.compose.ui.unit.Dp,
+    activeTransitionAlbumId: String?,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     var albumBounds by remember(album.id) { mutableStateOf<Rect?>(null) }
 
     Box(
@@ -843,6 +1001,7 @@ private fun AlbumImageCard(
                 albumBounds = bounds
                 onAlbumBoundsChanged(album, bounds)
             }
+            .graphicsLayer { alpha = if (album.id == activeTransitionAlbumId) 0f else 1f }
             .clip(RoundedCornerShape(cornerRadius))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .bouncyClickable { onAlbumClick(album, albumBounds ?: Rect.Zero) }

@@ -9,7 +9,6 @@ import android.media.MediaPlayer
 import android.view.Surface
 import android.view.TextureView
 import android.view.ViewGroup
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
@@ -51,13 +50,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -85,11 +93,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryImage
 import com.example.nativegallery.ui.components.ImageLoadQuality
@@ -104,6 +116,8 @@ import kotlin.math.sqrt
 
 private val ViewerEnterEasing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
 private val ViewerExitEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
+private val ViewerPhotoBackground = Color(0xFF111111)
+private val ViewerPhotoStageBackground = Color.Black
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
@@ -117,10 +131,9 @@ fun PhotoViewerOverlay(
     albumNameForMedia: (MediaItem) -> String? = { null },
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
-    sharedBoundsTransform: BoundsTransform? = null
+    sharedBoundsTransform: BoundsTransform? = null,
+    sharedElementKeyPrefix: String? = null
 ) {
-    BackHandler(enabled = visible && mediaItem != null, onBack = onClose)
-
     if (!visible || mediaItem == null) {
         return
     }
@@ -135,13 +148,16 @@ fun PhotoViewerOverlay(
         pageCount = { viewerItems.size }
     )
     val scope = rememberCoroutineScope()
-    var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    var controlsVisible by remember { mutableStateOf(true) }
     var lastSettledPage by rememberSaveable { mutableIntStateOf(selectedIndex) }
     var deleteDirection by rememberSaveable { mutableIntStateOf(1) }
     var verticalDragOffset by remember { mutableStateOf(0f) }
+    var detailsDragOffset by remember { mutableStateOf(0f) }
     var isViewerDragging by remember { mutableStateOf(false) }
+    var detailsVisible by remember { mutableStateOf(false) }
     var favoriteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    val dismissThresholdPx = with(LocalDensity.current) { 132.dp.toPx() }
+    val dismissThresholdPx = with(LocalDensity.current) { 104.dp.toPx() }
+    val detailsThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
 
     LaunchedEffect(visible, selectedIndex, viewerItems.size) {
         if (visible && pagerState.currentPage != selectedIndex) {
@@ -159,11 +175,15 @@ fun PhotoViewerOverlay(
     }
 
     val currentItem = viewerItems.getOrNull(pagerState.currentPage) ?: mediaItem
+    var activeMediaPlaced by remember(currentItem.id) { mutableStateOf(false) }
     LaunchedEffect(currentItem.id, visible) {
         if (visible) {
+            activeMediaPlaced = false
             onCurrentMediaChanged(currentItem)
             controlsVisible = true
+            detailsVisible = false
             verticalDragOffset = 0f
+            detailsDragOffset = 0f
         }
     }
 
@@ -193,28 +213,50 @@ fun PhotoViewerOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(if (currentItem.isVideo) Color.Black else Color.White)
-            .pointerInput(currentItem.id, dismissThresholdPx) {
+            .background(
+                if (currentItem.isVideo) {
+                    Color.Black.copy(alpha = viewerBackdropAlpha(displayedVerticalDragOffset, dismissThresholdPx))
+                } else {
+                    ViewerPhotoBackground.copy(alpha = viewerBackdropAlpha(displayedVerticalDragOffset, dismissThresholdPx))
+                }
+            )
+            .pointerInput(currentItem.id, dismissThresholdPx, detailsThresholdPx) {
                 detectVerticalDragGestures(
                     onDragStart = { isViewerDragging = true },
                     onVerticalDrag = { change, dragAmount ->
                         val shouldPullViewer = dragAmount > 0f || verticalDragOffset > 0f
-                        if (shouldPullViewer) {
-                            verticalDragOffset = (verticalDragOffset + dragAmount)
-                                .coerceIn(0f, dismissThresholdPx * 2.4f)
-                            change.consume()
+                        val shouldRevealDetails = dragAmount < 0f || detailsDragOffset < 0f
+                        when {
+                            shouldPullViewer -> {
+                                detailsVisible = false
+                                verticalDragOffset = (verticalDragOffset + dragAmount)
+                                    .coerceIn(0f, dismissThresholdPx * 1.8f)
+                                change.consume()
+                            }
+                            shouldRevealDetails -> {
+                                detailsDragOffset = (detailsDragOffset + dragAmount)
+                                    .coerceIn(-detailsThresholdPx * 1.8f, 0f)
+                                change.consume()
+                            }
                         }
                     },
                     onDragEnd = {
                         isViewerDragging = false
-                        if (verticalDragOffset > dismissThresholdPx) {
+                        if (verticalDragOffset > dismissThresholdPx * 0.92f) {
                             onClose()
+                        } else {
+                            if (detailsDragOffset < -detailsThresholdPx) {
+                                detailsVisible = true
+                                controlsVisible = false
+                            }
+                            verticalDragOffset = 0f
                         }
-                        verticalDragOffset = 0f
+                        detailsDragOffset = 0f
                     },
                     onDragCancel = {
                         isViewerDragging = false
                         verticalDragOffset = 0f
+                        detailsDragOffset = 0f
                     }
                 )
             }
@@ -225,12 +267,13 @@ fun PhotoViewerOverlay(
                 .fillMaxSize()
                 .graphicsLayer {
                     val pullDown = displayedVerticalDragOffset.coerceAtLeast(0f)
-                    val pullScale = 1f - (pullDown / (dismissThresholdPx * 5f)).coerceIn(0f, 0.08f)
-                    translationY = pullDown
+                    val pullProgress = (pullDown / (dismissThresholdPx * 1.15f)).coerceIn(0f, 1f)
+                    val pullScale = 1f - pullProgress * 0.3f
+                    translationY = pullDown * 0.96f
                     scaleX = pullScale
                     scaleY = pullScale
                 },
-            beyondViewportPageCount = 1,
+            beyondViewportPageCount = 0,
             key = { page -> viewerItems[page].id }
         ) { page ->
             val pageItem = viewerItems[page]
@@ -241,13 +284,29 @@ fun PhotoViewerOverlay(
                 sharedTransitionScope = sharedTransitionScope,
                 animatedVisibilityScope = animatedVisibilityScope,
                 sharedBoundsTransform = sharedBoundsTransform,
-                onToggleControls = { controlsVisible = !controlsVisible }
+                sharedElementKeyPrefix = sharedElementKeyPrefix,
+                isSharedTransitionReady = activeMediaPlaced,
+                onActiveMediaPlaced = {
+                    if (page == pagerState.currentPage) {
+                        activeMediaPlaced = true
+                    }
+                },
+                onToggleControls = {
+                    if (detailsVisible) {
+                        detailsVisible = false
+                        controlsVisible = true
+                    } else {
+                        controlsVisible = !controlsVisible
+                    }
+                }
             )
         }
 
         AnimatedVisibility(
             visible = controlsVisible,
-            modifier = Modifier.align(Alignment.TopStart),
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .zIndex(3f),
             enter = fadeIn(animationSpec = tween(90)),
             exit = fadeOut(animationSpec = tween(90))
         ) {
@@ -256,7 +315,9 @@ fun PhotoViewerOverlay(
 
         AnimatedVisibility(
             visible = controlsVisible,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(3f),
             enter = fadeIn(animationSpec = tween(100)) + slideInVertically(
                 initialOffsetY = { it / 3 },
                 animationSpec = tween(180, easing = ViewerEnterEasing)
@@ -293,12 +354,41 @@ fun PhotoViewerOverlay(
                         }
                     },
                     onShare = ::shareCurrentMedia,
+                    onInfo = {
+                        detailsVisible = true
+                        controlsVisible = false
+                    },
                     onDelete = { onDelete(currentItem, deleteDirection) }
                 )
             }
         }
+
+        AnimatedVisibility(
+            visible = detailsVisible,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(4f),
+            enter = fadeIn(animationSpec = tween(120)) + slideInVertically(
+                initialOffsetY = { it / 2 },
+                animationSpec = tween(220, easing = ViewerEnterEasing)
+            ),
+            exit = fadeOut(animationSpec = tween(100)) + slideOutVertically(
+                targetOffsetY = { it / 3 },
+                animationSpec = tween(160, easing = ViewerExitEasing)
+            )
+        ) {
+            MediaDetailsPanel(
+                mediaItem = currentItem,
+                albumName = albumNameForMedia(currentItem),
+                onDismiss = {
+                    detailsVisible = false
+                    controlsVisible = true
+                }
+            )
+        }
     }
 }
+
 @Composable
 private fun ViewerTopBar(onClose: () -> Unit) {
     Surface(
@@ -359,6 +449,7 @@ private fun ViewerActionBar(
     isFavorite: Boolean,
     onFavorite: () -> Unit,
     onShare: () -> Unit,
+    onInfo: () -> Unit,
     onDelete: () -> Unit
 ) {
     Surface(
@@ -371,7 +462,7 @@ private fun ViewerActionBar(
         shadowElevation = 16.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 26.dp),
+            modifier = Modifier.padding(horizontal = 18.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -385,6 +476,11 @@ private fun ViewerActionBar(
                 icon = Icons.Filled.Share,
                 contentDescription = "Share",
                 onClick = onShare
+            )
+            ViewerActionButton(
+                icon = Icons.Filled.Info,
+                contentDescription = "Info",
+                onClick = onInfo
             )
             ViewerActionButton(
                 icon = Icons.Filled.Delete,
@@ -415,63 +511,197 @@ private fun ViewerActionButton(
 private fun MediaDetailsPanel(
     mediaItem: MediaItem,
     albumName: String?,
+    onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val typeLabel = if (mediaItem.isVideo) "Video" else "Photo"
+    val mimeLabel = mediaItem.mimeType?.uppercase(Locale.US) ?: if (mediaItem.isVideo) "VIDEO" else "IMAGE"
+    val resolutionLabel = mediaItem.resolutionLabel() ?: "Unknown"
+    val sizeLabel = mediaItem.fileSizeBytes?.let(::formatFileSize) ?: "Unknown"
+    val durationLabel = mediaItem.durationLabel?.takeIf { it.isNotBlank() }
+    val accent = Color(0xFF004741)
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 12.dp),
-        color = Color.Black.copy(alpha = 0.86f),
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 26.dp, bottomEnd = 26.dp),
+        color = Color(0xFFFAFBF7).copy(alpha = 0.98f),
+        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp, bottomStart = 28.dp, bottomEnd = 28.dp),
         tonalElevation = 0.dp,
-        shadowElevation = 18.dp
+        shadowElevation = 24.dp
     ) {
-        Column(modifier = Modifier.padding(horizontal = 22.dp, vertical = 20.dp)) {
-            Text(
-                text = mediaItem.title,
-                color = Color.White,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2
+        Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .width(44.dp)
+                    .height(4.dp)
+                    .background(Color.Black.copy(alpha = 0.14f), RoundedCornerShape(100.dp))
             )
-            Spacer(Modifier.height(16.dp))
-            DetailLine(label = "Type", value = if (mediaItem.isVideo) "Video" else "Photo")
-            DetailLine(label = "Date", value = mediaItem.dateLabel)
-            if (!albumName.isNullOrBlank()) {
-                DetailLine(label = "Album", value = albumName)
+            Spacer(Modifier.height(14.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = mediaItem.title,
+                        color = Color(0xFF111614),
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontSize = 20.sp,
+                            lineHeight = 24.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    DetailTypeChip(
+                        icon = if (mediaItem.isVideo) Icons.Filled.Movie else Icons.Filled.Image,
+                        text = "$typeLabel - $mimeLabel",
+                        accent = accent
+                    )
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(42.dp)) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Close details",
+                        tint = Color(0xFF202624),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
-            mediaItem.durationLabel?.takeIf { it.isNotBlank() }?.let { duration ->
-                DetailLine(label = "Duration", value = duration)
+            Spacer(Modifier.height(18.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF0F3EE), RoundedCornerShape(24.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                PremiumDetailRow(
+                    icon = Icons.Filled.CalendarToday,
+                    label = "Date",
+                    value = mediaItem.dateLabel,
+                    accent = accent
+                )
+                if (!albumName.isNullOrBlank()) {
+                    PremiumDetailRow(
+                        icon = Icons.Filled.Folder,
+                        label = "Album",
+                        value = albumName,
+                        accent = accent
+                    )
+                }
+                if (mediaItem.isVideo && durationLabel != null) {
+                    PremiumDetailRow(
+                        icon = Icons.Filled.AccessTime,
+                        label = "Duration",
+                        value = durationLabel,
+                        accent = accent
+                    )
+                }
+                PremiumDetailRow(
+                    icon = Icons.Filled.AspectRatio,
+                    label = "Resolution",
+                    value = resolutionLabel,
+                    accent = accent
+                )
+                PremiumDetailRow(
+                    icon = Icons.Filled.Storage,
+                    label = "File size",
+                    value = sizeLabel,
+                    accent = accent
+                )
             }
         }
     }
 }
 
 @Composable
-private fun DetailLine(
+private fun DetailTypeChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    accent: Color
+) {
+    Row(
+        modifier = Modifier
+            .background(accent.copy(alpha = 0.1f), RoundedCornerShape(100.dp))
+            .padding(horizontal = 11.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = accent,
+            modifier = Modifier.size(17.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = text,
+            color = accent,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = 12.sp,
+                lineHeight = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun PremiumDetailRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    value: String
+    value: String,
+    accent: Color
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = label,
-            color = Color.White.copy(alpha = 0.62f),
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Text(
-            text = value,
-            color = Color.White,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1
-        )
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(Color.White.copy(alpha = 0.86f), RoundedCornerShape(14.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(21.dp)
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                color = Color(0xFF6B7470),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 12.sp,
+                    lineHeight = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = value,
+                color = Color(0xFF151B18),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.5.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 @Composable
@@ -482,8 +712,14 @@ private fun ZoomableViewerMedia(
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
+    sharedElementKeyPrefix: String? = null,
+    isSharedTransitionReady: Boolean,
+    onActiveMediaPlaced: () -> Unit,
     onToggleControls: () -> Unit
 ) {
+    val activeSharedElementKeyPrefix = sharedElementKeyPrefix.takeIf { isActive && isSharedTransitionReady }
+    val activeMediaAlpha = if (isActive && !isSharedTransitionReady) 0f else 1f
+
     if (mediaItem.isVideo && mediaItem.contentUri != null) {
         ViewerVideoPlayer(
             mediaItem = mediaItem,
@@ -492,6 +728,9 @@ private fun ZoomableViewerMedia(
             sharedTransitionScope = sharedTransitionScope,
             animatedVisibilityScope = animatedVisibilityScope,
             sharedBoundsTransform = sharedBoundsTransform,
+            sharedElementKeyPrefix = activeSharedElementKeyPrefix,
+            isSharedTransitionReady = isSharedTransitionReady,
+            onActiveMediaPlaced = onActiveMediaPlaced,
             onToggleControls = onToggleControls
         )
         return
@@ -512,19 +751,25 @@ private fun ZoomableViewerMedia(
     )
     val displayScale = if (gestureActive) targetScale else animatedScale
     val displayOffset = if (gestureActive) targetOffset else animatedOffset
-    val mediaModifier = Modifier.mediaSharedElement(
+    val mediaModifier = Modifier
+        .fillMaxSize()
+        .mediaSharedElement(
         mediaItem = mediaItem,
         sharedTransitionScope = sharedTransitionScope,
         animatedVisibilityScope = animatedVisibilityScope,
-        sharedBoundsTransform = sharedBoundsTransform
+        sharedBoundsTransform = sharedBoundsTransform,
+        sharedElementKeyPrefix = activeSharedElementKeyPrefix
     )
 
-    GalleryImage(
-        imageRes = mediaItem.imageRes,
-        imageUri = mediaItem.contentUri,
-        contentDescription = mediaItem.title,
+    Box(
         modifier = mediaModifier
-            .fillMaxSize()
+            .background(ViewerPhotoStageBackground)
+            .graphicsLayer { alpha = activeMediaAlpha }
+            .onGloballyPositioned {
+                if (isActive) {
+                    onActiveMediaPlaced()
+                }
+            }
             .pointerInput(mediaItem.id) {
                 detectTapGestures(
                     onTap = { onToggleControls() },
@@ -585,17 +830,26 @@ private fun ZoomableViewerMedia(
                     }
                 }
             }
-            .graphicsLayer(
-                scaleX = displayScale,
-                scaleY = displayScale,
-                translationX = displayOffset.x,
-                translationY = displayOffset.y
-            ),
-        cornerRadius = 0.dp,
-        contentScale = ContentScale.Fit,
-        thumbnailSize = 4096,
-        loadQuality = ImageLoadQuality.HighQuality
-    )
+    ) {
+        GalleryImage(
+            imageRes = mediaItem.imageRes,
+            imageUri = mediaItem.contentUri,
+            contentDescription = mediaItem.title,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(
+                    scaleX = displayScale,
+                    scaleY = displayScale,
+                    translationX = displayOffset.x,
+                    translationY = displayOffset.y
+                ),
+            cornerRadius = 0.dp,
+            contentScale = ContentScale.Fit,
+            thumbnailSize = 4096,
+            loadQuality = ImageLoadQuality.HighQuality,
+            backgroundColor = ViewerPhotoStageBackground
+        )
+    }
 }
 @Composable
 private fun ViewerVideoPlayer(
@@ -605,6 +859,9 @@ private fun ViewerVideoPlayer(
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
+    sharedElementKeyPrefix: String? = null,
+    isSharedTransitionReady: Boolean,
+    onActiveMediaPlaced: () -> Unit,
     onToggleControls: () -> Unit
 ) {
     val context = LocalContext.current
@@ -742,19 +999,26 @@ private fun ViewerVideoPlayer(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .onGloballyPositioned {
+                if (isActive) {
+                    onActiveMediaPlaced()
+                }
+            }
     ) {
         GalleryImage(
             imageRes = mediaItem.imageRes,
             imageUri = mediaItem.contentUri,
             contentDescription = mediaItem.title,
             modifier = Modifier
+                .fillMaxSize()
                 .mediaSharedElement(
                     mediaItem = mediaItem,
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = animatedVisibilityScope,
-                    sharedBoundsTransform = sharedBoundsTransform
+                    sharedBoundsTransform = sharedBoundsTransform,
+                    sharedElementKeyPrefix = sharedElementKeyPrefix
                 )
-                .fillMaxSize(),
+                .graphicsLayer { alpha = if (isPrepared) 0f else 1f },
             cornerRadius = 0.dp,
             contentScale = ContentScale.Fit,
             thumbnailSize = 1440,
@@ -825,7 +1089,9 @@ private fun ViewerVideoPlayer(
 
         AnimatedVisibility(
             visible = controlsVisible && isPrepared,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(3f),
             enter = fadeIn(animationSpec = tween(120)),
             exit = fadeOut(animationSpec = tween(140))
         ) {
@@ -946,6 +1212,38 @@ private fun VideoControlButton(
     }
 }
 
+
+private fun viewerBackdropAlpha(offset: Float, dismissThresholdPx: Float): Float {
+    if (dismissThresholdPx <= 0f) return 1f
+    val progress = (offset / (dismissThresholdPx * 1.15f)).coerceIn(0f, 1f)
+    return 1f - progress
+}
+
+private fun MediaItem.resolutionLabel(): String? {
+    val mediaWidth = width?.takeIf { it > 0 }
+    val mediaHeight = height?.takeIf { it > 0 }
+    return if (mediaWidth != null && mediaHeight != null) {
+        "%1$,d x %2$,d".format(Locale.US, mediaWidth, mediaHeight)
+    } else {
+        null
+    }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0L) return "Unknown"
+    val units = listOf("B", "KB", "MB", "GB")
+    var size = bytes.toDouble()
+    var unitIndex = 0
+    while (size >= 1024.0 && unitIndex < units.lastIndex) {
+        size /= 1024.0
+        unitIndex += 1
+    }
+    return if (unitIndex == 0 || size >= 10.0) {
+        String.format(Locale.US, "%.0f %s", size, units[unitIndex])
+    } else {
+        String.format(Locale.US, "%.1f %s", size, units[unitIndex])
+    }
+}
 private fun TextureView.applyVideoFitTransform(videoWidth: Int, videoHeight: Int) {
     if (width == 0 || height == 0 || videoWidth == 0 || videoHeight == 0) return
 
@@ -966,13 +1264,15 @@ private fun Modifier.mediaSharedElement(
     mediaItem: MediaItem,
     sharedTransitionScope: SharedTransitionScope?,
     animatedVisibilityScope: AnimatedVisibilityScope?,
-    sharedBoundsTransform: BoundsTransform?
+    sharedBoundsTransform: BoundsTransform?,
+    sharedElementKeyPrefix: String?
 ): Modifier {
     val transitionScope = sharedTransitionScope ?: return this
     val visibilityScope = animatedVisibilityScope ?: return this
+    val keyPrefix = sharedElementKeyPrefix ?: return this
 
     return with(transitionScope) {
-        val sharedContentState = rememberSharedContentState(key = "media-${mediaItem.id}")
+        val sharedContentState = rememberSharedContentState(key = "$keyPrefix-media-${mediaItem.id}")
         if (sharedBoundsTransform != null) {
             this@mediaSharedElement.sharedElement(
                 state = sharedContentState,

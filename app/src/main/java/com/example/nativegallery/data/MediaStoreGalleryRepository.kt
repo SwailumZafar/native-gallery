@@ -56,6 +56,9 @@ class MediaStoreGalleryRepository(
             MediaStore.MediaColumns.BUCKET_ID,
             MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
             MediaStore.MediaColumns.MIME_TYPE,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.WIDTH,
+            MediaStore.MediaColumns.HEIGHT,
             MediaStore.Video.Media.DURATION
         )
         val placeholders = mediaTypes.joinToString(separator = ",") { "?" }
@@ -72,6 +75,10 @@ class MediaStoreGalleryRepository(
             val dateModifiedColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
             val bucketIdColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
             val bucketNameColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+            val mimeTypeColumn = cursor.getColumnIndex(MediaStore.MediaColumns.MIME_TYPE)
+            val sizeColumn = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
+            val widthColumn = cursor.getColumnIndex(MediaStore.MediaColumns.WIDTH)
+            val heightColumn = cursor.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
             val durationColumn = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
 
             while (cursor.moveToNext()) {
@@ -87,7 +94,28 @@ class MediaStoreGalleryRepository(
                 val title = cursor.getString(titleColumn)?.takeIf { it.isNotBlank() } ?: bucketName
                 val dateTakenMillis = cursor.getLong(dateTakenColumn)
                 val dateModifiedSeconds = cursor.getLong(dateModifiedColumn)
-                val durationMillis = if (durationColumn >= 0) cursor.getLong(durationColumn) else 0L
+                val rawDurationMillis = if (durationColumn >= 0 && !cursor.isNull(durationColumn)) cursor.getLong(durationColumn) else 0L
+                val videoDurationMillis = rawDurationMillis.takeIf { mediaType == MediaType.Video && it > 0L }
+                val mimeType = if (mimeTypeColumn >= 0 && !cursor.isNull(mimeTypeColumn)) {
+                    cursor.getString(mimeTypeColumn)?.takeIf { it.isNotBlank() }
+                } else {
+                    null
+                }
+                val fileSizeBytes = if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
+                    cursor.getLong(sizeColumn).takeIf { it > 0L }
+                } else {
+                    null
+                }
+                val width = if (widthColumn >= 0 && !cursor.isNull(widthColumn)) {
+                    cursor.getInt(widthColumn).takeIf { it > 0 }
+                } else {
+                    null
+                }
+                val height = if (heightColumn >= 0 && !cursor.isNull(heightColumn)) {
+                    cursor.getInt(heightColumn).takeIf { it > 0 }
+                } else {
+                    null
+                }
                 val contentUri = contentUriFor(mediaType, id)
                 val mediaItem = MediaItem(
                     id = "${mediaType.name.lowercase(Locale.US)}-$id",
@@ -97,7 +125,12 @@ class MediaStoreGalleryRepository(
                     dateLabel = dateLabel(dateTakenMillis, dateModifiedSeconds),
                     contentUri = contentUri,
                     isVideo = mediaType == MediaType.Video,
-                    durationLabel = if (mediaType == MediaType.Video) formatDuration(durationMillis) else null
+                    durationLabel = videoDurationMillis?.let(::formatDuration),
+                    durationMillis = videoDurationMillis,
+                    mimeType = mimeType,
+                    fileSizeBytes = fileSizeBytes,
+                    width = width,
+                    height = height
                 )
                 rows += MediaStoreRow(mediaItem, bucketName)
             }

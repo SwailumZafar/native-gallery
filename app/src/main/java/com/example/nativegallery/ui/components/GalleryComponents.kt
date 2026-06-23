@@ -21,6 +21,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -34,6 +35,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -51,6 +54,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -114,8 +118,11 @@ fun HeaderActionButton(
 @Composable
 fun SearchPill(
     modifier: Modifier = Modifier,
-    placeholder: String = "Search"
+    placeholder: String = "Search",
+    query: String = "",
+    onQueryChange: ((String) -> Unit)? = null
 ) {
+    val editable = onQueryChange != null
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -135,15 +142,56 @@ fun SearchPill(
                 modifier = Modifier.size(28.dp)
             )
             Spacer(Modifier.width(16.dp))
-            Text(
-                text = placeholder,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 14.sp,
-                    lineHeight = 18.sp,
-                    fontWeight = FontWeight.SemiBold
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (editable) {
+                BasicTextField(
+                    value = query,
+                    onValueChange = { value -> onQueryChange?.invoke(value) },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 14.sp,
+                        lineHeight = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    modifier = Modifier.weight(1f),
+                    decorationBox = { innerTextField ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (query.isBlank()) {
+                                Text(
+                                    text = placeholder,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontSize = 14.sp,
+                                        lineHeight = 18.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            innerTextField()
+                        }
+                    }
+                )
+                if (query.isNotBlank()) {
+                    IconButton(onClick = { onQueryChange?.invoke("") }) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Clear search",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    text = placeholder,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 14.sp,
+                        lineHeight = 18.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -175,33 +223,58 @@ fun MediaThumbnail(
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedElementKey: Any? = null,
     sharedBoundsTransform: BoundsTransform? = null,
+    isSharedElementSourceHidden: Boolean = false,
+    selected: Boolean = false,
     onBoundsChanged: ((Rect) -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
     val measuredModifier = modifier.onGloballyPositioned { coordinates ->
         onBoundsChanged?.invoke(coordinates.boundsInRoot())
     }
-    val containerModifier = if (onClick != null) {
-        measuredModifier.bouncyClickable(onClick = onClick)
+    val containerModifier = if (onClick != null || onLongClick != null) {
+        measuredModifier.bouncyClickable(
+            onLongClick = onLongClick,
+            onClick = { onClick?.invoke() }
+        )
     } else {
         measuredModifier
     }
-    val imageModifier = Modifier.mediaSharedElement(
+    val imageModifier = Modifier
+        .fillMaxSize()
+        .mediaSharedElement(
         sharedTransitionScope = sharedTransitionScope,
         animatedVisibilityScope = animatedVisibilityScope,
         sharedElementKey = sharedElementKey,
-        sharedBoundsTransform = sharedBoundsTransform
+        sharedBoundsTransform = sharedBoundsTransform,
+        callerManagedVisibility = !isSharedElementSourceHidden
     )
 
-    Box(modifier = containerModifier) {
+    Box(modifier = containerModifier.graphicsLayer { alpha = if (isSharedElementSourceHidden) 0f else 1f }) {
         GalleryImage(
             imageRes = mediaItem.imageRes,
             imageUri = mediaItem.contentUri,
             contentDescription = mediaItem.title,
-            modifier = imageModifier.fillMaxSize(),
+            modifier = imageModifier,
             cornerRadius = cornerRadius,
             thumbnailSize = 384
         )
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.32f))
+            )
+            Icon(
+                imageVector = Icons.Filled.CheckCircle,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(7.dp)
+                    .size(24.dp)
+            )
+        }
         if (mediaItem.isVideo && mediaItem.contentUri != null) {
             VideoBadge(
                 duration = mediaItem.durationLabel.orEmpty(),
@@ -219,25 +292,41 @@ private fun Modifier.mediaSharedElement(
     sharedTransitionScope: SharedTransitionScope?,
     animatedVisibilityScope: AnimatedVisibilityScope?,
     sharedElementKey: Any?,
-    sharedBoundsTransform: BoundsTransform?
+    sharedBoundsTransform: BoundsTransform?,
+    callerManagedVisibility: Boolean? = null
 ): Modifier {
     val transitionScope = sharedTransitionScope ?: return this
-    val visibilityScope = animatedVisibilityScope ?: return this
     val key = sharedElementKey ?: return this
 
     return with(transitionScope) {
         val sharedContentState = rememberSharedContentState(key = key)
-        if (sharedBoundsTransform != null) {
-            this@mediaSharedElement.sharedElement(
-                state = sharedContentState,
-                animatedVisibilityScope = visibilityScope,
-                boundsTransform = sharedBoundsTransform
-            )
+        if (callerManagedVisibility != null) {
+            if (sharedBoundsTransform != null) {
+                this@mediaSharedElement.sharedElementWithCallerManagedVisibility(
+                    sharedContentState = sharedContentState,
+                    visible = callerManagedVisibility,
+                    boundsTransform = sharedBoundsTransform
+                )
+            } else {
+                this@mediaSharedElement.sharedElementWithCallerManagedVisibility(
+                    sharedContentState = sharedContentState,
+                    visible = callerManagedVisibility
+                )
+            }
         } else {
-            this@mediaSharedElement.sharedElement(
-                state = sharedContentState,
-                animatedVisibilityScope = visibilityScope
-            )
+            val visibilityScope = animatedVisibilityScope ?: return@with this@mediaSharedElement
+            if (sharedBoundsTransform != null) {
+                this@mediaSharedElement.sharedElement(
+                    state = sharedContentState,
+                    animatedVisibilityScope = visibilityScope,
+                    boundsTransform = sharedBoundsTransform
+                )
+            } else {
+                this@mediaSharedElement.sharedElement(
+                    state = sharedContentState,
+                    animatedVisibilityScope = visibilityScope
+                )
+            }
         }
     }
 }
@@ -270,13 +359,14 @@ fun GalleryImage(
     cornerRadius: Dp = 16.dp,
     contentScale: ContentScale = ContentScale.Crop,
     thumbnailSize: Int = 512,
-    loadQuality: ImageLoadQuality = ImageLoadQuality.Thumbnail
+    loadQuality: ImageLoadQuality = ImageLoadQuality.Thumbnail,
+    backgroundColor: Color = MaterialTheme.colorScheme.surfaceVariant
 ) {
     val bitmap = rememberContentUriBitmap(imageUri, thumbnailSize, loadQuality)
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(cornerRadius))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(backgroundColor)
     ) {
         when {
             bitmap != null -> {

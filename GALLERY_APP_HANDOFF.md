@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -42,19 +42,15 @@ Build result: passed
 Install result: not installed in latest attempt because ADB reported no connected devices
 ```
 
-Fast rebuild and install helper:
+Preferred user-facing install command:
 
 ```powershell
-.\scripts\rebuild-install-debug.ps1
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
 ```
 
-Install-only helper:
+Available helper scripts remain in scripts, but user-facing handoffs should give the direct ADB command above.
 
-```powershell
-.\scripts\install-debug-apk.ps1
-```
-
-Latest install attempt after the 3:57 AM build did not complete because ADB reported no connected devices. Reconnect the phone and rerun the helper.
+Latest install attempt after the 3:57 AM build did not complete because ADB reported no connected devices. Reconnect the phone and run the direct ADB install command above.
 
 ## Current Implementation
 
@@ -588,7 +584,7 @@ Performance philosophy:
 Install/test the latest APK on the real phone:
 
 ```powershell
-.\scripts\rebuild-install-debug.ps1
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
 ```
 
 Verify:
@@ -647,14 +643,9 @@ Implemented in this pass:
 Install command to hand to the user after this build:
 
 ```powershell
-.\scripts\rebuild-install-debug.ps1
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
 ```
 
-Bypass form:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "F:\App\Gallery\scripts\rebuild-install-debug.ps1"
-```
 ## 2026-06-23 Reference UI / Navigation / Typography Pass
 
 Build verified after this pass:
@@ -713,11 +704,135 @@ Current known follow-up checks:
 Install command:
 
 ```powershell
-.\scripts\rebuild-install-debug.ps1
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
 ```
 
-Bypass form:
+
+## 2026-06-24 Shared Element / Viewer Debug Pass
+
+Build verified after this pass:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 2026-06-24 01:07:10 AM
+Size: 18,880,013 bytes
+Build result: passed (:app:assembleDebug)
+Diff check: passed, with only LF/CRLF warnings
+```
+
+User-reported issues during this pass:
+
+- Photo/video opened as a tiny miniature stuck off to the side with large white empty space.
+- Restoring a measurement gate alone did not fix the miniature/stuck media behavior.
+- Full-screen photos sometimes appeared cropped.
+- Videos played audio but the visual stayed stuck on the thumbnail/poster frame.
+- Swipe-down-to-dismiss felt almost unchanged and too subtle.
+- White screenshots blended into the white viewer background.
+
+Current fixes implemented:
+
+- Shared element animation was kept in place. It was not removed.
+- Grid media thumbnails now use `sharedElementWithCallerManagedVisibility(...)` through `GalleryComponents.mediaSharedElement(...)`.
+- The grid source thumbnail is still kept in composition for pull-to-dismiss reveal, but it is marked not visible to the shared-transition engine while the viewer is open.
+- This avoids Compose treating the alpha-hidden thumbnail as the active transition endpoint and settling the full-screen target at thumbnail bounds.
+- Viewer photo target uses `Modifier.fillMaxSize().mediaSharedElement(...)` so the destination is measured as a full-screen target before it joins the shared element transition.
+- Viewer video poster/shared layer also uses `Modifier.fillMaxSize().mediaSharedElement(...)`.
+- Full-screen photos now use `ContentScale.Fit` instead of `ContentScale.Crop` so screenshots/photos are not cropped in the viewer.
+- Video poster/thumbnail now fades out after `isPrepared == true`, allowing the real `TextureView` video surface to be seen instead of the poster staying on top.
+- Video `TextureView` remains full-size and visible while playback is prepared.
+- Viewer photo background changed from pure white to sandy off-white `#F2E8D8` so white screenshots are visibly separated from the background.
+- Swipe-down dismiss is stronger:
+  - dismiss threshold reduced from `132.dp` to `104.dp`
+  - drag clamp reduced from `2.4x` to `1.8x`
+  - release threshold reduced to `0.92x` of threshold
+  - pull progress now reaches full effect at `1.15x` threshold
+  - max scale-down increased from `0.8` to `0.7`
+  - background alpha fades faster using the same `1.15x` threshold
+
+Important files changed in this pass:
+
+```text
+app/src/main/java/com/example/nativegallery/ui/PhotoViewerOverlay.kt
+app/src/main/java/com/example/nativegallery/ui/components/GalleryComponents.kt
+```
+
+Key implementation locations:
+
+- `PhotoViewerOverlay.kt`
+  - `ViewerPhotoBackground = Color(0xFFF2E8D8)`
+  - `dismissThresholdPx = 104.dp`
+  - pull-down scale uses `1f - pullProgress * 0.3f`
+  - photo viewer image uses `ContentScale.Fit`
+  - video poster uses `ContentScale.Fit`
+  - video poster alpha becomes `0f` once `isPrepared` is true
+  - `TextureView` remains full-size and handles actual playback
+- `GalleryComponents.kt`
+  - `MediaThumbnail` keeps source alpha hiding for visual ghost prevention
+  - shared source visibility is now caller-managed through `sharedElementWithCallerManagedVisibility(...)`
+
+Build command used successfully:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "F:\App\Gallery\scripts\rebuild-install-debug.ps1"
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; $env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"; & 'C:\Users\Amazon\.gradle\wrapper\dists\gradle-9.0.0-bin\d6wjpkvcgsg3oed0qlfss3wgl\gradle-9.0.0\bin\gradle.bat' --no-daemon :app:assembleDebug --stacktrace
 ```
+
+Install command:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
+```
+
+Recommended next real-device checks:
+
+- Confirm photo open no longer gets stuck as a thumbnail/miniature.
+- Confirm photo viewer shows full image with `fitCenter` behavior and no unwanted crop.
+- Confirm shared-element open/close animation still runs from/to the grid tile.
+- Confirm video shows moving picture, not just audio with a stuck thumbnail.
+- Confirm video controls and scrubber still work after the poster fades out.
+- Confirm swipe-down dismiss is visibly stronger and easier to feel.
+- Confirm sandy viewer background makes white screenshots stand apart.
+- Confirm pull-to-dismiss still reveals the grid underneath cleanly.
+
+Known caution:
+
+- These fixes are build-verified but still need final real-phone visual verification. The most important remaining device check is the video rendering path, because `TextureView` behavior can vary by device/OEM compositor.
+## 2026-06-24 Viewer Chrome / Android Back Fix Pass
+
+Build verified after this pass:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 2026-06-24 02:39:41 AM
+Size: 18,880,013 bytes
+Build result: passed (:app:assembleDebug)
+Diff check: passed, with only LF/CRLF warnings
+```
+
+User-reported issues during this pass:
+
+- Some opened photos did not show the viewer back button/action controls/delete bar.
+- Viewer controls should always exist on open, then hide on one tap and show again on the next tap.
+- Android system back gestures closed photos/albums without the same smooth animation as the in-app back button.
+
+Current fixes implemented:
+
+- Viewer controls now reset to visible every time a photo/video opens instead of remembering a previously hidden chrome state.
+- Viewer top back button, bottom action/delete bar, media details sheet, and video controls now have explicit z-order so shared media/video layers cannot cover them.
+- The viewer no longer owns a separate internal back handler; `GalleryApp` owns viewer back handling first, before screen-level back handlers.
+- Android system back and the in-app viewer back button now call the same `closeViewer()` function.
+- `closeViewer()` refreshes the current shared-element key before closing, so the close animation can return to the current media tile after swiping between items.
+- Album detail Android back and the in-app album back button now both call `closeAlbumDetail()`.
+- `closeAlbumDetail()` schedules the album closing transition before returning to the main Albums screen, so gesture back uses the same close animation path.
+
+Install command:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
+```
+
+Recommended real-device checks:
+
+- Open several photos and confirm the back button plus bottom favorite/share/info/delete bar appear immediately.
+- Tap once on the photo/video to hide controls, then tap again to bring them back.
+- Swipe between photos, then use Android back gesture and confirm the close animation returns toward the current tile.
+- Open an album, then use Android back gesture and confirm the album close animation matches the in-app back button.

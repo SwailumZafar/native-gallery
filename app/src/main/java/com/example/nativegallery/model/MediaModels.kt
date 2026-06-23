@@ -1,4 +1,4 @@
-﻿package com.example.nativegallery.model
+package com.example.nativegallery.model
 
 import android.net.Uri
 
@@ -11,7 +11,12 @@ data class MediaItem(
     val imageRes: Int? = null,
     val contentUri: Uri? = null,
     val isVideo: Boolean = false,
-    val durationLabel: String? = null
+    val durationLabel: String? = null,
+    val durationMillis: Long? = null,
+    val mimeType: String? = null,
+    val fileSizeBytes: Long? = null,
+    val width: Int? = null,
+    val height: Int? = null
 )
 
 data class RecentlyDeletedMedia(

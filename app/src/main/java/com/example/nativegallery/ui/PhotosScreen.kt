@@ -6,9 +6,6 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -24,13 +21,18 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -41,12 +43,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -56,10 +60,19 @@ fun PhotosScreen(
     contentPadding: PaddingValues,
     mediaAccessNotice: (@Composable () -> Unit)? = null,
     isLoading: Boolean = false,
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
+    selectedMediaIds: Set<String> = emptySet(),
+    onMediaLongClick: (MediaItem) -> Unit = {},
+    onMediaSelectionToggle: (MediaItem) -> Unit = {},
+    onSelectionClear: () -> Unit = {},
+    onSelectAllVisible: () -> Unit = {},
+    onDeleteSelected: () -> Unit = {},
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
-    onMediaClick: (MediaItem, Rect) -> Unit = { _, _ -> }
+    activeSharedElementKey: Any? = null,
+    onMediaClick: (MediaItem, Rect, String, String) -> Unit = { _, _, _, _ -> }
 ) {
     val sections = mediaItems
         .groupBy { it.dateLabel }
@@ -75,11 +88,7 @@ fun PhotosScreen(
             }
         }
     }
-    val headerCollapse by animateFloatAsState(
-        targetValue = rawHeaderCollapse,
-        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
-        label = "pictures header collapse"
-    )
+    val headerCollapse = rawHeaderCollapse
 
     LazyColumn(
         state = listState,
@@ -93,21 +102,36 @@ fun PhotosScreen(
         item(key = "pictures-header", contentType = "pictures-header") {
             PicturesHeader(
                 mediaAccessNotice = mediaAccessNotice,
-                collapseProgress = headerCollapse
+                collapseProgress = headerCollapse,
+                searchQuery = searchQuery,
+                onSearchQueryChange = onSearchQueryChange,
+                selectedCount = selectedMediaIds.size,
+                totalVisibleCount = mediaItems.size,
+                onSelectionClear = onSelectionClear,
+                onSelectAllVisible = onSelectAllVisible,
+                onDeleteSelected = onDeleteSelected
             )
         }
 
         if (isLoading) {
             loadingPhotoSections()
+        } else if (mediaItems.isEmpty()) {
+            item(key = "photos-empty", contentType = "photos-empty") {
+                PhotoEmptyState(hasSearchQuery = searchQuery.isNotBlank())
+            }
         } else {
             sections.forEach { section ->
                 photoSection(
                     title = section.key,
                     mediaItems = section.value,
                     columns = 4,
+                    selectedMediaIds = selectedMediaIds,
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = animatedVisibilityScope,
                     sharedBoundsTransform = sharedBoundsTransform,
+                    activeSharedElementKey = activeSharedElementKey,
+                    onMediaLongClick = onMediaLongClick,
+                    onMediaSelectionToggle = onMediaSelectionToggle,
                     onMediaClick = onMediaClick
                 )
             }
@@ -118,15 +142,21 @@ fun PhotosScreen(
 @Composable
 private fun PicturesHeader(
     mediaAccessNotice: (@Composable () -> Unit)?,
-    collapseProgress: Float
+    collapseProgress: Float,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    selectedCount: Int,
+    totalVisibleCount: Int,
+    onSelectionClear: () -> Unit,
+    onSelectAllVisible: () -> Unit,
+    onDeleteSelected: () -> Unit
 ) {
     val progress = collapseProgress.coerceIn(0f, 1f)
-    val topPadding = interpolate(88f, 34f, progress).dp
-    val titleSize = interpolate(40f, 28f, progress)
-    val titleLineHeight = interpolate(46f, 34f, progress)
-    val titleAlpha = interpolate(1f, 0.72f, progress)
-    val titleSpacing = interpolate(56f, 20f, progress).dp
-    val bottomSpacing = interpolate(40f, 18f, progress).dp
+    val topPadding = interpolate(96f, 34f, progress).dp
+    val titleScale = interpolate(1.08f, 0.72f, progress)
+    val titleAlpha = interpolate(1f, 0.84f, progress)
+    val titleSpacing = interpolate(44f, 14f, progress).dp
+    val bottomSpacing = interpolate(34f, 18f, progress).dp
 
     Column(
         modifier = Modifier
@@ -138,12 +168,13 @@ private fun PicturesHeader(
             text = "Pictures",
             modifier = Modifier.graphicsLayer {
                 alpha = titleAlpha
-                scaleX = interpolate(1f, 0.97f, progress)
-                scaleY = interpolate(1f, 0.97f, progress)
+                transformOrigin = TransformOrigin(0.5f, 0f)
+                scaleX = titleScale
+                scaleY = titleScale
             },
             style = MaterialTheme.typography.headlineLarge.copy(
-                fontSize = titleSize.sp,
-                lineHeight = titleLineHeight.sp,
+                fontSize = 46.sp,
+                lineHeight = 52.sp,
                 fontWeight = FontWeight.SemiBold
             ),
             color = MaterialTheme.colorScheme.onBackground
@@ -170,6 +201,22 @@ private fun PicturesHeader(
                 )
             }
         }
+        Spacer(Modifier.height(14.dp))
+        SearchPill(
+            placeholder = "Search photos and videos",
+            query = searchQuery,
+            onQueryChange = onSearchQueryChange
+        )
+        if (selectedCount > 0) {
+            Spacer(Modifier.height(12.dp))
+            SelectionToolbar(
+                selectedCount = selectedCount,
+                totalVisibleCount = totalVisibleCount,
+                onClear = onSelectionClear,
+                onSelectAll = onSelectAllVisible,
+                onDelete = onDeleteSelected
+            )
+        }
         if (mediaAccessNotice != null) {
             Spacer(Modifier.height(18.dp))
             mediaAccessNotice()
@@ -195,14 +242,76 @@ private fun SearchCircle() {
     }
 }
 
+@Composable
+private fun SelectionToolbar(
+    selectedCount: Int,
+    totalVisibleCount: Int,
+    onClear: () -> Unit,
+    onSelectAll: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+        shape = RoundedCornerShape(28.dp),
+        shadowElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 8.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onClear) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Clear selection",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            Text(
+                text = "%1$,d selected".format(selectedCount),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.primary
+            )
+            TextButton(
+                enabled = selectedCount < totalVisibleCount,
+                onClick = onSelectAll
+            ) {
+                Text("Select all")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = "Delete selected",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoEmptyState(hasSearchQuery: Boolean) {
+    Text(
+        text = if (hasSearchQuery) "No matching photos or videos." else "No photos yet.",
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 22.dp),
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
 private fun LazyListScope.photoSection(
     title: String,
     mediaItems: List<MediaItem>,
     columns: Int,
+    selectedMediaIds: Set<String>,
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
-    onMediaClick: (MediaItem, Rect) -> Unit
+    activeSharedElementKey: Any? = null,
+    onMediaLongClick: (MediaItem) -> Unit,
+    onMediaSelectionToggle: (MediaItem) -> Unit,
+    onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
     if (mediaItems.isEmpty()) {
         return
@@ -230,9 +339,13 @@ private fun LazyListScope.photoSection(
             mediaItems = rowItems,
             columns = columns,
             spacing = 1.dp,
+            selectedMediaIds = selectedMediaIds,
             sharedTransitionScope = sharedTransitionScope,
             animatedVisibilityScope = animatedVisibilityScope,
             sharedBoundsTransform = sharedBoundsTransform,
+            activeSharedElementKey = activeSharedElementKey,
+            onMediaLongClick = onMediaLongClick,
+            onMediaSelectionToggle = onMediaSelectionToggle,
             onMediaClick = onMediaClick
         )
         Spacer(Modifier.height(1.dp))
@@ -274,10 +387,14 @@ private fun PhotoGridRow(
     mediaItems: List<MediaItem>,
     columns: Int,
     spacing: androidx.compose.ui.unit.Dp,
+    selectedMediaIds: Set<String>,
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
-    onMediaClick: (MediaItem, Rect) -> Unit
+    activeSharedElementKey: Any? = null,
+    onMediaLongClick: (MediaItem) -> Unit,
+    onMediaSelectionToggle: (MediaItem) -> Unit,
+    onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
     BoxWithConstraints(
         modifier = Modifier
@@ -287,17 +404,29 @@ private fun PhotoGridRow(
         val cellSize = (maxWidth - spacing * (columns - 1)) / columns
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
             mediaItems.forEach { mediaItem ->
+                val sharedElementPrefix = "photos"
+                val sharedElementKey = "$sharedElementPrefix-media-${mediaItem.id}"
                 var mediaBounds by remember(mediaItem.id) { mutableStateOf(Rect.Zero) }
+                val selectionMode = selectedMediaIds.isNotEmpty()
                 MediaThumbnail(
                     mediaItem = mediaItem,
                     modifier = Modifier.size(cellSize),
                     cornerRadius = 0.dp,
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = animatedVisibilityScope,
-                    sharedElementKey = "media-${mediaItem.id}",
+                    sharedElementKey = sharedElementKey,
                     sharedBoundsTransform = sharedBoundsTransform,
+                    isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
+                    selected = selectedMediaIds.contains(mediaItem.id),
                     onBoundsChanged = { bounds -> mediaBounds = bounds },
-                    onClick = { onMediaClick(mediaItem, mediaBounds) }
+                    onLongClick = { onMediaLongClick(mediaItem) },
+                    onClick = {
+                        if (selectionMode) {
+                            onMediaSelectionToggle(mediaItem)
+                        } else {
+                            onMediaClick(mediaItem, mediaBounds, sharedElementKey, sharedElementPrefix)
+                        }
+                    }
                 )
             }
             repeat(columns - mediaItems.size) {

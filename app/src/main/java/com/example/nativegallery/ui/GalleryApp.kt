@@ -156,15 +156,20 @@ fun GalleryApp() {
     val recentlyDeletedMedia = remember { mutableStateMapOf<String, RecentlyDeletedMedia>() }
     val albumTileBounds = remember { mutableStateMapOf<String, Rect>() }
     val mediaTileBounds = remember { mutableStateMapOf<String, Rect>() }
+    val albumDetailGridModes = remember { mutableStateMapOf<String, AlbumDetailGridMode>() }
     var selectedTab by rememberSaveable { mutableStateOf(GalleryTab.Photos) }
     var destination by rememberSaveable { mutableStateOf(GalleryDestination.Main) }
     var selectedAlbumId by rememberSaveable { mutableStateOf<String?>(null) }
     var albumLayoutMode by rememberSaveable { mutableStateOf(AlbumLayoutMode.BigTiles) }
+    var gallerySearchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var mediaAccess by remember { mutableStateOf(MediaPermissions.currentAccess(context)) }
     var mediaStoreSnapshot by remember { mutableStateOf<GallerySnapshot?>(null) }
     var viewerMediaItem by remember { mutableStateOf<MediaItem?>(null) }
     var viewerMediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var viewerVisible by remember { mutableStateOf(false) }
+    var viewerSharedElementKey by remember { mutableStateOf<Any?>(null) }
+    var viewerSharedElementKeyPrefix by remember { mutableStateOf<String?>(null) }
     var albumTransition by remember { mutableStateOf<AlbumTransitionSpec?>(null) }
     var albumTransitionKey by remember { mutableIntStateOf(0) }
     val mainPagerState = rememberPagerState(
@@ -191,10 +196,12 @@ fun GalleryApp() {
 
     LaunchedEffect(viewerVisible) {
         if (!viewerVisible && viewerMediaItem != null) {
-            delay(320)
+            delay(340)
             if (!viewerVisible) {
                 viewerMediaItem = null
                 viewerMediaItems = emptyList()
+                viewerSharedElementKey = null
+                viewerSharedElementKeyPrefix = null
             }
         }
     }
@@ -206,7 +213,10 @@ fun GalleryApp() {
         mediaAccess.hasAccess && !mediaStoreSnapshot?.mediaItems.isNullOrEmpty() -> mediaStoreSnapshot ?: fakeSnapshot
         else -> fakeSnapshot
     }
-    val hideableAlbums = activeSnapshot.albums.filterNot { it.isAllPhotos }
+    val hideableAlbums = hiddenManageableAlbums(
+        albums = activeSnapshot.albums,
+        mediaItems = activeSnapshot.mediaItems.filterNot { recentlyDeletedMedia.containsKey(it.id) }
+    )
 
     LaunchedEffect(hideableAlbums.map { it.id }) {
         hideableAlbums.forEach { album ->
@@ -221,47 +231,66 @@ fun GalleryApp() {
     val albumNameById = activeSnapshot.albums.associate { it.id to it.name }
     val visibleMedia = visibleMedia(activeSnapshot.mediaItems, hiddenAlbumIds)
         .filterNot { recentlyDeletedMedia.containsKey(it.id) }
-    val visibleAlbums = visibleAlbums(activeSnapshot.albums, visibleMedia, hiddenAlbumIds)
+    val visibleAlbums = visibleAlbums(
+        albums = activeSnapshot.albums,
+        allMedia = activeSnapshot.mediaItems,
+        visibleMedia = visibleMedia,
+        hiddenAlbumIds = hiddenAlbumIds
+    )
+    val searchedVisibleMedia = searchMedia(visibleMedia, albumNameById, gallerySearchQuery)
+    val searchedVisibleAlbums = searchAlbums(visibleAlbums, visibleMedia, gallerySearchQuery)
     val selectedAlbum = visibleAlbums.firstOrNull { it.id == selectedAlbumId }
     val selectedAlbumMedia = selectedAlbum?.let { mediaForAlbum(it, visibleMedia) }.orEmpty()
+    val selectedMediaItems = activeSnapshot.mediaItems.filter { mediaItem ->
+        selectedMediaIds.contains(mediaItem.id) && !recentlyDeletedMedia.containsKey(mediaItem.id)
+    }
 
+
+    LaunchedEffect(visibleMedia.map { it.id }) {
+        val visibleIds = visibleMedia.map { it.id }.toSet()
+        if (selectedMediaIds.any { it !in visibleIds }) {
+            selectedMediaIds = selectedMediaIds.intersect(visibleIds)
+        }
+    }
     fun openPhotos() {
+        selectedMediaIds = emptySet()
         selectedTab = GalleryTab.Photos
         destination = GalleryDestination.Main
     }
 
     fun openAlbums() {
+        selectedMediaIds = emptySet()
         selectedTab = GalleryTab.Albums
         destination = GalleryDestination.Main
     }
 
     fun openRecentlyDeleted() {
+        selectedMediaIds = emptySet()
         selectedTab = GalleryTab.Albums
         destination = GalleryDestination.RecentlyDeleted
     }
 
     fun startAlbumOpen(album: Album, bounds: Rect) {
+        val tileBounds = bounds.takeIf { it != Rect.Zero } ?: albumTileBounds[album.id]
         selectedAlbumId = album.id
         selectedTab = GalleryTab.Albums
-        if (bounds != Rect.Zero) {
-            albumTileBounds[album.id] = bounds
+        if (tileBounds != null && tileBounds != Rect.Zero) {
+            albumTileBounds[album.id] = tileBounds
             albumTransitionKey += 1
             albumTransition = AlbumTransitionSpec(
                 key = albumTransitionKey,
                 album = album,
-                tileBounds = bounds,
+                tileBounds = tileBounds,
                 mode = AlbumTransitionMode.Opening
             )
-        } else {
-            destination = GalleryDestination.AlbumDetail
         }
+        destination = GalleryDestination.AlbumDetail
     }
 
     fun closeAlbumDetail() {
         val closingAlbum = selectedAlbum
         val closingBounds = selectedAlbumId?.let { albumTileBounds[it] }
-        selectedTab = GalleryTab.Albums
-        destination = GalleryDestination.Main
+        selectedMediaIds = emptySet()
         if (closingAlbum != null && closingBounds != null && closingBounds != Rect.Zero) {
             albumTransitionKey += 1
             albumTransition = AlbumTransitionSpec(
@@ -271,6 +300,8 @@ fun GalleryApp() {
                 mode = AlbumTransitionMode.Closing
             )
         }
+        selectedTab = GalleryTab.Albums
+        destination = GalleryDestination.Main
     }
 
     LaunchedEffect(destination, selectedAlbumId, visibleAlbums.map { it.id }) {
@@ -300,9 +331,17 @@ fun GalleryApp() {
         }
     }
 
-    fun startViewerOpen(mediaItem: MediaItem, mediaItems: List<MediaItem>, bounds: Rect) {
+    fun startViewerOpen(
+        mediaItem: MediaItem,
+        mediaItems: List<MediaItem>,
+        bounds: Rect,
+        sharedElementKey: Any? = null,
+        sharedElementKeyPrefix: String? = null
+    ) {
         viewerMediaItems = mediaItems
         viewerMediaItem = mediaItem
+        viewerSharedElementKey = sharedElementKey
+        viewerSharedElementKeyPrefix = sharedElementKeyPrefix
         if (bounds != Rect.Zero) {
             mediaTileBounds[mediaItem.id] = bounds
         }
@@ -310,17 +349,18 @@ fun GalleryApp() {
     }
 
     fun closeViewer() {
+        val currentItem = viewerMediaItem
+        val keyPrefix = viewerSharedElementKeyPrefix
+        if (currentItem != null && keyPrefix != null) {
+            viewerSharedElementKey = "$keyPrefix-media-${currentItem.id}"
+        }
         viewerVisible = false
     }
 
-    fun completeMediaDelete(mediaItem: MediaItem, direction: Int) {
+    fun advanceViewerAfterRemoval(mediaItem: MediaItem, direction: Int) {
         val currentItems = if (viewerMediaItems.isNotEmpty()) viewerMediaItems else visibleMedia
         val currentIndex = currentItems.indexOfFirst { it.id == mediaItem.id }
         val remainingItems = currentItems.filterNot { it.id == mediaItem.id }
-        recentlyDeletedMedia[mediaItem.id] = RecentlyDeletedMedia(
-            mediaItem = mediaItem,
-            deletedAtMillis = System.currentTimeMillis()
-        )
         viewerMediaItems = remainingItems
         viewerMediaItem = nextMediaAfterDelete(
             remainingItems = remainingItems,
@@ -332,8 +372,54 @@ fun GalleryApp() {
         }
     }
 
+    fun completeMediaDelete(mediaItem: MediaItem, direction: Int) {
+        recentlyDeletedMedia[mediaItem.id] = RecentlyDeletedMedia(
+            mediaItem = mediaItem,
+            deletedAtMillis = System.currentTimeMillis()
+        )
+        selectedMediaIds = selectedMediaIds - mediaItem.id
+        advanceViewerAfterRemoval(mediaItem, direction)
+    }
+
+    fun permanentlyDeleteMedia(mediaItem: MediaItem, direction: Int) {
+        recentlyDeletedMedia.remove(mediaItem.id)
+        selectedMediaIds = selectedMediaIds - mediaItem.id
+        advanceViewerAfterRemoval(mediaItem, direction)
+    }
+
     fun requestMediaDelete(mediaItem: MediaItem, direction: Int) {
-        completeMediaDelete(mediaItem, direction)
+        if (destination == GalleryDestination.RecentlyDeleted && recentlyDeletedMedia.containsKey(mediaItem.id)) {
+            permanentlyDeleteMedia(mediaItem, direction)
+        } else {
+            completeMediaDelete(mediaItem, direction)
+        }
+    }
+
+    fun toggleMediaSelection(mediaItem: MediaItem) {
+        selectedMediaIds = if (selectedMediaIds.contains(mediaItem.id)) {
+            selectedMediaIds - mediaItem.id
+        } else {
+            selectedMediaIds + mediaItem.id
+        }
+    }
+
+    fun selectMedia(mediaItems: List<MediaItem>) {
+        selectedMediaIds = selectedMediaIds + mediaItems.map { it.id }
+    }
+
+    fun clearMediaSelection() {
+        selectedMediaIds = emptySet()
+    }
+
+    fun deleteSelectedMedia() {
+        val deletedAt = System.currentTimeMillis()
+        selectedMediaItems.forEachIndexed { index, mediaItem ->
+            recentlyDeletedMedia[mediaItem.id] = RecentlyDeletedMedia(
+                mediaItem = mediaItem,
+                deletedAtMillis = deletedAt + index
+            )
+        }
+        selectedMediaIds = emptySet()
     }
 
     fun restoreDeletedMedia(entry: RecentlyDeletedMedia) {
@@ -344,6 +430,25 @@ fun GalleryApp() {
         recentlyDeletedMedia.clear()
     }
 
+    fun deleteDeletedMedia(entry: RecentlyDeletedMedia) {
+        recentlyDeletedMedia.remove(entry.mediaItem.id)
+    }
+
+    fun deleteAllDeletedMedia() {
+        recentlyDeletedMedia.clear()
+        if (destination == GalleryDestination.RecentlyDeleted && viewerVisible) {
+            viewerVisible = false
+        }
+    }
+
+    BackHandler(
+        enabled = viewerVisible && viewerMediaItem != null,
+        onBack = ::closeViewer
+    )
+    BackHandler(
+        enabled = !viewerVisible && selectedMediaIds.isNotEmpty(),
+        onBack = ::clearMediaSelection
+    )
     BackHandler(
         enabled = !viewerVisible && destination == GalleryDestination.Main && selectedTab != GalleryTab.Photos,
         onBack = ::openPhotos
@@ -396,7 +501,7 @@ fun GalleryApp() {
             val sharedTransitionScope = this
 
             AnimatedVisibility(
-                visible = !viewerVisible,
+                visible = true,
                 enter = EnterTransition.None,
                 exit = ExitTransition.None,
                 label = "gallery content visibility"
@@ -411,6 +516,7 @@ fun GalleryApp() {
                             GalleryBottomBar(
                                 selectedTab = selectedTab,
                                 onTabSelected = { tab ->
+                                    selectedMediaIds = emptySet()
                                     selectedTab = tab
                                     destination = GalleryDestination.Main
                                 }
@@ -443,19 +549,34 @@ fun GalleryApp() {
                                     ) {
                                         when (tab) {
                                             GalleryTab.Photos -> PhotosScreen(
-                                                mediaItems = visibleMedia,
+                                                mediaItems = searchedVisibleMedia,
                                                 contentPadding = innerPadding,
                                                 mediaAccessNotice = mediaAccessNotice,
                                                 isLoading = isLoadingMedia,
+                                                searchQuery = gallerySearchQuery,
+                                                onSearchQueryChange = { gallerySearchQuery = it },
+                                                selectedMediaIds = selectedMediaIds,
+                                                onMediaLongClick = ::toggleMediaSelection,
+                                                onMediaSelectionToggle = ::toggleMediaSelection,
+                                                onSelectionClear = ::clearMediaSelection,
+                                                onSelectAllVisible = { selectMedia(searchedVisibleMedia) },
+                                                onDeleteSelected = ::deleteSelectedMedia,
                                                 sharedTransitionScope = sharedTransitionScope,
                                                 animatedVisibilityScope = galleryVisibilityScope,
                                                 sharedBoundsTransform = GalleryMediaBoundsTransform,
-                                                onMediaClick = { mediaItem, bounds ->
-                                                    startViewerOpen(mediaItem, visibleMedia, bounds)
+                                                activeSharedElementKey = viewerSharedElementKey,
+                                                onMediaClick = { mediaItem, bounds, sharedElementKey, sharedElementKeyPrefix ->
+                                                    startViewerOpen(
+                                                        mediaItem = mediaItem,
+                                                        mediaItems = searchedVisibleMedia,
+                                                        bounds = bounds,
+                                                        sharedElementKey = sharedElementKey,
+                                                        sharedElementKeyPrefix = sharedElementKeyPrefix
+                                                    )
                                                 }
                                             )
                                             GalleryTab.Albums -> AlbumsScreen(
-                                                albums = visibleAlbums,
+                                                albums = searchedVisibleAlbums,
                                                 layoutMode = albumLayoutMode,
                                                 onLayoutModeChange = { albumLayoutMode = it },
                                                 onOpenHiddenItems = { destination = GalleryDestination.HiddenItems },
@@ -467,8 +588,11 @@ fun GalleryApp() {
                                                     }
                                                 },
                                                 contentPadding = innerPadding,
+                                                activeTransitionAlbumId = albumTransition?.album?.id,
                                                 mediaAccessNotice = mediaAccessNotice,
-                                                isLoading = isLoadingMedia
+                                                isLoading = isLoadingMedia,
+                                                searchQuery = gallerySearchQuery,
+                                                onSearchQueryChange = { gallerySearchQuery = it }
                                             )
                                             GalleryTab.Menu -> GalleryMenuScreen(
                                                 contentPadding = innerPadding,
@@ -489,8 +613,23 @@ fun GalleryApp() {
                                         sharedTransitionScope = sharedTransitionScope,
                                         animatedVisibilityScope = galleryVisibilityScope,
                                         sharedBoundsTransform = GalleryMediaBoundsTransform,
-                                        onMediaClick = { mediaItem, bounds ->
-                                            startViewerOpen(mediaItem, selectedAlbumMedia, bounds)
+                                        activeSharedElementKey = viewerSharedElementKey,
+                                        gridMode = albumDetailGridModes[selectedAlbum.id] ?: AlbumDetailGridMode.Compact,
+                                        onGridModeChange = { gridMode -> albumDetailGridModes[selectedAlbum.id] = gridMode },
+                                        selectedMediaIds = selectedMediaIds,
+                                        onMediaLongClick = ::toggleMediaSelection,
+                                        onMediaSelectionToggle = ::toggleMediaSelection,
+                                        onSelectionClear = ::clearMediaSelection,
+                                        onSelectAllVisible = { selectMedia(selectedAlbumMedia) },
+                                        onDeleteSelected = ::deleteSelectedMedia,
+                                        onMediaClick = { mediaItem, bounds, sharedElementKey, sharedElementKeyPrefix ->
+                                            startViewerOpen(
+                                                mediaItem = mediaItem,
+                                                mediaItems = selectedAlbumMedia,
+                                                bounds = bounds,
+                                                sharedElementKey = sharedElementKey,
+                                                sharedElementKeyPrefix = sharedElementKeyPrefix
+                                            )
                                         }
                                     )
                                 }
@@ -517,6 +656,8 @@ fun GalleryApp() {
                                 },
                                 onRestore = ::restoreDeletedMedia,
                                 onRestoreAll = ::restoreAllDeletedMedia,
+                                onDeleteForever = ::deleteDeletedMedia,
+                                onDeleteAllForever = ::deleteAllDeletedMedia,
                                 contentPadding = PaddingValues()
                             )
                         }
@@ -529,9 +670,6 @@ fun GalleryApp() {
                     rootHeightPx = rootHeightPx,
                     onFinished = { finishedTransition ->
                         if (albumTransition?.key == finishedTransition.key) {
-                            if (finishedTransition.mode == AlbumTransitionMode.Opening) {
-                                destination = GalleryDestination.AlbumDetail
-                            }
                             albumTransition = null
                         }
                     }
@@ -550,11 +688,15 @@ fun GalleryApp() {
                     visible = true,
                     onClose = ::closeViewer,
                     onDelete = ::requestMediaDelete,
-                    onCurrentMediaChanged = { currentItem -> viewerMediaItem = currentItem },
+                    onCurrentMediaChanged = { currentItem ->
+                        viewerMediaItem = currentItem
+                        viewerSharedElementKey = viewerSharedElementKeyPrefix?.let { "$it-media-${currentItem.id}" }
+                    },
                     albumNameForMedia = { item -> albumNameById[item.albumId] },
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = this,
-                    sharedBoundsTransform = GalleryMediaBoundsTransform
+                    sharedBoundsTransform = GalleryMediaBoundsTransform,
+                    sharedElementKeyPrefix = viewerSharedElementKeyPrefix
                 )
             }
         }
@@ -726,11 +868,37 @@ private fun visibleMedia(
     return mediaItems.filterNot { hiddenAlbumIds.contains(it.albumId) }
 }
 
+private fun hiddenManageableAlbums(
+    albums: List<Album>,
+    mediaItems: List<MediaItem>
+): List<Album> {
+    val mediaByAlbum = mediaItems.groupBy { it.albumId }
+    return albums
+        .filterNot { it.isAllPhotos }
+        .map { album ->
+            val albumMedia = mediaByAlbum[album.id].orEmpty()
+            if (albumMedia.isEmpty()) {
+                album
+            } else {
+                val cover = albumMedia.first()
+                album.copy(
+                    itemCount = albumMedia.size,
+                    coverMediaIds = albumMedia.take(4).map { it.id },
+                    coverRes = cover.imageRes ?: album.coverRes,
+                    coverUri = cover.contentUri ?: album.coverUri
+                )
+            }
+        }
+}
+
 private fun visibleAlbums(
     albums: List<Album>,
+    allMedia: List<MediaItem>,
     visibleMedia: List<MediaItem>,
     hiddenAlbumIds: Set<String>
 ): List<Album> {
+    val allAlbumIds = allMedia.map { it.albumId }.toSet()
+    val mediaByAlbum = visibleMedia.groupBy { it.albumId }
     return albums.mapNotNull { album ->
         when {
             album.isAllPhotos -> {
@@ -743,9 +911,65 @@ private fun visibleAlbums(
                 )
             }
             hiddenAlbumIds.contains(album.id) -> null
+            allAlbumIds.contains(album.id) -> {
+                val albumMedia = mediaByAlbum[album.id].orEmpty()
+                if (albumMedia.isEmpty()) {
+                    null
+                } else {
+                    val cover = albumMedia.first()
+                    album.copy(
+                        itemCount = albumMedia.size,
+                        coverMediaIds = albumMedia.take(4).map { it.id },
+                        coverRes = cover.imageRes ?: album.coverRes,
+                        coverUri = cover.contentUri ?: album.coverUri
+                    )
+                }
+            }
             else -> album
         }
     }
+}
+
+private fun searchMedia(
+    mediaItems: List<MediaItem>,
+    albumNameById: Map<String, String>,
+    query: String
+): List<MediaItem> {
+    val normalizedQuery = query.trim().lowercase()
+    if (normalizedQuery.isBlank()) return mediaItems
+    return mediaItems.filter { mediaItem ->
+        mediaMatchesQuery(mediaItem, albumNameById[mediaItem.albumId], normalizedQuery)
+    }
+}
+
+private fun searchAlbums(
+    albums: List<Album>,
+    mediaItems: List<MediaItem>,
+    query: String
+): List<Album> {
+    val normalizedQuery = query.trim().lowercase()
+    if (normalizedQuery.isBlank()) return albums
+    val mediaByAlbum = mediaItems.groupBy { it.albumId }
+    return albums.filter { album ->
+        album.name.lowercase().contains(normalizedQuery) ||
+            if (album.isAllPhotos) {
+                mediaItems.any { mediaMatchesQuery(it, album.name, normalizedQuery) }
+            } else {
+                mediaByAlbum[album.id].orEmpty().any { mediaMatchesQuery(it, album.name, normalizedQuery) }
+            }
+    }
+}
+
+private fun mediaMatchesQuery(
+    mediaItem: MediaItem,
+    albumName: String?,
+    normalizedQuery: String
+): Boolean {
+    return mediaItem.title.lowercase().contains(normalizedQuery) ||
+        mediaItem.dateLabel.lowercase().contains(normalizedQuery) ||
+        mediaItem.type.name.lowercase().contains(normalizedQuery) ||
+        mediaItem.mimeType?.lowercase()?.contains(normalizedQuery) == true ||
+        albumName?.lowercase()?.contains(normalizedQuery) == true
 }
 
 private fun mediaForAlbum(
@@ -786,10 +1010,7 @@ private fun AlbumTouchOriginTransitionOverlay(
     LaunchedEffect(transition.key) {
         progress.animateTo(
             targetValue = if (transition.mode == AlbumTransitionMode.Closing) 0f else 1f,
-            animationSpec = spring(
-                dampingRatio = 0.82f,
-                stiffness = Spring.StiffnessMedium
-            )
+            animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
         )
         onFinished(transition)
     }
@@ -804,7 +1025,7 @@ private fun AlbumTouchOriginTransitionOverlay(
     val translationX = lerp(transition.tileBounds.left, 0f, easedProgress)
     val translationY = lerp(transition.tileBounds.top, 0f, easedProgress)
     val radius = lerp(24f, 0f, easedProgress)
-    val coverAlpha = (1f - ((easedProgress - 0.12f) / 0.46f)).coerceIn(0f, 1f)
+    val coverAlpha = (1f - ((easedProgress - 0.72f) / 0.22f)).coerceIn(0f, 1f)
     val labelAlpha = (1f - easedProgress * 1.35f).coerceIn(0f, 1f)
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -819,9 +1040,7 @@ private fun AlbumTouchOriginTransitionOverlay(
                     this.scaleY = scaleY
                     clip = true
                     shape = RoundedCornerShape(with(density) { radius.toDp() })
-                }
-                .background(MaterialTheme.colorScheme.background)
-        ) {
+                }        ) {
             ResourceImage(
                 imageRes = transition.album.coverRes,
                 imageUri = transition.album.coverUri,

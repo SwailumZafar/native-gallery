@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.RecentlyDeletedMedia
 import com.example.nativegallery.ui.components.MediaThumbnail
+import java.util.concurrent.TimeUnit
 
 @Composable
 fun RecentlyDeletedScreen(
@@ -37,6 +38,8 @@ fun RecentlyDeletedScreen(
     onOpenMedia: (RecentlyDeletedMedia) -> Unit,
     onRestore: (RecentlyDeletedMedia) -> Unit,
     onRestoreAll: () -> Unit,
+    onDeleteForever: (RecentlyDeletedMedia) -> Unit,
+    onDeleteAllForever: () -> Unit,
     contentPadding: PaddingValues
 ) {
     LazyColumn(
@@ -72,6 +75,19 @@ fun RecentlyDeletedScreen(
                         maxLines = 1
                     )
                 }
+            }
+            Spacer(Modifier.height(18.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    enabled = deletedItems.isNotEmpty(),
+                    onClick = onDeleteAllForever
+                ) {
+                    Text("Delete all")
+                }
                 TextButton(
                     enabled = deletedItems.isNotEmpty(),
                     onClick = onRestoreAll
@@ -79,9 +95,9 @@ fun RecentlyDeletedScreen(
                     Text("Restore all")
                 }
             }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(14.dp))
             Text(
-                text = "Deleted photos and videos stay here in the app so you can restore them.",
+                text = "Deleted photos and videos stay here inside this app until you restore them or remove them from the bin.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -105,7 +121,8 @@ fun RecentlyDeletedScreen(
                 RecentlyDeletedRow(
                     entry = entry,
                     onOpenMedia = { onOpenMedia(entry) },
-                    onRestore = { onRestore(entry) }
+                    onRestore = { onRestore(entry) },
+                    onDeleteForever = { onDeleteForever(entry) }
                 )
                 Spacer(Modifier.height(14.dp))
             }
@@ -117,7 +134,8 @@ fun RecentlyDeletedScreen(
 private fun RecentlyDeletedRow(
     entry: RecentlyDeletedMedia,
     onOpenMedia: () -> Unit,
-    onRestore: () -> Unit
+    onRestore: () -> Unit,
+    onDeleteForever: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -143,14 +161,30 @@ private fun RecentlyDeletedRow(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = entry.mediaItem.dateLabel,
+                text = "${entry.mediaItem.dateLabel} - ${deletedAgeLabel(entry.deletedAtMillis)}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
             )
         }
-        Button(onClick = onRestore) {
-            Text("Restore")
+        Column(horizontalAlignment = Alignment.End) {
+            Button(onClick = onRestore) {
+                Text("Restore")
+            }
+            TextButton(onClick = onDeleteForever) {
+                Text("Delete")
+            }
         }
+    }
+}
+
+private fun deletedAgeLabel(deletedAtMillis: Long): String {
+    val ageMillis = (System.currentTimeMillis() - deletedAtMillis).coerceAtLeast(0L)
+    val days = TimeUnit.MILLISECONDS.toDays(ageMillis)
+    val hours = TimeUnit.MILLISECONDS.toHours(ageMillis)
+    return when {
+        days > 0L -> "deleted ${days}d ago"
+        hours > 0L -> "deleted ${hours}h ago"
+        else -> "deleted just now"
     }
 }

@@ -2,7 +2,7 @@ package com.example.nativegallery.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val IcyBackground = Color(0xFFFFFFFF)
+val IcyBackground = Color(0xFFF0EDE4)
 val IcyBackgroundDark = Color(0xFF101820)
 val GalleryBlue = Color(0xFF004741)
 val GalleryBlueDark = Color(0xFF004741)
