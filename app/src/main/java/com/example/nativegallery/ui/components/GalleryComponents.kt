@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
 package com.example.nativegallery.ui.components
 
 import android.content.Context
@@ -7,6 +9,10 @@ import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.BoundsTransform
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
 import android.util.Size
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -81,6 +87,7 @@ fun ScreenHeader(
         Text(
             text = title,
             style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -106,7 +113,8 @@ fun HeaderActionButton(
 
 @Composable
 fun SearchPill(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    placeholder: String = "Search"
 ) {
     Surface(
         modifier = modifier
@@ -128,8 +136,12 @@ fun SearchPill(
             )
             Spacer(Modifier.width(16.dp))
             Text(
-                text = "Search",
-                style = MaterialTheme.typography.bodyLarge,
+                text = placeholder,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -153,11 +165,16 @@ fun SectionTitle(
     )
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun MediaThumbnail(
     mediaItem: MediaItem,
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 10.dp,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedElementKey: Any? = null,
+    sharedBoundsTransform: BoundsTransform? = null,
     onBoundsChanged: ((Rect) -> Unit)? = null,
     onClick: (() -> Unit)? = null
 ) {
@@ -169,13 +186,19 @@ fun MediaThumbnail(
     } else {
         measuredModifier
     }
+    val imageModifier = Modifier.mediaSharedElement(
+        sharedTransitionScope = sharedTransitionScope,
+        animatedVisibilityScope = animatedVisibilityScope,
+        sharedElementKey = sharedElementKey,
+        sharedBoundsTransform = sharedBoundsTransform
+    )
 
     Box(modifier = containerModifier) {
         GalleryImage(
             imageRes = mediaItem.imageRes,
             imageUri = mediaItem.contentUri,
             contentDescription = mediaItem.title,
-            modifier = Modifier.fillMaxSize(),
+            modifier = imageModifier.fillMaxSize(),
             cornerRadius = cornerRadius,
             thumbnailSize = 384
         )
@@ -185,6 +208,35 @@ fun MediaThumbnail(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(6.dp)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun Modifier.mediaSharedElement(
+    sharedTransitionScope: SharedTransitionScope?,
+    animatedVisibilityScope: AnimatedVisibilityScope?,
+    sharedElementKey: Any?,
+    sharedBoundsTransform: BoundsTransform?
+): Modifier {
+    val transitionScope = sharedTransitionScope ?: return this
+    val visibilityScope = animatedVisibilityScope ?: return this
+    val key = sharedElementKey ?: return this
+
+    return with(transitionScope) {
+        val sharedContentState = rememberSharedContentState(key = key)
+        if (sharedBoundsTransform != null) {
+            this@mediaSharedElement.sharedElement(
+                state = sharedContentState,
+                animatedVisibilityScope = visibilityScope,
+                boundsTransform = sharedBoundsTransform
+            )
+        } else {
+            this@mediaSharedElement.sharedElement(
+                state = sharedContentState,
+                animatedVisibilityScope = visibilityScope
             )
         }
     }
@@ -339,8 +391,11 @@ fun VideoBadge(
                 Text(
                     text = duration,
                     color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 10.sp,
+                        lineHeight = 12.sp,
+                        fontWeight = FontWeight.Normal
+                    )
                 )
             }
         }

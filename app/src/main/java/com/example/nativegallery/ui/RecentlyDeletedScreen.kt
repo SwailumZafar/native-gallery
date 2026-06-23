@@ -1,4 +1,6 @@
-﻿package com.example.nativegallery.ui
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
+package com.example.nativegallery.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column

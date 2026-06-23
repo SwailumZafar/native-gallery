@@ -1,6 +1,6 @@
 # Gallery App Progress So Far
 
-Last updated: 2026-06-22 19:14:35 +05:00
+Last updated: 2026-06-23 05:45:00 +05:00
 
 This file summarizes everything completed so far for the native Android Gallery app.
 
@@ -22,7 +22,7 @@ Current branch/status at time of this note:
 
 ```text
 main...origin/main
-Working tree has uncommitted app polish changes.
+Latest reference UI/nav/typography polish is documented and ready to commit/push.
 ```
 
 Latest debug APK:
@@ -349,4 +349,23 @@ Bypass form:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "F:\App\Gallery\scripts\rebuild-install-debug.ps1"
+```
+## 2026-06-23 Final Reference Polish
+
+Completed and build-verified:
+
+- Exact reference-style bottom navigation pill with Photos, Albums, and Menu.
+- Full-width active teal nav indicator that fills the selected tab bounds.
+- Approved nav icon sizes, label sizes, active/inactive weights, tap scale, and spring behavior.
+- Typography normalized across Photos, Albums, Menu, bottom nav, and video duration badges.
+- Albums uses `Search albums`, exact album card text sizing, exact Recently Deleted pill text sizing, and exact View link sizing.
+- Menu uses the supplied heading, subtitle, menu item, description, and footer typography.
+- Compose shared-element media open/close transitions are in place for photos/videos.
+- Recently Deleted remains accessible as a pill-style album-list action and from Menu.
+
+Verification:
+
+```text
+:app:assembleDebug passed
+git diff --check passed, with only LF/CRLF warnings
 ```

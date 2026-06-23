@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
 package com.example.nativegallery.ui
 
 import android.content.Intent
@@ -9,6 +11,10 @@ import android.view.TextureView
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.BoundsTransform
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -97,9 +103,9 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 private val ViewerEnterEasing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
-private val ViewerExitEasing = CubicBezierEasing(0.32f, 0f, 0.67f, 0f)
+private val ViewerExitEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 fun PhotoViewerOverlay(
     mediaItems: List<MediaItem>,
@@ -108,170 +114,191 @@ fun PhotoViewerOverlay(
     onClose: () -> Unit,
     onDelete: (MediaItem, Int) -> Unit,
     onCurrentMediaChanged: (MediaItem) -> Unit = {},
-    albumNameForMedia: (MediaItem) -> String? = { null }
+    albumNameForMedia: (MediaItem) -> String? = { null },
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedBoundsTransform: BoundsTransform? = null
 ) {
     BackHandler(enabled = visible && mediaItem != null, onBack = onClose)
 
-    AnimatedVisibility(
-        visible = visible && mediaItem != null,
-        enter = fadeIn(animationSpec = tween(0)),
-        exit = fadeOut(animationSpec = tween(90))
-    ) {
-        if (mediaItem != null) {
-            val context = LocalContext.current
-            val viewerItems = if (mediaItems.isNotEmpty()) mediaItems else listOf(mediaItem)
-            val selectedIndex = viewerItems.indexOfFirst { it.id == mediaItem.id }
-                .takeIf { it >= 0 }
-                ?: 0
-            val pagerState = rememberPagerState(
-                initialPage = selectedIndex,
-                pageCount = { viewerItems.size }
-            )
-            val scope = rememberCoroutineScope()
-            var controlsVisible by rememberSaveable { mutableStateOf(true) }
-            var lastSettledPage by rememberSaveable { mutableIntStateOf(selectedIndex) }
-            var deleteDirection by rememberSaveable { mutableIntStateOf(1) }
-            var verticalDragOffset by remember { mutableStateOf(0f) }
-            var favoriteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-            val dismissThresholdPx = with(LocalDensity.current) { 132.dp.toPx() }
+    if (!visible || mediaItem == null) {
+        return
+    }
 
-            LaunchedEffect(visible, selectedIndex, viewerItems.size) {
-                if (visible && pagerState.currentPage != selectedIndex) {
-                    pagerState.scrollToPage(selectedIndex)
-                }
+    val context = LocalContext.current
+    val viewerItems = if (mediaItems.isNotEmpty()) mediaItems else listOf(mediaItem)
+    val selectedIndex = viewerItems.indexOfFirst { it.id == mediaItem.id }
+        .takeIf { it >= 0 }
+        ?: 0
+    val pagerState = rememberPagerState(
+        initialPage = selectedIndex,
+        pageCount = { viewerItems.size }
+    )
+    val scope = rememberCoroutineScope()
+    var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    var lastSettledPage by rememberSaveable { mutableIntStateOf(selectedIndex) }
+    var deleteDirection by rememberSaveable { mutableIntStateOf(1) }
+    var verticalDragOffset by remember { mutableStateOf(0f) }
+    var isViewerDragging by remember { mutableStateOf(false) }
+    var favoriteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val dismissThresholdPx = with(LocalDensity.current) { 132.dp.toPx() }
+
+    LaunchedEffect(visible, selectedIndex, viewerItems.size) {
+        if (visible && pagerState.currentPage != selectedIndex) {
+            pagerState.scrollToPage(selectedIndex)
+        }
+    }
+
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { page ->
+            if (page != lastSettledPage) {
+                deleteDirection = if (page > lastSettledPage) 1 else -1
+                lastSettledPage = page
             }
+        }
+    }
 
-            LaunchedEffect(pagerState) {
-                snapshotFlow { pagerState.settledPage }.collect { page ->
-                    if (page != lastSettledPage) {
-                        deleteDirection = if (page > lastSettledPage) 1 else -1
-                        lastSettledPage = page
-                    }
-                }
-            }
+    val currentItem = viewerItems.getOrNull(pagerState.currentPage) ?: mediaItem
+    LaunchedEffect(currentItem.id, visible) {
+        if (visible) {
+            onCurrentMediaChanged(currentItem)
+            controlsVisible = true
+            verticalDragOffset = 0f
+        }
+    }
 
-            val currentItem = viewerItems.getOrNull(pagerState.currentPage) ?: mediaItem
-            LaunchedEffect(currentItem.id, visible) {
-                if (visible) {
-                    onCurrentMediaChanged(currentItem)
-                    controlsVisible = true
-                    verticalDragOffset = 0f
-                }
-            }
+    fun shareCurrentMedia() {
+        val uri = currentItem.contentUri ?: return
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = if (currentItem.isVideo) "video/*" else "image/*"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching {
+            context.startActivity(Intent.createChooser(shareIntent, "Share"))
+        }
+    }
 
-            fun shareCurrentMedia() {
-                val uri = currentItem.contentUri ?: return
-                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                    type = if (currentItem.isVideo) "video/*" else "image/*"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                runCatching {
-                    context.startActivity(Intent.createChooser(shareIntent, "Share"))
-                }
-            }
+    val animatedVerticalDragOffset by animateFloatAsState(
+        targetValue = verticalDragOffset,
+        animationSpec = spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMediumLow),
+        label = "viewer dismiss offset"
+    )
+    val displayedVerticalDragOffset = if (isViewerDragging) {
+        verticalDragOffset
+    } else {
+        animatedVerticalDragOffset
+    }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(if (currentItem.isVideo) Color.Black else Color.White)
-                    .pointerInput(currentItem.id) {
-                        detectVerticalDragGestures(
-                            onVerticalDrag = { change, dragAmount ->
-                                verticalDragOffset = (verticalDragOffset + dragAmount)
-                                    .coerceIn(0f, dismissThresholdPx * 2.4f)
-                                change.consume()
-                            },
-                            onDragEnd = {
-                                if (verticalDragOffset > dismissThresholdPx) {
-                                    onClose()
-                                }
-                                verticalDragOffset = 0f
-                            },
-                            onDragCancel = { verticalDragOffset = 0f }
-                        )
-                    }
-            ) {
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            val pullDown = verticalDragOffset.coerceAtLeast(0f)
-                            val pullScale = 1f - (pullDown / (dismissThresholdPx * 5f)).coerceIn(0f, 0.08f)
-                            translationY = pullDown
-                            scaleX = pullScale
-                            scaleY = pullScale
-                        },
-                    beyondViewportPageCount = 1,
-                    key = { page -> viewerItems[page].id }
-                ) { page ->
-                    val pageItem = viewerItems[page]
-                    ZoomableViewerMedia(
-                        mediaItem = pageItem,
-                        isActive = page == pagerState.currentPage,
-                        controlsVisible = controlsVisible,
-                        onToggleControls = { controlsVisible = !controlsVisible }
-                    )
-                }
-
-                AnimatedVisibility(
-                    visible = controlsVisible,
-                    modifier = Modifier.align(Alignment.TopStart),
-                    enter = fadeIn(animationSpec = tween(90)),
-                    exit = fadeOut(animationSpec = tween(90))
-                ) {
-                    ViewerTopBar(onClose = onClose)
-                }
-
-                AnimatedVisibility(
-                    visible = controlsVisible,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                    enter = fadeIn(animationSpec = tween(100)) + slideInVertically(
-                        initialOffsetY = { it / 3 },
-                        animationSpec = tween(180, easing = ViewerEnterEasing)
-                    ),
-                    exit = fadeOut(animationSpec = tween(90)) + slideOutVertically(
-                        targetOffsetY = { it / 4 },
-                        animationSpec = tween(140, easing = ViewerExitEasing)
-                    )
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(bottom = 12.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        if (viewerItems.size > 1 && !currentItem.isVideo) {
-                            ViewerFilmstrip(
-                                mediaItems = viewerItems,
-                                selectedIndex = pagerState.currentPage,
-                                onItemClick = { index ->
-                                    scope.launch { pagerState.animateScrollToPage(index) }
-                                }
-                            )
-                            Spacer(Modifier.height(14.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(if (currentItem.isVideo) Color.Black else Color.White)
+            .pointerInput(currentItem.id, dismissThresholdPx) {
+                detectVerticalDragGestures(
+                    onDragStart = { isViewerDragging = true },
+                    onVerticalDrag = { change, dragAmount ->
+                        val shouldPullViewer = dragAmount > 0f || verticalDragOffset > 0f
+                        if (shouldPullViewer) {
+                            verticalDragOffset = (verticalDragOffset + dragAmount)
+                                .coerceIn(0f, dismissThresholdPx * 2.4f)
+                            change.consume()
                         }
-                        ViewerActionBar(
-                            isFavorite = favoriteIds.contains(currentItem.id),
-                            onFavorite = {
-                                favoriteIds = if (favoriteIds.contains(currentItem.id)) {
-                                    favoriteIds - currentItem.id
-                                } else {
-                                    favoriteIds + currentItem.id
-                                }
-                            },
-                            onShare = ::shareCurrentMedia,
-                            onDelete = { onDelete(currentItem, deleteDirection) }
-                        )
+                    },
+                    onDragEnd = {
+                        isViewerDragging = false
+                        if (verticalDragOffset > dismissThresholdPx) {
+                            onClose()
+                        }
+                        verticalDragOffset = 0f
+                    },
+                    onDragCancel = {
+                        isViewerDragging = false
+                        verticalDragOffset = 0f
                     }
+                )
+            }
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val pullDown = displayedVerticalDragOffset.coerceAtLeast(0f)
+                    val pullScale = 1f - (pullDown / (dismissThresholdPx * 5f)).coerceIn(0f, 0.08f)
+                    translationY = pullDown
+                    scaleX = pullScale
+                    scaleY = pullScale
+                },
+            beyondViewportPageCount = 1,
+            key = { page -> viewerItems[page].id }
+        ) { page ->
+            val pageItem = viewerItems[page]
+            ZoomableViewerMedia(
+                mediaItem = pageItem,
+                isActive = page == pagerState.currentPage,
+                controlsVisible = controlsVisible,
+                sharedTransitionScope = sharedTransitionScope,
+                animatedVisibilityScope = animatedVisibilityScope,
+                sharedBoundsTransform = sharedBoundsTransform,
+                onToggleControls = { controlsVisible = !controlsVisible }
+            )
+        }
+
+        AnimatedVisibility(
+            visible = controlsVisible,
+            modifier = Modifier.align(Alignment.TopStart),
+            enter = fadeIn(animationSpec = tween(90)),
+            exit = fadeOut(animationSpec = tween(90))
+        ) {
+            ViewerTopBar(onClose = onClose)
+        }
+
+        AnimatedVisibility(
+            visible = controlsVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(animationSpec = tween(100)) + slideInVertically(
+                initialOffsetY = { it / 3 },
+                animationSpec = tween(180, easing = ViewerEnterEasing)
+            ),
+            exit = fadeOut(animationSpec = tween(90)) + slideOutVertically(
+                targetOffsetY = { it / 4 },
+                animationSpec = tween(140, easing = ViewerExitEasing)
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(bottom = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (viewerItems.size > 1 && !currentItem.isVideo) {
+                    ViewerFilmstrip(
+                        mediaItems = viewerItems,
+                        selectedIndex = pagerState.currentPage,
+                        onItemClick = { index ->
+                            scope.launch { pagerState.animateScrollToPage(index) }
+                        }
+                    )
+                    Spacer(Modifier.height(14.dp))
                 }
+                ViewerActionBar(
+                    isFavorite = favoriteIds.contains(currentItem.id),
+                    onFavorite = {
+                        favoriteIds = if (favoriteIds.contains(currentItem.id)) {
+                            favoriteIds - currentItem.id
+                        } else {
+                            favoriteIds + currentItem.id
+                        }
+                    },
+                    onShare = ::shareCurrentMedia,
+                    onDelete = { onDelete(currentItem, deleteDirection) }
+                )
             }
         }
     }
 }
-
 @Composable
 private fun ViewerTopBar(onClose: () -> Unit) {
     Surface(
@@ -452,6 +479,9 @@ private fun ZoomableViewerMedia(
     mediaItem: MediaItem,
     isActive: Boolean,
     controlsVisible: Boolean,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedBoundsTransform: BoundsTransform? = null,
     onToggleControls: () -> Unit
 ) {
     if (mediaItem.isVideo && mediaItem.contentUri != null) {
@@ -459,6 +489,9 @@ private fun ZoomableViewerMedia(
             mediaItem = mediaItem,
             isActive = isActive,
             controlsVisible = controlsVisible,
+            sharedTransitionScope = sharedTransitionScope,
+            animatedVisibilityScope = animatedVisibilityScope,
+            sharedBoundsTransform = sharedBoundsTransform,
             onToggleControls = onToggleControls
         )
         return
@@ -479,12 +512,18 @@ private fun ZoomableViewerMedia(
     )
     val displayScale = if (gestureActive) targetScale else animatedScale
     val displayOffset = if (gestureActive) targetOffset else animatedOffset
+    val mediaModifier = Modifier.mediaSharedElement(
+        mediaItem = mediaItem,
+        sharedTransitionScope = sharedTransitionScope,
+        animatedVisibilityScope = animatedVisibilityScope,
+        sharedBoundsTransform = sharedBoundsTransform
+    )
 
     GalleryImage(
         imageRes = mediaItem.imageRes,
         imageUri = mediaItem.contentUri,
         contentDescription = mediaItem.title,
-        modifier = Modifier
+        modifier = mediaModifier
             .fillMaxSize()
             .pointerInput(mediaItem.id) {
                 detectTapGestures(
@@ -520,8 +559,14 @@ private fun ZoomableViewerMedia(
                                 val zoom = (distance / previousDistance).takeIf { it.isFinite() } ?: 1f
                                 val nextScale = (targetScale * zoom).coerceIn(1f, 5f)
                                 val pan = centroid - previousCentroid
+                                val maxPanX = size.width * (nextScale - 1f) * 0.5f
+                                val maxPanY = size.height * (nextScale - 1f) * 0.5f
                                 targetScale = nextScale
-                                targetOffset = if (nextScale <= 1.02f) Offset.Zero else targetOffset + pan
+                                targetOffset = if (nextScale <= 1.02f) {
+                                    Offset.Zero
+                                } else {
+                                    (targetOffset + pan).coercePan(maxPanX, maxPanY)
+                                }
                                 pressedChanges.forEach { it.consume() }
                             }
                             previousDistance = distance
@@ -557,6 +602,9 @@ private fun ViewerVideoPlayer(
     mediaItem: MediaItem,
     isActive: Boolean,
     controlsVisible: Boolean,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedBoundsTransform: BoundsTransform? = null,
     onToggleControls: () -> Unit
 ) {
     val context = LocalContext.current
@@ -652,6 +700,10 @@ private fun ViewerVideoPlayer(
         }
     }
 
+    val preparePlayerForSurface by rememberUpdatedState<(TextureView) -> Unit>(
+        newValue = { view -> preparePlayer(view) }
+    )
+
     LaunchedEffect(isActive, isPrepared) {
         val player = playerState.value ?: return@LaunchedEffect
         if (!isPrepared) return@LaunchedEffect
@@ -691,9 +743,28 @@ private fun ViewerVideoPlayer(
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        GalleryImage(
+            imageRes = mediaItem.imageRes,
+            imageUri = mediaItem.contentUri,
+            contentDescription = mediaItem.title,
+            modifier = Modifier
+                .mediaSharedElement(
+                    mediaItem = mediaItem,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                    sharedBoundsTransform = sharedBoundsTransform
+                )
+                .fillMaxSize(),
+            cornerRadius = 0.dp,
+            contentScale = ContentScale.Fit,
+            thumbnailSize = 1440,
+            loadQuality = ImageLoadQuality.Thumbnail
+        )
+
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer { alpha = if (isPrepared) 1f else 0f }
                 .pointerInput(uri) {
                     detectTapGestures(onTap = { onToggleControls() })
                 },
@@ -704,6 +775,7 @@ private fun ViewerVideoPlayer(
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
                     isOpaque = true
+                    tag = uri
                     val texture = this
                     surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                         override fun onSurfaceTextureAvailable(
@@ -711,7 +783,11 @@ private fun ViewerVideoPlayer(
                             width: Int,
                             height: Int
                         ) {
-                            preparePlayer(texture)
+                            if (playerState.value == null) {
+                                preparePlayerForSurface(texture)
+                            } else {
+                                texture.applyVideoFitTransform(videoWidth, videoHeight)
+                            }
                         }
 
                         override fun onSurfaceTextureSizeChanged(
@@ -736,6 +812,10 @@ private fun ViewerVideoPlayer(
                 textureView = view
                 if (view.tag != uri) {
                     view.tag = uri
+                    if (view.isAvailable) {
+                        preparePlayer(view)
+                    }
+                } else if (view.isAvailable && playerState.value == null) {
                     preparePlayer(view)
                 } else {
                     view.applyVideoFitTransform(videoWidth, videoHeight)
@@ -878,6 +958,40 @@ private fun TextureView.applyVideoFitTransform(videoWidth: Int, videoHeight: Int
         setScale(scaledWidth / viewWidth, scaledHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
     }
     setTransform(matrix)
+}
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun Modifier.mediaSharedElement(
+    mediaItem: MediaItem,
+    sharedTransitionScope: SharedTransitionScope?,
+    animatedVisibilityScope: AnimatedVisibilityScope?,
+    sharedBoundsTransform: BoundsTransform?
+): Modifier {
+    val transitionScope = sharedTransitionScope ?: return this
+    val visibilityScope = animatedVisibilityScope ?: return this
+
+    return with(transitionScope) {
+        val sharedContentState = rememberSharedContentState(key = "media-${mediaItem.id}")
+        if (sharedBoundsTransform != null) {
+            this@mediaSharedElement.sharedElement(
+                state = sharedContentState,
+                animatedVisibilityScope = visibilityScope,
+                boundsTransform = sharedBoundsTransform
+            )
+        } else {
+            this@mediaSharedElement.sharedElement(
+                state = sharedContentState,
+                animatedVisibilityScope = visibilityScope
+            )
+        }
+    }
+}
+private fun Offset.coercePan(maxX: Float, maxY: Float): Offset {
+    return Offset(
+        x = x.coerceIn(-maxX.coerceAtLeast(0f), maxX.coerceAtLeast(0f)),
+        y = y.coerceIn(-maxY.coerceAtLeast(0f), maxY.coerceAtLeast(0f))
+    )
 }
 
 private fun positionDistance(position: Offset, centroid: Offset): Float {

@@ -8,15 +8,15 @@ import androidx.compose.ui.unit.sp
 val GalleryTypography = Typography().copy(
     headlineLarge = Typography().headlineLarge.copy(
         fontFamily = FontFamily.SansSerif,
-        fontSize = 36.sp,
-        lineHeight = 42.sp,
-        fontWeight = FontWeight.Bold
+        fontSize = 40.sp,
+        lineHeight = 46.sp,
+        fontWeight = FontWeight.SemiBold
     ),
     titleLarge = Typography().titleLarge.copy(
         fontFamily = FontFamily.SansSerif,
         fontSize = 22.sp,
         lineHeight = 28.sp,
-        fontWeight = FontWeight.Bold
+        fontWeight = FontWeight.SemiBold
     ),
     titleMedium = Typography().titleMedium.copy(
         fontFamily = FontFamily.SansSerif,

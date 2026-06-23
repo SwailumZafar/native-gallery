@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
 package com.example.nativegallery.ui
 
 import android.app.Activity
@@ -7,10 +9,19 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.BoundsTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -28,16 +39,20 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -55,6 +70,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.TransformOrigin
@@ -62,11 +78,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.nativegallery.data.FakeGalleryRepository
 import com.example.nativegallery.data.GallerySnapshot
 import com.example.nativegallery.data.HiddenAlbumsRepository
@@ -76,7 +92,6 @@ import com.example.nativegallery.model.Album
 import com.example.nativegallery.model.AlbumLayoutMode
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.model.RecentlyDeletedMedia
-import com.example.nativegallery.ui.components.GalleryImage
 import com.example.nativegallery.ui.components.MediaAccessNotice
 import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.bouncyClickable
@@ -125,19 +140,13 @@ private data class AlbumTransitionSpec(
     val mode: AlbumTransitionMode
 )
 
-private enum class MediaTransitionMode {
-    Opening,
-    Closing
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+private val GalleryMediaBoundsTransform = BoundsTransform { _, _ ->
+    tween(durationMillis = 300, easing = FastOutSlowInEasing)
 }
 
-private data class MediaTransitionSpec(
-    val key: Int,
-    val mediaItem: MediaItem,
-    val tileBounds: Rect,
-    val mode: MediaTransitionMode
-)
-
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 fun GalleryApp() {
     val context = LocalContext.current
@@ -158,8 +167,6 @@ fun GalleryApp() {
     var viewerVisible by remember { mutableStateOf(false) }
     var albumTransition by remember { mutableStateOf<AlbumTransitionSpec?>(null) }
     var albumTransitionKey by remember { mutableIntStateOf(0) }
-    var mediaTransition by remember { mutableStateOf<MediaTransitionSpec?>(null) }
-    var mediaTransitionKey by remember { mutableIntStateOf(0) }
     val mainPagerState = rememberPagerState(
         initialPage = selectedTab.pageIndex(),
         pageCount = { 3 }
@@ -182,10 +189,10 @@ fun GalleryApp() {
         }
     }
 
-    LaunchedEffect(viewerVisible, mediaTransition?.key) {
-        if (!viewerVisible && viewerMediaItem != null && mediaTransition?.mode != MediaTransitionMode.Opening) {
+    LaunchedEffect(viewerVisible) {
+        if (!viewerVisible && viewerMediaItem != null) {
             delay(320)
-            if (!viewerVisible && mediaTransition?.mode != MediaTransitionMode.Opening) {
+            if (!viewerVisible) {
                 viewerMediaItem = null
                 viewerMediaItems = emptyList()
             }
@@ -299,12 +306,10 @@ fun GalleryApp() {
         if (bounds != Rect.Zero) {
             mediaTileBounds[mediaItem.id] = bounds
         }
-        mediaTransition = null
         viewerVisible = true
     }
 
     fun closeViewer() {
-        mediaTransition = null
         viewerVisible = false
     }
 
@@ -387,157 +392,172 @@ fun GalleryApp() {
         val rootWidthPx = with(density) { maxWidth.toPx() }
         val rootHeightPx = with(density) { maxHeight.toPx() }
 
-        Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            containerColor = MaterialTheme.colorScheme.background,
-            bottomBar = {
-                if (destination == GalleryDestination.Main && !viewerVisible) {
-                    GalleryBottomBar(
-                        selectedTab = selectedTab,
-                        onTabSelected = { tab ->
-                            selectedTab = tab
-                            destination = GalleryDestination.Main
-                        }
-                    )
-                }
-            }
-        ) { innerPadding ->
-            Box(
-                modifier = Modifier.fillMaxSize()
+        SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
+            val sharedTransitionScope = this
+
+            AnimatedVisibility(
+                visible = !viewerVisible,
+                enter = EnterTransition.None,
+                exit = ExitTransition.None,
+                label = "gallery content visibility"
             ) {
-                when (destination) {
-                    GalleryDestination.Main -> {
-                        val tabFlingBehavior = PagerDefaults.flingBehavior(
-                            state = mainPagerState,
-                            snapAnimationSpec = spring(
-                                dampingRatio = 0.78f,
-                                stiffness = Spring.StiffnessMediumLow
+                val galleryVisibilityScope = this
+
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    containerColor = MaterialTheme.colorScheme.background,
+                    bottomBar = {
+                        if (destination == GalleryDestination.Main && !viewerVisible) {
+                            GalleryBottomBar(
+                                selectedTab = selectedTab,
+                                onTabSelected = { tab ->
+                                    selectedTab = tab
+                                    destination = GalleryDestination.Main
+                                }
                             )
-                        )
-                        HorizontalPager(
-                            state = mainPagerState,
-                            modifier = Modifier.fillMaxSize(),
-                            beyondViewportPageCount = 1,
-                            flingBehavior = tabFlingBehavior,
-                            key = { page -> pageToGalleryTab(page).name }
-                        ) { page ->
-                            val tab = pageToGalleryTab(page)
-                            Box(
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                when (tab) {
-                                    GalleryTab.Photos -> PhotosScreen(
-                                        mediaItems = visibleMedia,
-                                        contentPadding = innerPadding,
-                                        mediaAccessNotice = mediaAccessNotice,
-                                        isLoading = isLoadingMedia,
-                                        onMediaClick = { mediaItem, bounds ->
-                                            startViewerOpen(mediaItem, visibleMedia, bounds)
+                        }
+                    }
+                ) { innerPadding ->
+                    Box(
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        when (destination) {
+                            GalleryDestination.Main -> {
+                                val tabFlingBehavior = PagerDefaults.flingBehavior(
+                                    state = mainPagerState,
+                                    snapAnimationSpec = spring(
+                                        dampingRatio = 0.78f,
+                                        stiffness = Spring.StiffnessMediumLow
+                                    )
+                                )
+                                HorizontalPager(
+                                    state = mainPagerState,
+                                    modifier = Modifier.fillMaxSize(),
+                                    beyondViewportPageCount = 1,
+                                    flingBehavior = tabFlingBehavior,
+                                    key = { page -> pageToGalleryTab(page).name }
+                                ) { page ->
+                                    val tab = pageToGalleryTab(page)
+                                    Box(
+                                        modifier = Modifier.fillMaxSize()
+                                    ) {
+                                        when (tab) {
+                                            GalleryTab.Photos -> PhotosScreen(
+                                                mediaItems = visibleMedia,
+                                                contentPadding = innerPadding,
+                                                mediaAccessNotice = mediaAccessNotice,
+                                                isLoading = isLoadingMedia,
+                                                sharedTransitionScope = sharedTransitionScope,
+                                                animatedVisibilityScope = galleryVisibilityScope,
+                                                sharedBoundsTransform = GalleryMediaBoundsTransform,
+                                                onMediaClick = { mediaItem, bounds ->
+                                                    startViewerOpen(mediaItem, visibleMedia, bounds)
+                                                }
+                                            )
+                                            GalleryTab.Albums -> AlbumsScreen(
+                                                albums = visibleAlbums,
+                                                layoutMode = albumLayoutMode,
+                                                onLayoutModeChange = { albumLayoutMode = it },
+                                                onOpenHiddenItems = { destination = GalleryDestination.HiddenItems },
+                                                onOpenRecentlyDeleted = ::openRecentlyDeleted,
+                                                onAlbumClick = { album, bounds -> startAlbumOpen(album, bounds) },
+                                                onAlbumBoundsChanged = { album, bounds ->
+                                                    if (bounds != Rect.Zero) {
+                                                        albumTileBounds[album.id] = bounds
+                                                    }
+                                                },
+                                                contentPadding = innerPadding,
+                                                mediaAccessNotice = mediaAccessNotice,
+                                                isLoading = isLoadingMedia
+                                            )
+                                            GalleryTab.Menu -> GalleryMenuScreen(
+                                                contentPadding = innerPadding,
+                                                onOpenHiddenItems = { destination = GalleryDestination.HiddenItems },
+                                                onOpenRecentlyDeleted = ::openRecentlyDeleted
+                                            )
                                         }
-                                    )
-                                    GalleryTab.Albums -> AlbumsScreen(
-                                        albums = visibleAlbums,
-                                        layoutMode = albumLayoutMode,
-                                        onLayoutModeChange = { albumLayoutMode = it },
-                                        onOpenHiddenItems = { destination = GalleryDestination.HiddenItems },
-                                        onOpenRecentlyDeleted = ::openRecentlyDeleted,
-                                        onAlbumClick = { album, bounds -> startAlbumOpen(album, bounds) },
-                                        onAlbumBoundsChanged = { album, bounds ->
-                                            if (bounds != Rect.Zero) {
-                                                albumTileBounds[album.id] = bounds
-                                            }
-                                        },
+                                    }
+                                }
+                            }
+                            GalleryDestination.AlbumDetail -> {
+                                if (selectedAlbum != null) {
+                                    AlbumDetailScreen(
+                                        album = selectedAlbum,
+                                        mediaItems = selectedAlbumMedia,
                                         contentPadding = innerPadding,
-                                        mediaAccessNotice = mediaAccessNotice,
-                                        isLoading = isLoadingMedia
-                                    )
-                                    GalleryTab.Menu -> GalleryMenuScreen(
-                                        contentPadding = innerPadding,
-                                        onOpenHiddenItems = { destination = GalleryDestination.HiddenItems },
-                                        onOpenRecentlyDeleted = ::openRecentlyDeleted
+                                        onBack = ::closeAlbumDetail,
+                                        sharedTransitionScope = sharedTransitionScope,
+                                        animatedVisibilityScope = galleryVisibilityScope,
+                                        sharedBoundsTransform = GalleryMediaBoundsTransform,
+                                        onMediaClick = { mediaItem, bounds ->
+                                            startViewerOpen(mediaItem, selectedAlbumMedia, bounds)
+                                        }
                                     )
                                 }
                             }
-                        }
-                    }
-                    GalleryDestination.AlbumDetail -> {
-                        if (selectedAlbum != null) {
-                            AlbumDetailScreen(
-                                album = selectedAlbum,
-                                mediaItems = selectedAlbumMedia,
-                                contentPadding = innerPadding,
-                                onBack = ::closeAlbumDetail,
-                                onMediaClick = { mediaItem, bounds ->
-                                    startViewerOpen(mediaItem, selectedAlbumMedia, bounds)
-                                }
+                            GalleryDestination.HiddenItems -> HiddenItemsScreen(
+                                albums = hideableAlbums,
+                                hiddenStates = hiddenStates,
+                                onBack = ::openAlbums,
+                                onHiddenChange = { album, hidden ->
+                                    hiddenStates[album.id] = hidden
+                                    hiddenRepository.setAlbumHidden(album.id, hidden)
+                                },
+                                contentPadding = PaddingValues()
+                            )
+                            GalleryDestination.RecentlyDeleted -> RecentlyDeletedScreen(
+                                deletedItems = recentlyDeletedItems,
+                                onBack = ::openAlbums,
+                                onOpenMedia = { entry ->
+                                    startViewerOpen(
+                                        mediaItem = entry.mediaItem,
+                                        mediaItems = recentlyDeletedItems.map { it.mediaItem },
+                                        bounds = mediaTileBounds[entry.mediaItem.id] ?: Rect.Zero
+                                    )
+                                },
+                                onRestore = ::restoreDeletedMedia,
+                                onRestoreAll = ::restoreAllDeletedMedia,
+                                contentPadding = PaddingValues()
                             )
                         }
                     }
-                    GalleryDestination.HiddenItems -> HiddenItemsScreen(
-                        albums = hideableAlbums,
-                        hiddenStates = hiddenStates,
-                        onBack = ::openAlbums,
-                        onHiddenChange = { album, hidden ->
-                            hiddenStates[album.id] = hidden
-                            hiddenRepository.setAlbumHidden(album.id, hidden)
-                        },
-                        contentPadding = PaddingValues()
-                    )
-                    GalleryDestination.RecentlyDeleted -> RecentlyDeletedScreen(
-                        deletedItems = recentlyDeletedItems,
-                        onBack = ::openAlbums,
-                        onOpenMedia = { entry ->
-                            startViewerOpen(
-                                mediaItem = entry.mediaItem,
-                                mediaItems = recentlyDeletedItems.map { it.mediaItem },
-                                bounds = mediaTileBounds[entry.mediaItem.id] ?: Rect.Zero
-                            )
-                        },
-                        onRestore = ::restoreDeletedMedia,
-                        onRestoreAll = ::restoreAllDeletedMedia,
-                        contentPadding = PaddingValues()
-                    )
                 }
+
+                AlbumTouchOriginTransitionOverlay(
+                    transition = albumTransition,
+                    rootWidthPx = rootWidthPx,
+                    rootHeightPx = rootHeightPx,
+                    onFinished = { finishedTransition ->
+                        if (albumTransition?.key == finishedTransition.key) {
+                            if (finishedTransition.mode == AlbumTransitionMode.Opening) {
+                                destination = GalleryDestination.AlbumDetail
+                            }
+                            albumTransition = null
+                        }
+                    }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = viewerVisible && viewerMediaItem != null,
+                enter = EnterTransition.None,
+                exit = ExitTransition.None,
+                label = "viewer visibility"
+            ) {
+                PhotoViewerOverlay(
+                    mediaItems = viewerMediaItems,
+                    mediaItem = viewerMediaItem,
+                    visible = true,
+                    onClose = ::closeViewer,
+                    onDelete = ::requestMediaDelete,
+                    onCurrentMediaChanged = { currentItem -> viewerMediaItem = currentItem },
+                    albumNameForMedia = { item -> albumNameById[item.albumId] },
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = this,
+                    sharedBoundsTransform = GalleryMediaBoundsTransform
+                )
             }
         }
-
-        AlbumTouchOriginTransitionOverlay(
-            transition = albumTransition,
-            rootWidthPx = rootWidthPx,
-            rootHeightPx = rootHeightPx,
-            onFinished = { finishedTransition ->
-                if (albumTransition?.key == finishedTransition.key) {
-                    if (finishedTransition.mode == AlbumTransitionMode.Opening) {
-                        destination = GalleryDestination.AlbumDetail
-                    }
-                    albumTransition = null
-                }
-            }
-        )
-
-        MediaTouchOriginTransitionOverlay(
-            transition = mediaTransition,
-            rootWidthPx = rootWidthPx,
-            rootHeightPx = rootHeightPx,
-            onFinished = { finishedTransition ->
-                if (mediaTransition?.key == finishedTransition.key) {
-                    if (finishedTransition.mode == MediaTransitionMode.Opening) {
-                        viewerVisible = true
-                    }
-                    mediaTransition = null
-                }
-            }
-        )
-
-        PhotoViewerOverlay(
-            mediaItems = viewerMediaItems,
-            mediaItem = viewerMediaItem,
-            visible = viewerVisible,
-            onClose = ::closeViewer,
-            onDelete = ::requestMediaDelete,
-            onCurrentMediaChanged = { currentItem -> viewerMediaItem = currentItem },
-            albumNameForMedia = { item -> albumNameById[item.albumId] }
-        )
     }
 }
 
@@ -551,35 +571,81 @@ private fun GalleryMenuScreen(
         modifier = Modifier
             .fillMaxSize()
             .padding(
-                start = 24.dp,
-                top = 96.dp,
-                end = 24.dp,
+                start = 26.dp,
+                top = 104.dp,
+                end = 26.dp,
                 bottom = contentPadding.calculateBottomPadding() + 28.dp
             )
     ) {
         Text(
             text = "Menu",
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Black,
+            style = MaterialTheme.typography.headlineLarge.copy(
+                fontSize = 36.sp,
+                lineHeight = 42.sp,
+                fontWeight = FontWeight.ExtraBold
+            ),
             color = MaterialTheme.colorScheme.onBackground
         )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "Gallery settings and tools",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 14.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.Normal
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(Modifier.height(28.dp))
-        GalleryMenuRow(
-            icon = Icons.Filled.Delete,
-            label = "Recently deleted",
-            onClick = onOpenRecentlyDeleted
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = Color.White.copy(alpha = 0.98f),
+            shape = RoundedCornerShape(28.dp),
+            shadowElevation = 1.dp
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                GalleryMenuRow(
+                    icon = Icons.Filled.Security,
+                    label = "Hidden items",
+                    description = "Manage your private albums",
+                    onClick = onOpenHiddenItems,
+                    showDivider = true
+                )
+                GalleryMenuRow(
+                    icon = Icons.Filled.Delete,
+                    label = "Recently deleted",
+                    description = "Photos removed in the last 30 days",
+                    onClick = onOpenRecentlyDeleted,
+                    showDivider = true
+                )
+                GalleryMenuRow(
+                    icon = Icons.Filled.Settings,
+                    label = "Settings",
+                    description = "Theme, storage and permissions",
+                    onClick = {},
+                    showDivider = false
+                )
+            }
+        }
+        Spacer(Modifier.height(26.dp))
+        Text(
+            text = "NativeGallery",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 14.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            color = MaterialTheme.colorScheme.onSurface
         )
-        Spacer(Modifier.height(12.dp))
-        GalleryMenuRow(
-            icon = Icons.Filled.Folder,
-            label = "Hidden items",
-            onClick = onOpenHiddenItems
-        )
-        Spacer(Modifier.height(12.dp))
-        GalleryMenuRow(
-            icon = Icons.Filled.Settings,
-            label = "Settings",
-            onClick = {}
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = "v0.1.0",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                fontWeight = FontWeight.Normal
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -588,33 +654,67 @@ private fun GalleryMenuScreen(
 private fun GalleryMenuRow(
     icon: ImageVector,
     label: String,
-    onClick: () -> Unit
+    description: String,
+    onClick: () -> Unit,
+    showDivider: Boolean
 ) {
-    Surface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp)
-            .bouncyClickable(onClick = onClick),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(32.dp),
-        shadowElevation = 1.dp
+            .bouncyClickable(onClick = onClick)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 20.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(82.dp)
+                .padding(start = 16.dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(24.dp)
-            )
+            Surface(
+                modifier = Modifier.size(46.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(11.dp)
+                )
+            }
             Spacer(Modifier.width(16.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 15.sp,
+                        lineHeight = 19.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(1.dp))
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 12.5.sp,
+                        lineHeight = 16.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.56f),
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        if (showDivider) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = 78.dp, end = 18.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.46f)
             )
         }
     }
@@ -752,15 +852,21 @@ private fun AlbumTouchOriginTransitionOverlay(
                 Text(
                     text = transition.album.name,
                     color = Color.White,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Black,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = 18.sp,
+                        lineHeight = 22.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
                     maxLines = 1
                 )
                 Text(
                     text = "%1$,d".format(transition.album.itemCount),
                     color = Color.White.copy(alpha = 0.9f),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 13.sp,
+                        lineHeight = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 )
             }
         }
@@ -768,141 +874,95 @@ private fun AlbumTouchOriginTransitionOverlay(
 }
 
 @Composable
-private fun MediaTouchOriginTransitionOverlay(
-    transition: MediaTransitionSpec?,
-    rootWidthPx: Float,
-    rootHeightPx: Float,
-    onFinished: (MediaTransitionSpec) -> Unit
-) {
-    if (transition == null || rootWidthPx <= 0f || rootHeightPx <= 0f) return
-
-    val density = LocalDensity.current
-    val progress = remember(transition.key) {
-        Animatable(if (transition.mode == MediaTransitionMode.Closing) 1f else 0f)
-    }
-
-    LaunchedEffect(transition.key) {
-        progress.animateTo(
-            targetValue = if (transition.mode == MediaTransitionMode.Closing) 0f else 1f,
-            animationSpec = spring(
-                dampingRatio = 0.84f,
-                stiffness = Spring.StiffnessMedium
-            )
-        )
-        onFinished(transition)
-    }
-
-    val easedProgress = progress.value.coerceIn(0f, 1f)
-    val startScaleX = ((transition.tileBounds.right - transition.tileBounds.left) / rootWidthPx)
-        .coerceAtLeast(0.01f)
-    val startScaleY = ((transition.tileBounds.bottom - transition.tileBounds.top) / rootHeightPx)
-        .coerceAtLeast(0.01f)
-    val scaleX = lerp(startScaleX, 1f, easedProgress)
-    val scaleY = lerp(startScaleY, 1f, easedProgress)
-    val translationX = lerp(transition.tileBounds.left, 0f, easedProgress)
-    val translationY = lerp(transition.tileBounds.top, 0f, easedProgress)
-    val radius = lerp(10f, 0f, easedProgress)
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    transformOrigin = TransformOrigin(0f, 0f)
-                    this.translationX = translationX
-                    this.translationY = translationY
-                    this.scaleX = scaleX
-                    this.scaleY = scaleY
-                    clip = true
-                    shape = RoundedCornerShape(with(density) { radius.toDp() })
-                }
-                .background(Color.Black)
-        ) {
-            GalleryImage(
-                imageRes = transition.mediaItem.imageRes,
-                imageUri = transition.mediaItem.contentUri,
-                contentDescription = transition.mediaItem.title,
-                modifier = Modifier.fillMaxSize(),
-                cornerRadius = 0.dp,
-                contentScale = ContentScale.Crop,
-                thumbnailSize = 384
-            )
-        }
-    }
-}
-@Composable
 private fun GalleryBottomBar(
     selectedTab: GalleryTab,
     onTabSelected: (GalleryTab) -> Unit
 ) {
+    val containerShape = RoundedCornerShape(50.dp)
+    val tabShape = RoundedCornerShape(40.dp)
+    val tabWidth = 86.dp
+    val tabHeight = 56.dp
+    val tabGap = 4.dp
+    val contentWidth = tabWidth * 3 + tabGap * 2
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(top = 4.dp, bottom = 10.dp),
+            .padding(bottom = 24.dp),
         contentAlignment = Alignment.Center
     ) {
-        Surface(
-            modifier = Modifier
-                .width(326.dp)
-                .height(68.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-            shape = RoundedCornerShape(38.dp),
-            tonalElevation = 3.dp,
-            shadowElevation = 12.dp
-        ) {
-            BoxWithConstraints(
+        Box {
+            Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(5.dp)
+                    .matchParentSize()
+                    .blur(20.dp)
+                    .clip(containerShape)
+                    .background(Color.White.copy(alpha = 0.52f))
+            )
+            Surface(
+                modifier = Modifier
+                    .widthIn(min = 240.dp)
+                    .clip(containerShape),
+                color = Color.White.copy(alpha = 0.92f),
+                shape = containerShape,
+                tonalElevation = 0.dp,
+                shadowElevation = 20.dp
             ) {
-                val itemWidth = maxWidth / 3
-                val itemWidthPx = with(LocalDensity.current) { itemWidth.toPx() }
-                val indicatorProgress by animateFloatAsState(
-                    targetValue = selectedTab.pageIndex().toFloat(),
-                    animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow),
-                    label = "bottom nav selected progress"
-                )
-
                 Box(
                     modifier = Modifier
-                        .graphicsLayer { translationX = itemWidthPx * indicatorProgress }
-                        .width(itemWidth)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(34.dp))
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-                )
-                Row(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .width(contentWidth)
+                        .height(tabHeight)
                 ) {
-                    GalleryNavigationItem(
-                        modifier = Modifier
-                            .width(itemWidth)
-                            .fillMaxHeight(),
-                        selected = selectedTab == GalleryTab.Photos,
-                        icon = Icons.Filled.PhotoLibrary,
-                        label = "Photos",
-                        onClick = { onTabSelected(GalleryTab.Photos) }
+                    val density = LocalDensity.current
+                    val tabStepPx = with(density) { (tabWidth + tabGap).toPx() }
+                    val indicatorProgress by animateFloatAsState(
+                        targetValue = selectedTab.pageIndex().toFloat(),
+                        animationSpec = spring(dampingRatio = 0.77f, stiffness = 380f),
+                        label = "bottom nav pill progress"
                     )
-                    GalleryNavigationItem(
+
+                    Box(
                         modifier = Modifier
-                            .width(itemWidth)
-                            .fillMaxHeight(),
-                        selected = selectedTab == GalleryTab.Albums,
-                        icon = Icons.Filled.Folder,
-                        label = "Albums",
-                        onClick = { onTabSelected(GalleryTab.Albums) }
+                            .graphicsLayer { translationX = tabStepPx * indicatorProgress }
+                            .width(tabWidth)
+                            .height(tabHeight)
+                            .clip(tabShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
                     )
-                    GalleryNavigationItem(
-                        modifier = Modifier
-                            .width(itemWidth)
-                            .fillMaxHeight(),
-                        selected = selectedTab == GalleryTab.Menu,
-                        icon = Icons.Filled.Menu,
-                        label = "Menu",
-                        onClick = { onTabSelected(GalleryTab.Menu) }
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(tabGap),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        GalleryNavigationItem(
+                            modifier = Modifier
+                                .width(tabWidth)
+                                .height(tabHeight),
+                            selected = selectedTab == GalleryTab.Photos,
+                            icon = Icons.Filled.Image,
+                            label = "Photos",
+                            onClick = { onTabSelected(GalleryTab.Photos) }
+                        )
+                        GalleryNavigationItem(
+                            modifier = Modifier
+                                .width(tabWidth)
+                                .height(tabHeight),
+                            selected = selectedTab == GalleryTab.Albums,
+                            icon = Icons.Filled.Collections,
+                            label = "Albums",
+                            onClick = { onTabSelected(GalleryTab.Albums) }
+                        )
+                        GalleryNavigationItem(
+                            modifier = Modifier
+                                .width(tabWidth)
+                                .height(tabHeight),
+                            selected = selectedTab == GalleryTab.Menu,
+                            icon = Icons.Filled.Menu,
+                            label = "Menu",
+                            onClick = { onTabSelected(GalleryTab.Menu) }
+                        )
+                    }
                 }
             }
         }
@@ -917,36 +977,45 @@ private fun GalleryNavigationItem(
     label: String,
     onClick: () -> Unit
 ) {
-    val color = if (selected) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val activeColor = MaterialTheme.colorScheme.primary
+    val inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
+    val color by animateColorAsState(
+        targetValue = if (selected) activeColor else inactiveColor,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "bottom nav item color"
+    )
 
-    Row(
+    Column(
         modifier = modifier
-            .bouncyClickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
+            .bouncyClickable(
+                pressedScale = 0.9f,
+                pressDampingRatio = 0.67f,
+                pressStiffness = 500f,
+                onClick = onClick
+            )
+            .padding(horizontal = 22.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Icon(
             imageVector = icon,
             contentDescription = label,
             tint = color,
-            modifier = Modifier.size(23.dp)
+            modifier = Modifier.size(22.dp)
         )
+        Spacer(Modifier.height(1.dp))
         Text(
             text = label,
-            modifier = Modifier.padding(start = 0.dp),
             color = color,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 10.5.sp,
+                lineHeight = 13.sp
+            ),
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1
         )
     }
 }
-
 private fun lerp(start: Float, stop: Float, fraction: Float): Float {
     return start + (stop - start) * fraction
 }

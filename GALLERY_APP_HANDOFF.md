@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -266,41 +266,21 @@ Other reference images include Oppo/Vivo/Samsung-like inspiration, album grids, 
 
 ## App Structure
 
-Use two main tabs only:
+Use three main bottom tabs:
 
 ```text
 Photos
 Albums
+Menu
 ```
 
-Do not add a persistent `Menu` tab. Menu actions live in top-right overflow menus.
+Current tab roles:
 
-Current major source files:
+- `Photos`: main timeline grid with date sections.
+- `Albums`: album grid, layout filter, album detail entry, and the Recently Deleted pill at the end of the albums list.
+- `Menu`: settings/tools style screen with Hidden items, Recently deleted, Settings, and a small NativeGallery footer.
 
-```text
-app/src/main/java/com/example/nativegallery/data/FakeGalleryRepository.kt
-app/src/main/java/com/example/nativegallery/data/GallerySnapshot.kt
-app/src/main/java/com/example/nativegallery/data/MediaPermissions.kt
-app/src/main/java/com/example/nativegallery/data/MediaStoreGalleryRepository.kt
-app/src/main/java/com/example/nativegallery/model/MediaModels.kt
-app/src/main/java/com/example/nativegallery/ui/GalleryApp.kt
-app/src/main/java/com/example/nativegallery/ui/PhotosScreen.kt
-app/src/main/java/com/example/nativegallery/ui/AlbumsScreen.kt
-app/src/main/java/com/example/nativegallery/ui/HiddenItemsScreen.kt
-app/src/main/java/com/example/nativegallery/ui/PhotoViewerOverlay.kt
-app/src/main/java/com/example/nativegallery/ui/components/GalleryComponents.kt
-app/src/main/java/com/example/nativegallery/ui/components/ThumbnailMemoryCache.kt
-app/src/main/java/com/example/nativegallery/ui/theme/Color.kt
-app/src/main/java/com/example/nativegallery/ui/theme/Theme.kt
-app/src/main/java/com/example/nativegallery/ui/theme/Type.kt
-```
-
-Scripts:
-
-```text
-scripts/install-debug-apk.ps1
-scripts/rebuild-install-debug.ps1
-```
+Top-right overflow menus remain for screen-specific controls. The bottom `Menu` tab is now part of the approved reference direction and should be preserved unless the design direction changes again.
 
 ## Screen: Photos
 
@@ -636,9 +616,8 @@ Verify:
 Use this prompt to continue in a new chat:
 
 ```text
-Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed native Android gallery milestone. The project is pushed to https://github.com/SwailumZafar/native-gallery.git. Latest pushed feature commit is 5035c7c. The current working tree includes an uncommitted polish pass: compact rounded floating bottom nav with closer tab items, swipeable Photos/Albums pager with springy settle, Android back navigation fixes, lazy album grids for smoother scrolling, slightly larger photo tiles, high-quality viewer decode, viewer swipe navigation, double-tap zoom, pinch zoom, TextureView/MediaPlayer video playback, high-refresh display-mode preference, smaller rounder bottom nav, touch-origin album container transition, reduced Photos/Albums swipe-start jitter, tap-to-toggle viewer controls, video scrub/skip controls, viewer delete-to-neighbor behavior, #F0EDE4/#004741 light theme, and album detail sort/grid controls. Keep the design locked to Set A / Design 1. Next, test the latest APK on a real phone, especially video picture/audio, viewer gestures on videos, tab swipe feel, album touch-origin open/close feel, viewer delete behavior, new light colors, and whether the device honors the app refresh-rate request.
+Read F:\App\Gallery\GALLERY_APP_HANDOFF.md and continue from the completed native Android gallery milestone. The project is pushed to https://github.com/SwailumZafar/native-gallery.git. The latest committed work includes the 2026-06-23 reference UI pass: exact floating bottom nav pill specs, Photos/Albums/Menu bottom tabs, typography normalization across Photos/Albums/Menu/nav/video badges, Compose shared-element media open/close transitions, reference-style Photos and Menu updates, Recently Deleted moved to the end of Albums as a pill-style row, viewer action controls, and smoother viewer/video behavior. Keep the approved white + #004741 gallery direction. Next, test the latest APK on a real phone, especially bottom-nav fit/animation, shared media open/close, video playback, photo/video viewer close animation, typography scale, and Recently Deleted restore/open flows.
 ```
-
 ## 2026-06-22 ColorOS Motion / Recently Deleted Pass
 
 Build verified after this pass:
@@ -666,6 +645,72 @@ Implemented in this pass:
 - Viewer details panel shows title, type, date label, album name when known, and video duration when available.
 
 Install command to hand to the user after this build:
+
+```powershell
+.\scripts\rebuild-install-debug.ps1
+```
+
+Bypass form:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "F:\App\Gallery\scripts\rebuild-install-debug.ps1"
+```
+## 2026-06-23 Reference UI / Navigation / Typography Pass
+
+Build verified after this pass:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Build result: passed (:app:assembleDebug)
+Diff check: passed (git diff --check, only LF/CRLF warnings)
+```
+
+Implemented in this pass:
+
+- Bottom navigation now matches the approved reference pill spec:
+  - container min width `240dp`, bottom offset `24dp`, radius `50dp`
+  - white translucent surface `Color.White.copy(alpha = 0.92f)` with a `20dp` blur backing and soft elevation
+  - three tabs: `Photos`, `Albums`, `Menu`
+  - each tab is `86dp x 56dp`, with `4dp` gaps, `22dp` icons, and `10.5sp` labels
+  - active teal indicator fills the full selected tab bounds exactly and uses `#004741` at `0.12` alpha
+  - selected indicator slide uses a spring approximating the Framer Motion spec (`stiffness = 380f`, damping ratio around `0.77`)
+  - tap press uses `pressedScale = 0.9f`, `pressStiffness = 500f`, and a tighter damping ratio
+- Albums bottom icon changed to a stronger `Collections` style icon; Photos uses the image icon.
+- `GalleryMotion.bouncyClickable` now accepts per-call press spring settings while preserving existing defaults.
+- The app now keeps `Photos`, `Albums`, and `Menu` as persistent bottom tabs per the approved reference.
+- Photos screen typography now follows the supplied table:
+  - `Pictures` heading starts at `40sp / 600`
+  - date section headers use `22sp / 600`
+  - video duration badge uses `10sp`
+- Albums screen typography now follows the supplied table:
+  - `Albums` heading uses `40sp / 600`
+  - `Search albums` placeholder uses `14sp / 600`
+  - `Big tiles` filter pill uses `13sp / 600`
+  - hero album name/count use `18sp / 600` and `13sp / 600`
+  - small album name/count use `15sp / 600` and `12sp / 600`
+  - `Recently deleted` label uses `15sp / 600`; `View` uses `14sp / 600`
+- Menu screen typography now follows the supplied table:
+  - `Menu` heading uses `36sp / 800`
+  - subtitle uses `14sp / 400`
+  - menu labels use `15sp / 600`
+  - menu descriptions use `12.5sp / 400`
+  - footer label/subtitle use `14sp / 600` and `12sp / 400`
+- Added a real menu footer with `NativeGallery` and `v0.1.0`.
+- Shared `SearchPill` now accepts a placeholder so Albums can say `Search albums`.
+- Photos, album detail, and viewer media now use official Compose shared-element transitions with a `300ms` FastOutSlowIn bounds transform.
+- Viewer open/close no longer uses the older custom media overlay path; the thumbnail and full-screen media share matching keys like `media-{id}`.
+- Photo viewer keeps the approved icon-only controls for favorite, share, and delete.
+- Recently Deleted is no longer treated as a 3-dot-only setting; it is available from Menu and remains accessible as a pill-style row at the end of Albums.
+
+Current known follow-up checks:
+
+- Real-device visual check for the exact nav pill height, blur, shadow, and selected teal fill.
+- Real-device check that the active nav indicator feels correctly immersed in each tab with no leftover gap.
+- Real-device check that shared-element photo/video open and close are instant-feeling and smooth.
+- Real-device check that all supplied typography sizes feel consistent on the target display density.
+- Real-device check for video playback, scrubber, viewer close, and delete/restore flows.
+
+Install command:
 
 ```powershell
 .\scripts\rebuild-install-debug.ps1

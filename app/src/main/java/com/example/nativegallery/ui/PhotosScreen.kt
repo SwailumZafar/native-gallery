@@ -1,6 +1,14 @@
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
 package com.example.nativegallery.ui
 
-import androidx.compose.foundation.border
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.BoundsTransform
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -14,8 +22,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
@@ -24,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,20 +49,40 @@ import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.SkeletonBlock
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun PhotosScreen(
     mediaItems: List<MediaItem>,
     contentPadding: PaddingValues,
     mediaAccessNotice: (@Composable () -> Unit)? = null,
     isLoading: Boolean = false,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedBoundsTransform: BoundsTransform? = null,
     onMediaClick: (MediaItem, Rect) -> Unit = { _, _ -> }
 ) {
     val sections = mediaItems
         .groupBy { it.dateLabel }
         .entries
         .toList()
+    val listState = rememberLazyListState()
+    val rawHeaderCollapse by remember {
+        derivedStateOf {
+            if (listState.firstVisibleItemIndex > 0) {
+                1f
+            } else {
+                (listState.firstVisibleItemScrollOffset / 220f).coerceIn(0f, 1f)
+            }
+        }
+    }
+    val headerCollapse by animateFloatAsState(
+        targetValue = rawHeaderCollapse,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "pictures header collapse"
+    )
 
     LazyColumn(
+        state = listState,
         contentPadding = PaddingValues(
             start = 0.dp,
             top = 0.dp,
@@ -61,7 +91,10 @@ fun PhotosScreen(
         )
     ) {
         item(key = "pictures-header", contentType = "pictures-header") {
-            PicturesHeader(mediaAccessNotice = mediaAccessNotice)
+            PicturesHeader(
+                mediaAccessNotice = mediaAccessNotice,
+                collapseProgress = headerCollapse
+            )
         }
 
         if (isLoading) {
@@ -72,6 +105,9 @@ fun PhotosScreen(
                     title = section.key,
                     mediaItems = section.value,
                     columns = 4,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                    sharedBoundsTransform = sharedBoundsTransform,
                     onMediaClick = onMediaClick
                 )
             }
@@ -81,96 +117,80 @@ fun PhotosScreen(
 
 @Composable
 private fun PicturesHeader(
-    mediaAccessNotice: (@Composable () -> Unit)?
+    mediaAccessNotice: (@Composable () -> Unit)?,
+    collapseProgress: Float
 ) {
+    val progress = collapseProgress.coerceIn(0f, 1f)
+    val topPadding = interpolate(88f, 34f, progress).dp
+    val titleSize = interpolate(40f, 28f, progress)
+    val titleLineHeight = interpolate(46f, 34f, progress)
+    val titleAlpha = interpolate(1f, 0.72f, progress)
+    val titleSpacing = interpolate(56f, 20f, progress).dp
+    val bottomSpacing = interpolate(40f, 18f, progress).dp
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 10.dp, top = 88.dp, end = 10.dp),
+            .padding(start = 10.dp, top = topPadding, end = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = "Pictures",
+            modifier = Modifier.graphicsLayer {
+                alpha = titleAlpha
+                scaleX = interpolate(1f, 0.97f, progress)
+                scaleY = interpolate(1f, 0.97f, progress)
+            },
             style = MaterialTheme.typography.headlineLarge.copy(
-                fontSize = 32.sp,
-                lineHeight = 38.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = titleSize.sp,
+                lineHeight = titleLineHeight.sp,
+                fontWeight = FontWeight.SemiBold
             ),
             color = MaterialTheme.colorScheme.onBackground
         )
-        Spacer(Modifier.height(72.dp))
+        Spacer(Modifier.height(titleSpacing))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End
         ) {
-            Column(horizontalAlignment = Alignment.End) {
-                GallerySearchBubble()
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    SearchCircle()
-                    Icon(
-                        imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "More options",
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
+            Row(
+                modifier = Modifier.graphicsLayer {
+                    alpha = interpolate(1f, 0.9f, progress)
+                    translationY = -8f * progress
+                },
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SearchCircle()
+                Icon(
+                    imageVector = Icons.Filled.MoreVert,
+                    contentDescription = "More options",
+                    tint = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.size(28.dp)
+                )
             }
         }
         if (mediaAccessNotice != null) {
             Spacer(Modifier.height(18.dp))
             mediaAccessNotice()
         }
-        Spacer(Modifier.height(40.dp))
-    }
-}
-
-@Composable
-private fun GallerySearchBubble() {
-    Surface(
-        color = Color.White,
-        shape = RoundedCornerShape(24.dp),
-        shadowElevation = 1.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Search,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.size(7.dp))
-            Text(
-                text = "Gallery Search",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-        }
+        Spacer(Modifier.height(bottomSpacing))
     }
 }
 
 @Composable
 private fun SearchCircle() {
     Surface(
-        modifier = Modifier
-            .size(54.dp)
-            .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape),
-        color = Color.White,
+        modifier = Modifier.size(50.dp),
+        color = Color(0xFFF3F3F3),
         shape = CircleShape,
-        shadowElevation = 2.dp
+        shadowElevation = 0.dp
     ) {
         Icon(
             imageVector = Icons.Filled.Search,
             contentDescription = "Search",
             tint = Color.Black,
-            modifier = Modifier.padding(12.dp)
+            modifier = Modifier.padding(13.dp)
         )
     }
 }
@@ -179,6 +199,9 @@ private fun LazyListScope.photoSection(
     title: String,
     mediaItems: List<MediaItem>,
     columns: Int,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedBoundsTransform: BoundsTransform? = null,
     onMediaClick: (MediaItem, Rect) -> Unit
 ) {
     if (mediaItems.isEmpty()) {
@@ -190,9 +213,9 @@ private fun LazyListScope.photoSection(
             text = title,
             modifier = Modifier.padding(horizontal = 10.dp),
             style = MaterialTheme.typography.titleLarge.copy(
-                fontSize = 18.sp,
-                lineHeight = 24.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = 22.sp,
+                lineHeight = 28.sp,
+                fontWeight = FontWeight.SemiBold
             ),
             color = MaterialTheme.colorScheme.onBackground
         )
@@ -207,6 +230,9 @@ private fun LazyListScope.photoSection(
             mediaItems = rowItems,
             columns = columns,
             spacing = 1.dp,
+            sharedTransitionScope = sharedTransitionScope,
+            animatedVisibilityScope = animatedVisibilityScope,
+            sharedBoundsTransform = sharedBoundsTransform,
             onMediaClick = onMediaClick
         )
         Spacer(Modifier.height(1.dp))
@@ -242,11 +268,15 @@ private fun LazyListScope.loadingPhotoSections() {
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun PhotoGridRow(
     mediaItems: List<MediaItem>,
     columns: Int,
     spacing: androidx.compose.ui.unit.Dp,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedBoundsTransform: BoundsTransform? = null,
     onMediaClick: (MediaItem, Rect) -> Unit
 ) {
     BoxWithConstraints(
@@ -262,6 +292,10 @@ private fun PhotoGridRow(
                     mediaItem = mediaItem,
                     modifier = Modifier.size(cellSize),
                     cornerRadius = 0.dp,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                    sharedElementKey = "media-${mediaItem.id}",
+                    sharedBoundsTransform = sharedBoundsTransform,
                     onBoundsChanged = { bounds -> mediaBounds = bounds },
                     onClick = { onMediaClick(mediaItem, mediaBounds) }
                 )
@@ -293,4 +327,9 @@ private fun PhotoSkeletonRow(
             }
         }
     }
+}
+
+private fun interpolate(start: Float, end: Float, fraction: Float): Float {
+    val boundedFraction = fraction.coerceIn(0f, 1f)
+    return start + (end - start) * boundedFraction
 }

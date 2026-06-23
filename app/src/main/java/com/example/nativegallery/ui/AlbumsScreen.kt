@@ -1,5 +1,11 @@
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
 package com.example.nativegallery.ui
 
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.BoundsTransform
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -169,7 +175,7 @@ fun AlbumsScreen(
                 }
             }
             Spacer(Modifier.height(22.dp))
-            SearchPill()
+            SearchPill(placeholder = "Search albums")
             if (mediaAccessNotice != null) {
                 Spacer(Modifier.height(18.dp))
                 mediaAccessNotice()
@@ -278,14 +284,20 @@ private fun RecentlyDeletedPill(
             Text(
                 text = "Recently deleted",
                 modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 15.sp,
+                    lineHeight = 19.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
                 text = "View",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
                 color = MaterialTheme.colorScheme.primary
             )
         }
@@ -319,7 +331,11 @@ private fun LayoutSelector(
                 Spacer(Modifier.width(10.dp))
                 Text(
                     text = if (layoutMode == AlbumLayoutMode.BigTiles) "Big tiles" else "Basic",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 13.sp,
+                        lineHeight = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(Modifier.width(8.dp))
@@ -470,14 +486,21 @@ private fun BasicAlbumRow(
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = album.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 15.sp,
+                            lineHeight = 19.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
                         color = MaterialTheme.colorScheme.onBackground,
                         maxLines = 1
                     )
                     Text(
                         text = album.itemCount.toString(),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -489,12 +512,16 @@ private fun BasicAlbumRow(
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun AlbumDetailScreen(
     album: Album,
     mediaItems: List<MediaItem>,
     contentPadding: PaddingValues,
     onBack: () -> Unit,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedBoundsTransform: BoundsTransform? = null,
     onMediaClick: (MediaItem, Rect) -> Unit
 ) {
     var gridMode by rememberSaveable(album.id) { mutableStateOf(AlbumDetailGridMode.Compact) }
@@ -531,6 +558,9 @@ fun AlbumDetailScreen(
                 albumDetailRows(
                     mediaItems = sortedMediaItems,
                     columns = columns,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                    sharedBoundsTransform = sharedBoundsTransform,
                     onMediaClick = onMediaClick
                 )
             }
@@ -592,7 +622,8 @@ private fun AlbumDetailHeader(
                 Text(
                     text = album.name,
                     modifier = Modifier.padding(start = 14.dp),
-                    style = MaterialTheme.typography.headlineLarge.copy(fontSize = 34.sp, lineHeight = 40.sp),
+                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp, lineHeight = 28.sp),
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 1
                 )
@@ -682,6 +713,9 @@ private fun AlbumDetailHeader(
 private fun LazyListScope.albumDetailRows(
     mediaItems: List<MediaItem>,
     columns: Int,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedBoundsTransform: BoundsTransform? = null,
     onMediaClick: (MediaItem, Rect) -> Unit
 ) {
     val spacing = if (columns == 3) 5.dp else 3.dp
@@ -694,6 +728,9 @@ private fun LazyListScope.albumDetailRows(
             mediaItems = rowItems,
             columns = columns,
             spacing = spacing,
+            sharedTransitionScope = sharedTransitionScope,
+            animatedVisibilityScope = animatedVisibilityScope,
+            sharedBoundsTransform = sharedBoundsTransform,
             onMediaClick = onMediaClick
         )
         Spacer(Modifier.height(spacing))
@@ -705,6 +742,9 @@ private fun AlbumDetailRow(
     mediaItems: List<MediaItem>,
     columns: Int,
     spacing: androidx.compose.ui.unit.Dp,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+    sharedBoundsTransform: BoundsTransform? = null,
     onMediaClick: (MediaItem, Rect) -> Unit
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -715,6 +755,10 @@ private fun AlbumDetailRow(
                 MediaThumbnail(
                     mediaItem = mediaItem,
                     modifier = Modifier.size(cellSize),
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                    sharedElementKey = "media-${mediaItem.id}",
+                    sharedBoundsTransform = sharedBoundsTransform,
                     onBoundsChanged = { bounds -> mediaBounds = bounds },
                     onClick = { onMediaClick(mediaItem, mediaBounds) }
                 )
@@ -829,15 +873,21 @@ private fun AlbumImageCard(
             Text(
                 text = album.name,
                 color = Color.White,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Black,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = 18.sp,
+                    lineHeight = 22.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
                 maxLines = 1
             )
             Text(
                 text = "%1$,d".format(album.itemCount),
                 color = Color.White.copy(alpha = 0.92f),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 13.sp,
+                    lineHeight = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             )
         }
     }

@@ -16,6 +16,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 fun Modifier.bouncyClickable(
     enabled: Boolean = true,
     pressedScale: Float = 0.975f,
+    pressDampingRatio: Float = 0.86f,
+    pressStiffness: Float = Spring.StiffnessMedium,
     onClick: () -> Unit
 ): Modifier {
     val interactionSource = remember { MutableInteractionSource() }
@@ -23,8 +25,8 @@ fun Modifier.bouncyClickable(
     val scale by animateFloatAsState(
         targetValue = if (isPressed && enabled) pressedScale else 1f,
         animationSpec = spring(
-            dampingRatio = 0.86f,
-            stiffness = Spring.StiffnessMedium
+            dampingRatio = pressDampingRatio,
+            stiffness = pressStiffness
         ),
         label = "gallery press bounce"
     )
