@@ -154,6 +154,7 @@ fun GalleryApp() {
     val hiddenRepository = remember(context) { HiddenAlbumsRepository(context) }
     val hiddenStates = remember { mutableStateMapOf<String, Boolean>() }
     val recentlyDeletedMedia = remember { mutableStateMapOf<String, RecentlyDeletedMedia>() }
+    val permanentlyDeletedMediaIds = remember { mutableStateMapOf<String, Boolean>() }
     val albumTileBounds = remember { mutableStateMapOf<String, Rect>() }
     val mediaTileBounds = remember { mutableStateMapOf<String, Rect>() }
     val albumDetailGridModes = remember { mutableStateMapOf<String, AlbumDetailGridMode>() }
@@ -215,7 +216,9 @@ fun GalleryApp() {
     }
     val hideableAlbums = hiddenManageableAlbums(
         albums = activeSnapshot.albums,
-        mediaItems = activeSnapshot.mediaItems.filterNot { recentlyDeletedMedia.containsKey(it.id) }
+        mediaItems = activeSnapshot.mediaItems.filterNot {
+            recentlyDeletedMedia.containsKey(it.id) || permanentlyDeletedMediaIds.containsKey(it.id)
+        }
     )
 
     LaunchedEffect(hideableAlbums.map { it.id }) {
@@ -230,7 +233,9 @@ fun GalleryApp() {
     val recentlyDeletedItems = recentlyDeletedMedia.values.sortedByDescending { it.deletedAtMillis }
     val albumNameById = activeSnapshot.albums.associate { it.id to it.name }
     val visibleMedia = visibleMedia(activeSnapshot.mediaItems, hiddenAlbumIds)
-        .filterNot { recentlyDeletedMedia.containsKey(it.id) }
+        .filterNot {
+            recentlyDeletedMedia.containsKey(it.id) || permanentlyDeletedMediaIds.containsKey(it.id)
+        }
     val visibleAlbums = visibleAlbums(
         albums = activeSnapshot.albums,
         allMedia = activeSnapshot.mediaItems,
@@ -242,7 +247,9 @@ fun GalleryApp() {
     val selectedAlbum = visibleAlbums.firstOrNull { it.id == selectedAlbumId }
     val selectedAlbumMedia = selectedAlbum?.let { mediaForAlbum(it, visibleMedia) }.orEmpty()
     val selectedMediaItems = activeSnapshot.mediaItems.filter { mediaItem ->
-        selectedMediaIds.contains(mediaItem.id) && !recentlyDeletedMedia.containsKey(mediaItem.id)
+        selectedMediaIds.contains(mediaItem.id) &&
+            !recentlyDeletedMedia.containsKey(mediaItem.id) &&
+            !permanentlyDeletedMediaIds.containsKey(mediaItem.id)
     }
 
 
@@ -432,9 +439,13 @@ fun GalleryApp() {
 
     fun deleteDeletedMedia(entry: RecentlyDeletedMedia) {
         recentlyDeletedMedia.remove(entry.mediaItem.id)
+        permanentlyDeletedMediaIds[entry.mediaItem.id] = true
     }
 
     fun deleteAllDeletedMedia() {
+        recentlyDeletedMedia.keys.forEach { mediaId ->
+            permanentlyDeletedMediaIds[mediaId] = true
+        }
         recentlyDeletedMedia.clear()
         if (destination == GalleryDestination.RecentlyDeleted && viewerVisible) {
             viewerVisible = false

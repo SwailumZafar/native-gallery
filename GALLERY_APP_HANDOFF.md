@@ -836,3 +836,27 @@ Recommended real-device checks:
 - Tap once on the photo/video to hide controls, then tap again to bring them back.
 - Swipe between photos, then use Android back gesture and confirm the close animation returns toward the current tile.
 - Open an album, then use Android back gesture and confirm the album close animation matches the in-app back button.
+## 2026-06-24 Four-Round Developer / Reviewer / Product Audit
+
+Build verified after this audit:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 2026-06-24 03:17:11 AM
+Size: 18,880,013 bytes
+Build result: passed (:app:assembleDebug)
+Diff check: passed, with only LF/CRLF warnings
+```
+
+Round outcomes:
+
+- Round 1 checked viewer chrome/back behavior. Result: no new code change needed; viewer controls now reset visible on every open, tap toggles controls, and Android back uses `closeViewer()`.
+- Round 2 checked album/navigation transitions. Result: no new code change needed; album Android back and in-app back both use `closeAlbumDetail()` and schedule the close transition before returning to Albums.
+- Round 3 checked search, selection, hidden filtering, and Recently Deleted flows. Result: fixed a product-critical bug where `Delete` from Recently Deleted only removed the item from the bin map, causing it to reappear in the normal gallery. The app now tracks in-session permanently removed media IDs and filters them out of visible media, album counts/covers, hidden album management, and selected media actions.
+- Round 4 verified build/status and kept the user-facing install command as direct ADB.
+
+Install command:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
+```
