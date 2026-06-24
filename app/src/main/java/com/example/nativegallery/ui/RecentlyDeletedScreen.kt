@@ -29,7 +29,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.RecentlyDeletedMedia
 import com.example.nativegallery.ui.components.MediaThumbnail
-import com.example.nativegallery.ui.components.galleryRubberBandOverscroll
 import java.util.concurrent.TimeUnit
 
 @Composable
@@ -44,7 +43,6 @@ fun RecentlyDeletedScreen(
     contentPadding: PaddingValues
 ) {
     LazyColumn(
-        modifier = Modifier.galleryRubberBandOverscroll(),
         contentPadding = PaddingValues(
             start = 18.dp,
             top = 48.dp,

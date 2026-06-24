@@ -51,7 +51,6 @@ import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.SearchPill
-import com.example.nativegallery.ui.components.galleryRubberBandOverscroll
 import com.example.nativegallery.ui.components.SkeletonBlock
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -92,7 +91,6 @@ fun PhotosScreen(
     val headerCollapse = rawHeaderCollapse
 
     LazyColumn(
-        modifier = Modifier.galleryRubberBandOverscroll(),
         state = listState,
         contentPadding = PaddingValues(
             start = 0.dp,

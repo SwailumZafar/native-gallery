@@ -14,14 +14,11 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
-import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDecay
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateOffsetAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -95,7 +92,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -107,7 +103,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import com.example.nativegallery.model.MediaItem
-import com.example.nativegallery.ui.components.GalleryMotionSpec
 import com.example.nativegallery.ui.components.GalleryImage
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaThumbnail
@@ -115,7 +110,6 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -207,7 +201,7 @@ fun PhotoViewerOverlay(
 
     val animatedVerticalDragOffset by animateFloatAsState(
         targetValue = verticalDragOffset,
-        animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness),
+        animationSpec = spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMediumLow),
         label = "viewer dismiss offset"
     )
     val displayedVerticalDragOffset = if (isViewerDragging) {
@@ -313,8 +307,8 @@ fun PhotoViewerOverlay(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .zIndex(3f),
-            enter = fadeIn(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)),
-            exit = fadeOut(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness))
+            enter = fadeIn(animationSpec = tween(90)),
+            exit = fadeOut(animationSpec = tween(90))
         ) {
             ViewerTopBar(onClose = onClose)
         }
@@ -324,13 +318,13 @@ fun PhotoViewerOverlay(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(3f),
-            enter = fadeIn(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)) + slideInVertically(
+            enter = fadeIn(animationSpec = tween(100)) + slideInVertically(
                 initialOffsetY = { it / 3 },
-                animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
+                animationSpec = tween(180, easing = ViewerEnterEasing)
             ),
-            exit = fadeOut(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)) + slideOutVertically(
+            exit = fadeOut(animationSpec = tween(90)) + slideOutVertically(
                 targetOffsetY = { it / 4 },
-                animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
+                animationSpec = tween(140, easing = ViewerExitEasing)
             )
         ) {
             Column(
@@ -374,13 +368,13 @@ fun PhotoViewerOverlay(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(4f),
-            enter = fadeIn(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)) + slideInVertically(
+            enter = fadeIn(animationSpec = tween(120)) + slideInVertically(
                 initialOffsetY = { it / 2 },
-                animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
+                animationSpec = tween(220, easing = ViewerEnterEasing)
             ),
-            exit = fadeOut(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)) + slideOutVertically(
+            exit = fadeOut(animationSpec = tween(100)) + slideOutVertically(
                 targetOffsetY = { it / 3 },
-                animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
+                animationSpec = tween(160, easing = ViewerExitEasing)
             )
         ) {
             MediaDetailsPanel(
@@ -745,16 +739,14 @@ private fun ZoomableViewerMedia(
     var targetScale by remember(mediaItem.id) { mutableStateOf(1f) }
     var targetOffset by remember(mediaItem.id) { mutableStateOf(Offset.Zero) }
     var gestureActive by remember(mediaItem.id) { mutableStateOf(false) }
-    val decay = rememberSplineBasedDecay<Float>()
-    val gestureScope = rememberCoroutineScope()
     val animatedScale by animateFloatAsState(
         targetValue = targetScale,
-        animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness),
+        animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow),
         label = "viewer photo zoom scale"
     )
     val animatedOffset by animateOffsetAsState(
         targetValue = targetOffset,
-        animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness),
+        animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow),
         label = "viewer photo pan offset"
     )
     val displayScale = if (gestureActive) targetScale else animatedScale
@@ -792,25 +784,18 @@ private fun ZoomableViewerMedia(
                     }
                 )
             }
-            .pointerInput(mediaItem.id, decay) {
+            .pointerInput(mediaItem.id) {
                 awaitPointerEventScope {
                     var previousDistance = 0f
                     var previousCentroid = Offset.Zero
-                    var wasTransforming = false
-                    val velocityTracker = VelocityTracker()
                     while (true) {
                         val event = awaitPointerEvent()
                         val pressedChanges = event.changes.filter { it.pressed }
                         if (pressedChanges.size > 1) {
                             gestureActive = true
-                            wasTransforming = true
                             val centroid = pressedChanges
                                 .map { it.position }
                                 .fold(Offset.Zero) { total, position -> total + position } / pressedChanges.size.toFloat()
-                            velocityTracker.addPosition(
-                                timeMillis = event.changes.first().uptimeMillis,
-                                position = centroid
-                            )
                             val distance = pressedChanges
                                 .map { positionDistance(it.position, centroid) }
                                 .average()
@@ -832,37 +817,6 @@ private fun ZoomableViewerMedia(
                             previousDistance = distance
                             previousCentroid = centroid
                         } else {
-                            if (wasTransforming) {
-                                val velocity = velocityTracker.calculateVelocity()
-                                velocityTracker.resetTracking()
-                                wasTransforming = false
-                                val scaleForFling = targetScale
-                                if (scaleForFling > 1.02f && (abs(velocity.x) + abs(velocity.y)) > 80f) {
-                                    val maxPanX = size.width * (scaleForFling - 1f) * 0.5f
-                                    val maxPanY = size.height * (scaleForFling - 1f) * 0.5f
-                                    val flingStart = targetOffset
-                                    gestureScope.launch {
-                                        AnimationState(
-                                            initialValue = flingStart.x,
-                                            initialVelocity = velocity.x
-                                        ).animateDecay(decay) {
-                                            targetOffset = targetOffset.copy(
-                                                x = value.coerceIn(-maxPanX, maxPanX)
-                                            )
-                                        }
-                                    }
-                                    gestureScope.launch {
-                                        AnimationState(
-                                            initialValue = flingStart.y,
-                                            initialVelocity = velocity.y
-                                        ).animateDecay(decay) {
-                                            targetOffset = targetOffset.copy(
-                                                y = value.coerceIn(-maxPanY, maxPanY)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
                             previousDistance = 0f
                             previousCentroid = Offset.Zero
                             if (gestureActive) {
@@ -1138,8 +1092,8 @@ private fun ViewerVideoPlayer(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(3f),
-            enter = fadeIn(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)),
-            exit = fadeOut(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness))
+            enter = fadeIn(animationSpec = tween(120)),
+            exit = fadeOut(animationSpec = tween(140))
         ) {
             Column(
                 modifier = Modifier
