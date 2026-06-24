@@ -36,10 +36,10 @@ F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
 Last verified APK:
 
 ```text
-Last write time: 2026-06-22 7:14:26 PM
+Last write time: 2026-06-24 6:18:35 AM
 Size: 18,880,013 bytes
-Build result: passed
-Install result: not installed in latest attempt because ADB reported no connected devices
+Build result: passed via :app:assembleDebug after the React preview interaction port
+Install result: not installed in this pass; run the direct ADB command below with the phone connected
 ```
 
 Preferred user-facing install command:
@@ -50,7 +50,7 @@ Preferred user-facing install command:
 
 Available helper scripts remain in scripts, but user-facing handoffs should give the direct ADB command above.
 
-Latest install attempt after the 3:57 AM build did not complete because ADB reported no connected devices. Reconnect the phone and run the direct ADB install command above.
+Latest build produced the debug APK above. Reconnect the phone and run the direct ADB install command above.
 
 ## Current Implementation
 
@@ -107,6 +107,14 @@ Completed so far:
 - Album detail and full-screen viewer open/close motion was retuned with shorter, lighter easing.
 - Viewer chrome can be tapped to show/hide while browsing photos or videos.
 - Video viewer controls now include a scrubber, elapsed/total time, and 10-second rewind/forward buttons.
+- React/Vite animation reference in FEATURES.md was reviewed and ported into the native Compose interaction model.
+- Photos now have a rubber-band pull-down refresh gesture with the existing skeleton loading treatment.
+- Photos multi-select now supports drag-select using the first touched tile as add/remove mode.
+- Multi-select now has a fixed bottom share/delete action bar above the bottom navigation.
+- Selected media can be shared through Android's system share sheet.
+- Photo viewer close now fades chrome before dismissing from back/swipe/pinch close paths.
+- Photo double-tap zoom now jumps to 2.8x around the tapped point instead of zooming only from center.
+- Photo pinch can shrink below 1x and release below the close threshold to dismiss the viewer.
 
 Latest user feedback already addressed:
 
@@ -171,6 +179,12 @@ Still to do next:
 - Confirm album open expands from the tapped tile and close returns toward the tile without flashing.
 - Confirm album/nav press bounce feels polished and not distracting.
 - Confirm viewer Delete requests Android permission when needed and advances to the next nearby photo/video in the swipe direction.
+- Confirm pull-down refresh rubber-band and skeleton timing feel natural on the real phone.
+- Confirm drag-select can add and remove across many tiles without re-toggling already crossed photos.
+- Confirm the bottom selected share/delete bar sits above the bottom nav and does not feel cramped.
+- Confirm selected sharing opens Android's share sheet for one and multiple selected items.
+- Confirm photo double-tap zoom centers around the tapped point and 2.8x is not too aggressive.
+- Confirm pinch-to-close and swipe-down close now feel closer to the smoother video dismiss animation.
 - Apply hidden-album filtering more deeply to real MediaStore buckets.
 - Add private/locked albums later as a separate feature.
 

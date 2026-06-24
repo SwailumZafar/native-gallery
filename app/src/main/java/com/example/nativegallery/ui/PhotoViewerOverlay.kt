@@ -149,6 +149,7 @@ fun PhotoViewerOverlay(
     )
     val scope = rememberCoroutineScope()
     var controlsVisible by remember { mutableStateOf(true) }
+    var closeRequested by remember { mutableStateOf(false) }
     var lastSettledPage by rememberSaveable { mutableIntStateOf(selectedIndex) }
     var deleteDirection by rememberSaveable { mutableIntStateOf(1) }
     var verticalDragOffset by remember { mutableStateOf(0f) }
@@ -184,6 +185,7 @@ fun PhotoViewerOverlay(
             detailsVisible = false
             verticalDragOffset = 0f
             detailsDragOffset = 0f
+            closeRequested = false
         }
     }
 
@@ -196,6 +198,17 @@ fun PhotoViewerOverlay(
         }
         runCatching {
             context.startActivity(Intent.createChooser(shareIntent, "Share"))
+        }
+    }
+
+    fun closeViewerWithChromeFade() {
+        if (closeRequested) return
+        closeRequested = true
+        controlsVisible = false
+        detailsVisible = false
+        scope.launch {
+            delay(70)
+            onClose()
         }
     }
 
@@ -243,7 +256,7 @@ fun PhotoViewerOverlay(
                     onDragEnd = {
                         isViewerDragging = false
                         if (verticalDragOffset > dismissThresholdPx * 0.92f) {
-                            onClose()
+                            closeViewerWithChromeFade()
                         } else {
                             if (detailsDragOffset < -detailsThresholdPx) {
                                 detailsVisible = true
@@ -291,6 +304,7 @@ fun PhotoViewerOverlay(
                         activeMediaPlaced = true
                     }
                 },
+                onClose = ::closeViewerWithChromeFade,
                 onToggleControls = {
                     if (detailsVisible) {
                         detailsVisible = false
@@ -310,7 +324,7 @@ fun PhotoViewerOverlay(
             enter = fadeIn(animationSpec = tween(90)),
             exit = fadeOut(animationSpec = tween(90))
         ) {
-            ViewerTopBar(onClose = onClose)
+            ViewerTopBar(onClose = ::closeViewerWithChromeFade)
         }
 
         AnimatedVisibility(
@@ -715,6 +729,7 @@ private fun ZoomableViewerMedia(
     sharedElementKeyPrefix: String? = null,
     isSharedTransitionReady: Boolean,
     onActiveMediaPlaced: () -> Unit,
+    onClose: () -> Unit,
     onToggleControls: () -> Unit
 ) {
     val activeSharedElementKeyPrefix = sharedElementKeyPrefix.takeIf { isActive && isSharedTransitionReady }
@@ -773,13 +788,19 @@ private fun ZoomableViewerMedia(
             .pointerInput(mediaItem.id) {
                 detectTapGestures(
                     onTap = { onToggleControls() },
-                    onDoubleTap = {
+                    onDoubleTap = { tapOffset ->
                         gestureActive = false
                         if (targetScale > 1.05f) {
                             targetScale = 1f
                             targetOffset = Offset.Zero
                         } else {
-                            targetScale = 2.35f
+                            val nextScale = 2.8f
+                            val center = Offset(size.width / 2f, size.height / 2f)
+                            val desiredOffset = (center - tapOffset) * (nextScale - 1f)
+                            val maxPanX = size.width * (nextScale - 1f) * 0.5f
+                            val maxPanY = size.height * (nextScale - 1f) * 0.5f
+                            targetScale = nextScale
+                            targetOffset = desiredOffset.coercePan(maxPanX, maxPanY)
                         }
                     }
                 )
@@ -802,7 +823,7 @@ private fun ZoomableViewerMedia(
                                 .toFloat()
                             if (previousDistance > 0f) {
                                 val zoom = (distance / previousDistance).takeIf { it.isFinite() } ?: 1f
-                                val nextScale = (targetScale * zoom).coerceIn(1f, 5f)
+                                val nextScale = (targetScale * zoom).coerceIn(0.55f, 5f)
                                 val pan = centroid - previousCentroid
                                 val maxPanX = size.width * (nextScale - 1f) * 0.5f
                                 val maxPanY = size.height * (nextScale - 1f) * 0.5f
@@ -822,7 +843,9 @@ private fun ZoomableViewerMedia(
                             if (gestureActive) {
                                 gestureActive = false
                             }
-                            if (targetScale <= 1.02f) {
+                            if (targetScale < 0.62f) {
+                                onClose()
+                            } else if (targetScale <= 1.02f) {
                                 targetScale = 1f
                                 targetOffset = Offset.Zero
                             }

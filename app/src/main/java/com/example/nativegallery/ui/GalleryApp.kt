@@ -3,6 +3,7 @@
 package com.example.nativegallery.ui
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Build
 import android.provider.MediaStore
 import androidx.activity.compose.BackHandler
@@ -429,6 +430,29 @@ fun GalleryApp() {
         selectedMediaIds = emptySet()
     }
 
+    fun shareSelectedMedia() {
+        val shareUris = selectedMediaItems.mapNotNull { it.contentUri }
+        if (shareUris.isEmpty()) return
+
+        val shareIntent = if (shareUris.size == 1) {
+            Intent(Intent.ACTION_SEND).apply {
+                type = selectedMediaItems.firstOrNull()?.let { if (it.isVideo) "video/*" else "image/*" } ?: "*/*"
+                putExtra(Intent.EXTRA_STREAM, shareUris.first())
+            }
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = if (selectedMediaItems.any { it.isVideo }) "*/*" else "image/*"
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(shareUris))
+            }
+        }.apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        runCatching {
+            context.startActivity(Intent.createChooser(shareIntent, "Share"))
+        }
+    }
+
     fun restoreDeletedMedia(entry: RecentlyDeletedMedia) {
         recentlyDeletedMedia.remove(entry.mediaItem.id)
     }
@@ -572,6 +596,7 @@ fun GalleryApp() {
                                                 onSelectionClear = ::clearMediaSelection,
                                                 onSelectAllVisible = { selectMedia(searchedVisibleMedia) },
                                                 onDeleteSelected = ::deleteSelectedMedia,
+                                                onShareSelected = ::shareSelectedMedia,
                                                 sharedTransitionScope = sharedTransitionScope,
                                                 animatedVisibilityScope = galleryVisibilityScope,
                                                 sharedBoundsTransform = GalleryMediaBoundsTransform,
