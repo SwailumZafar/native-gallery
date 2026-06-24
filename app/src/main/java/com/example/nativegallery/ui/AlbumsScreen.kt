@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -98,6 +99,8 @@ fun AlbumsScreen(
     onLayoutModeChange: (AlbumLayoutMode) -> Unit,
     onOpenHiddenItems: () -> Unit,
     onOpenRecentlyDeleted: () -> Unit,
+    hiddenAlbumCount: Int = 0,
+    hiddenItemCount: Int = 0,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit,
     contentPadding: PaddingValues,
@@ -168,6 +171,10 @@ fun AlbumsScreen(
                         )
                         DropdownMenuItem(
                             text = { Text("Hidden items") },
+                            leadingIcon = { Icon(Icons.Filled.Security, contentDescription = null) },
+                            trailingIcon = {
+                                if (hiddenAlbumCount > 0) Text("%1$,d".format(hiddenAlbumCount))
+                            },
                             onClick = {
                                 overflowExpanded = false
                                 onOpenHiddenItems()
@@ -249,6 +256,14 @@ fun AlbumsScreen(
             )
         }
         if (!isLoading) {
+            item(key = "hidden-items-pill", contentType = "album-list-action") {
+                Spacer(Modifier.height(10.dp))
+                HiddenItemsPill(
+                    hiddenAlbumCount = hiddenAlbumCount,
+                    hiddenItemCount = hiddenItemCount,
+                    onClick = onOpenHiddenItems
+                )
+            }
             item(key = "recently-deleted-pill", contentType = "album-list-action") {
                 Spacer(Modifier.height(10.dp))
                 RecentlyDeletedPill(onClick = onOpenRecentlyDeleted)
@@ -280,6 +295,66 @@ fun AlbumsScreen(
                 }
             }
         )
+    }
+}
+
+
+@Composable
+private fun HiddenItemsPill(
+    hiddenAlbumCount: Int,
+    hiddenItemCount: Int,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .bouncyClickable(onClick = onClick),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+        shape = RoundedCornerShape(34.dp),
+        shadowElevation = 1.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 22.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Security,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Hidden items",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 15.sp,
+                        lineHeight = 19.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = hiddenItemsPillLabel(hiddenAlbumCount, hiddenItemCount),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 12.5.sp,
+                        lineHeight = 16.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = "Manage",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
     }
 }
 
@@ -567,6 +642,7 @@ fun AlbumDetailScreen(
     onSelectionClear: () -> Unit = {},
     onSelectAllVisible: () -> Unit = {},
     onDeleteSelected: () -> Unit = {},
+    onHideAlbum: (() -> Unit)? = null,
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
     var sortMode by rememberSaveable(album.id) { mutableStateOf(AlbumDetailSortMode.Newest) }
@@ -649,6 +725,7 @@ fun AlbumDetailScreen(
                 onSelectionClear = onSelectionClear,
                 onSelectAllVisible = onSelectAllVisible,
                 onDeleteSelected = onDeleteSelected,
+                onHideAlbum = onHideAlbum,
                 onBack = onBack,
                 modifier = Modifier.padding(start = 10.dp, top = 42.dp, end = 10.dp, bottom = 14.dp)
             )
@@ -669,6 +746,7 @@ private fun AlbumDetailHeader(
     onSelectionClear: () -> Unit,
     onSelectAllVisible: () -> Unit,
     onDeleteSelected: () -> Unit,
+    onHideAlbum: (() -> Unit)?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -767,6 +845,16 @@ private fun AlbumDetailHeader(
                             menuExpanded = false
                         }
                     )
+                    if (onHideAlbum != null && !album.isAllPhotos) {
+                        DropdownMenuItem(
+                            text = { Text("Hide album") },
+                            leadingIcon = { Icon(Icons.Filled.Security, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onHideAlbum()
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -1064,5 +1152,13 @@ private fun AlbumDetailGridMode.label(): String {
     return when (this) {
         AlbumDetailGridMode.Compact -> "Compact"
         AlbumDetailGridMode.Comfortable -> "Comfortable"
+    }
+}
+
+private fun hiddenItemsPillLabel(hiddenAlbumCount: Int, hiddenItemCount: Int): String {
+    return if (hiddenAlbumCount > 0) {
+        "%1$,d albums, %2$,d items hidden".format(hiddenAlbumCount, hiddenItemCount)
+    } else {
+        "Choose albums to hide"
     }
 }

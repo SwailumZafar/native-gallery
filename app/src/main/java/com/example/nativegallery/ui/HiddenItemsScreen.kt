@@ -1,4 +1,4 @@
-﻿package com.example.nativegallery.ui
+package com.example.nativegallery.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,11 +29,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.Album
 import com.example.nativegallery.ui.components.ResourceImage
+import com.example.nativegallery.ui.components.bouncyClickable
 
 @Composable
 fun HiddenItemsScreen(
     albums: List<Album>,
     hiddenStates: SnapshotStateMap<String, Boolean>,
+    hiddenAlbumCount: Int,
+    hiddenItemCount: Int,
     onBack: () -> Unit,
     onHiddenChange: (Album, Boolean) -> Unit,
     contentPadding: PaddingValues
@@ -68,17 +70,21 @@ fun HiddenItemsScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                 }
-                IconButton(onClick = {}) {
-                    Icon(
-                        imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "More options",
-                        tint = MaterialTheme.colorScheme.onBackground
+                Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Text(
+                        text = hiddenItemsBadgeLabel(hiddenAlbumCount),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
             Spacer(Modifier.height(30.dp))
             Text(
-                text = "Choose albums to hide from Photos and Albums.",
+                text = hiddenItemsSummary(hiddenAlbumCount, hiddenItemCount),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -122,6 +128,7 @@ private fun HiddenAlbumRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .bouncyClickable { onCheckedChange(!checked) }
             .padding(horizontal = 22.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -145,7 +152,7 @@ private fun HiddenAlbumRow(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "%,d items".format(album.itemCount),
+                text = hiddenAlbumRowLabel(album.itemCount, checked),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -163,3 +170,23 @@ private fun HiddenAlbumRow(
     }
 }
 
+
+private fun hiddenItemsSummary(hiddenAlbumCount: Int, hiddenItemCount: Int): String {
+    return if (hiddenAlbumCount > 0) {
+        "%1$,d albums and %2$,d items are hidden from Photos and Albums.".format(hiddenAlbumCount, hiddenItemCount)
+    } else {
+        "Choose albums to hide from Photos and Albums."
+    }
+}
+
+private fun hiddenItemsBadgeLabel(hiddenAlbumCount: Int): String {
+    return if (hiddenAlbumCount > 0) "%1$,d hidden".format(hiddenAlbumCount) else "None"
+}
+
+private fun hiddenAlbumRowLabel(itemCount: Int, checked: Boolean): String {
+    return if (checked) {
+        "Hidden, %1$,d items".format(itemCount)
+    } else {
+        "%1$,d items".format(itemCount)
+    }
+}

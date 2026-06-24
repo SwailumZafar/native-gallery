@@ -36,9 +36,9 @@ F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
 Last verified APK:
 
 ```text
-Last write time: 2026-06-24 6:18:35 AM
+Last write time: 2026-06-24 7:01:46 AM
 Size: 18,880,013 bytes
-Build result: passed via :app:assembleDebug after the React preview interaction port
+Build result: passed via :app:assembleDebug after the hidden-album feature pass
 Install result: not installed in this pass; run the direct ADB command below with the phone connected
 ```
 
@@ -115,6 +115,10 @@ Completed so far:
 - Photo viewer close now fades chrome before dismissing from back/swipe/pinch close paths.
 - Photo double-tap zoom now jumps to 2.8x around the tapped point instead of zooming only from center.
 - Photo pinch can shrink below 1x and release below the close threshold to dismiss the viewer.
+- Hidden album behavior now uses one available-media pipeline so hidden buckets are removed from Photos, Albums, selection state, and active viewer lists.
+- Albums now shows a Hidden items management pill with hidden album/item counts.
+- Album detail overflow now includes Hide album for regular albums.
+- Hidden items now shows a summary badge and supports row-tap plus switch toggling for hide/unhide.
 
 Latest user feedback already addressed:
 
@@ -151,6 +155,7 @@ Latest user feedback already addressed:
 - Album opening/closing now uses a touch-origin container overlay that expands from and returns toward the tapped album tile.
 - Album cards and bottom navigation now use a small press-bounce micro-interaction.
 - Viewer overflow now includes Delete; after deletion, the viewer moves to the next nearby item based on swipe direction.
+- Hidden album feature was expanded from a settings toggle into a visible Albums entry plus album-detail Hide album action.
 
 Still to do next:
 
@@ -185,7 +190,9 @@ Still to do next:
 - Confirm selected sharing opens Android's share sheet for one and multiple selected items.
 - Confirm photo double-tap zoom centers around the tapped point and 2.8x is not too aggressive.
 - Confirm pinch-to-close and swipe-down close now feel closer to the smoother video dismiss animation.
-- Apply hidden-album filtering more deeply to real MediaStore buckets.
+- Confirm hiding an album from Album detail returns to Albums and removes that album from Photos/Albums/search/viewer.
+- Confirm Hidden items row tap and switch both hide/unhide albums without double toggling on the real device.
+- Confirm hidden album/item counts update immediately after toggling.
 - Add private/locked albums later as a separate feature.
 
 ## Product Direction

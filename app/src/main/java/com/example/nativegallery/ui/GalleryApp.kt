@@ -215,17 +215,19 @@ fun GalleryApp() {
         mediaAccess.hasAccess && !mediaStoreSnapshot?.mediaItems.isNullOrEmpty() -> mediaStoreSnapshot ?: fakeSnapshot
         else -> fakeSnapshot
     }
+    val availableMedia = activeSnapshot.mediaItems.filterNot {
+        recentlyDeletedMedia.containsKey(it.id) || permanentlyDeletedMediaIds.containsKey(it.id)
+    }
     val hideableAlbums = hiddenManageableAlbums(
         albums = activeSnapshot.albums,
-        mediaItems = activeSnapshot.mediaItems.filterNot {
-            recentlyDeletedMedia.containsKey(it.id) || permanentlyDeletedMediaIds.containsKey(it.id)
-        }
+        mediaItems = availableMedia
     )
 
     LaunchedEffect(hideableAlbums.map { it.id }) {
+        val savedHiddenAlbumIds = hiddenRepository.initialHiddenAlbumIds()
         hideableAlbums.forEach { album ->
             if (!hiddenStates.containsKey(album.id)) {
-                hiddenStates[album.id] = hiddenRepository.initialHiddenAlbumIds().contains(album.id)
+                hiddenStates[album.id] = savedHiddenAlbumIds.contains(album.id)
             }
         }
     }
@@ -233,13 +235,13 @@ fun GalleryApp() {
     val hiddenAlbumIds = hiddenStates.filterValues { it }.keys.toSet()
     val recentlyDeletedItems = recentlyDeletedMedia.values.sortedByDescending { it.deletedAtMillis }
     val albumNameById = activeSnapshot.albums.associate { it.id to it.name }
-    val visibleMedia = visibleMedia(activeSnapshot.mediaItems, hiddenAlbumIds)
-        .filterNot {
-            recentlyDeletedMedia.containsKey(it.id) || permanentlyDeletedMediaIds.containsKey(it.id)
-        }
+    val hiddenMedia = availableMedia.filter { hiddenAlbumIds.contains(it.albumId) }
+    val visibleMedia = visibleMedia(availableMedia, hiddenAlbumIds)
+    val hiddenAlbumCount = hideableAlbums.count { hiddenAlbumIds.contains(it.id) }
+    val hiddenItemCount = hiddenMedia.size
     val visibleAlbums = visibleAlbums(
         albums = activeSnapshot.albums,
-        allMedia = activeSnapshot.mediaItems,
+        allMedia = availableMedia,
         visibleMedia = visibleMedia,
         hiddenAlbumIds = hiddenAlbumIds
     )
@@ -247,19 +249,25 @@ fun GalleryApp() {
     val searchedVisibleAlbums = searchAlbums(visibleAlbums, visibleMedia, gallerySearchQuery)
     val selectedAlbum = visibleAlbums.firstOrNull { it.id == selectedAlbumId }
     val selectedAlbumMedia = selectedAlbum?.let { mediaForAlbum(it, visibleMedia) }.orEmpty()
-    val selectedMediaItems = activeSnapshot.mediaItems.filter { mediaItem ->
-        selectedMediaIds.contains(mediaItem.id) &&
-            !recentlyDeletedMedia.containsKey(mediaItem.id) &&
-            !permanentlyDeletedMediaIds.containsKey(mediaItem.id)
+    val selectedMediaItems = visibleMedia.filter { mediaItem ->
+        selectedMediaIds.contains(mediaItem.id)
     }
 
-
-    LaunchedEffect(visibleMedia.map { it.id }) {
+    LaunchedEffect(visibleMedia.map { it.id }, destination, viewerMediaItem?.id) {
         val visibleIds = visibleMedia.map { it.id }.toSet()
         if (selectedMediaIds.any { it !in visibleIds }) {
             selectedMediaIds = selectedMediaIds.intersect(visibleIds)
         }
+        if (destination != GalleryDestination.RecentlyDeleted) {
+            if (viewerVisible && viewerMediaItem?.id !in visibleIds) {
+                viewerVisible = false
+            }
+            if (viewerMediaItems.any { it.id !in visibleIds }) {
+                viewerMediaItems = viewerMediaItems.filter { it.id in visibleIds }
+            }
+        }
     }
+
     fun openPhotos() {
         selectedMediaIds = emptySet()
         selectedTab = GalleryTab.Photos
@@ -276,6 +284,32 @@ fun GalleryApp() {
         selectedMediaIds = emptySet()
         selectedTab = GalleryTab.Albums
         destination = GalleryDestination.RecentlyDeleted
+    }
+
+    fun updateAlbumHidden(album: Album, hidden: Boolean) {
+        if (album.isAllPhotos) return
+        hiddenStates[album.id] = hidden
+        hiddenRepository.setAlbumHidden(album.id, hidden)
+
+        if (hidden) {
+            val hiddenMediaIds = availableMedia
+                .filter { it.albumId == album.id }
+                .map { it.id }
+                .toSet()
+            selectedMediaIds = selectedMediaIds - hiddenMediaIds
+            viewerMediaItems = viewerMediaItems.filterNot { it.albumId == album.id }
+            if (destination != GalleryDestination.RecentlyDeleted && viewerMediaItem?.albumId == album.id) {
+                viewerVisible = false
+            }
+            if (selectedAlbumId == album.id) {
+                selectedAlbumId = null
+            }
+        }
+    }
+
+    fun hideAlbumAndReturn(album: Album) {
+        updateAlbumHidden(album, true)
+        openAlbums()
     }
 
     fun startAlbumOpen(album: Album, bounds: Rect) {
@@ -617,6 +651,8 @@ fun GalleryApp() {
                                                 onLayoutModeChange = { albumLayoutMode = it },
                                                 onOpenHiddenItems = { destination = GalleryDestination.HiddenItems },
                                                 onOpenRecentlyDeleted = ::openRecentlyDeleted,
+                                                hiddenAlbumCount = hiddenAlbumCount,
+                                                hiddenItemCount = hiddenItemCount,
                                                 onAlbumClick = { album, bounds -> startAlbumOpen(album, bounds) },
                                                 onAlbumBoundsChanged = { album, bounds ->
                                                     if (bounds != Rect.Zero) {
@@ -658,6 +694,7 @@ fun GalleryApp() {
                                         onSelectionClear = ::clearMediaSelection,
                                         onSelectAllVisible = { selectMedia(selectedAlbumMedia) },
                                         onDeleteSelected = ::deleteSelectedMedia,
+                                        onHideAlbum = { hideAlbumAndReturn(selectedAlbum) },
                                         onMediaClick = { mediaItem, bounds, sharedElementKey, sharedElementKeyPrefix ->
                                             startViewerOpen(
                                                 mediaItem = mediaItem,
@@ -673,10 +710,11 @@ fun GalleryApp() {
                             GalleryDestination.HiddenItems -> HiddenItemsScreen(
                                 albums = hideableAlbums,
                                 hiddenStates = hiddenStates,
+                                hiddenAlbumCount = hiddenAlbumCount,
+                                hiddenItemCount = hiddenItemCount,
                                 onBack = ::openAlbums,
                                 onHiddenChange = { album, hidden ->
-                                    hiddenStates[album.id] = hidden
-                                    hiddenRepository.setAlbumHidden(album.id, hidden)
+                                    updateAlbumHidden(album, hidden)
                                 },
                                 contentPadding = PaddingValues()
                             )
