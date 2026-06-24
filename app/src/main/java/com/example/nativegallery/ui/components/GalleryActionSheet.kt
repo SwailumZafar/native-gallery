@@ -55,8 +55,8 @@ fun GalleryActionSheet(
 ) {
     AnimatedVisibility(
         visible = visible,
-        enter = fadeIn(animationSpec = tween(100)),
-        exit = fadeOut(animationSpec = tween(120))
+        enter = fadeIn(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)),
+        exit = fadeOut(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness))
     ) {
         Box(
             modifier = Modifier
@@ -69,17 +69,17 @@ fun GalleryActionSheet(
                 visible = visible,
                 enter = slideInVertically(
                     initialOffsetY = { it / 2 },
-                    animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMedium)
+                    animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
                 ) + fadeIn() + scaleIn(
                     initialScale = 0.96f,
-                    animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMedium)
+                    animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
                 ),
                 exit = slideOutVertically(
                     targetOffsetY = { it / 3 },
-                    animationSpec = spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMedium)
-                ) + fadeOut(animationSpec = tween(100)) + scaleOut(
+                    animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
+                ) + fadeOut(animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)) + scaleOut(
                     targetScale = 0.985f,
-                    animationSpec = spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMedium)
+                    animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
                 )
             ) {
                 Surface(

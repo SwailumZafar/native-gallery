@@ -1,4 +1,4 @@
-﻿package com.example.nativegallery.ui
+package com.example.nativegallery.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.Album
 import com.example.nativegallery.ui.components.ResourceImage
+import com.example.nativegallery.ui.components.galleryRubberBandOverscroll
 
 @Composable
 fun HiddenItemsScreen(
@@ -40,6 +41,7 @@ fun HiddenItemsScreen(
     contentPadding: PaddingValues
 ) {
     LazyColumn(
+        modifier = Modifier.galleryRubberBandOverscroll(),
         contentPadding = PaddingValues(
             start = 18.dp,
             top = 48.dp,

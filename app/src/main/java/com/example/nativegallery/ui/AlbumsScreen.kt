@@ -8,6 +8,7 @@ import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -71,12 +72,14 @@ import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.Album
 import com.example.nativegallery.model.AlbumLayoutMode
 import com.example.nativegallery.model.MediaItem
+import com.example.nativegallery.ui.components.GalleryMotionSpec
 import com.example.nativegallery.ui.components.HeaderActionButton
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.bouncyClickable
 import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
 import com.example.nativegallery.ui.components.SearchPill
+import com.example.nativegallery.ui.components.galleryRubberBandOverscroll
 import com.example.nativegallery.ui.components.SkeletonBlock
 import kotlinx.coroutines.delay
 
@@ -122,6 +125,7 @@ fun AlbumsScreen(
     val regularAlbums = sortedAlbums.filterNot { it.isAllPhotos }
 
     LazyColumn(
+        modifier = Modifier.galleryRubberBandOverscroll(),
         contentPadding = PaddingValues(
             start = 18.dp,
             top = 58.dp,
@@ -587,13 +591,15 @@ fun AlbumDetailScreen(
     }
     val contentProgress by animateFloatAsState(
         targetValue = if (contentEntered) 1f else 0f,
-        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness),
         label = "album detail content reveal"
     )
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            modifier = Modifier.graphicsLayer {
+            modifier = Modifier
+                .galleryRubberBandOverscroll()
+                .graphicsLayer {
                 alpha = contentProgress
                 translationY = (1f - contentProgress) * 42f
             },

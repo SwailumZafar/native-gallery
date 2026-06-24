@@ -860,3 +860,35 @@ Install command:
 ```powershell
 & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
 ```
+## 2026-06-24 OEM Motion Stack Experiment
+
+Build verified after this pass:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 2026-06-24 05:41:53 AM
+Size: 18,880,013 bytes
+Build result: passed (:app:assembleDebug)
+Diff check: passed, with only LF/CRLF warnings
+```
+
+Implemented as an experiment from the user's OEM-motion checklist:
+
+- Added shared motion constants in `GalleryMotionSpec` with `dampingRatio = 0.75f` and `stiffness = 300f`.
+- Changed the gallery press bounce defaults to the shared spring and `0.95f` pressed scale.
+- Changed shared media bounds transitions from tween timing to spring physics.
+- Changed album open/close overlay, bottom nav indicator, bottom nav color, action sheet, viewer chrome, viewer details, video controls, and album detail reveal to use the shared spring config.
+- Added `galleryRubberBandOverscroll(...)` and applied it to Photos, Albums, Album detail, Hidden items, and Recently Deleted lists.
+- Added velocity tracking and spline decay to zoomed photo pan gestures so pinch/pan release carries momentum.
+- Kept the shimmer skeleton sweep as a linear tween because it is a loading shader sweep, not direct user motion.
+- Did not migrate to Coil 3 in this pass; the app still uses its existing custom bitmap loader and memory cache so the experiment stays focused and build-verifiable without adding a new dependency stack.
+
+Revert note:
+
+- This pass should stay as its own commit so it can be reverted cleanly if the on-device feel is worse than the previous version.
+
+Install command:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
+```

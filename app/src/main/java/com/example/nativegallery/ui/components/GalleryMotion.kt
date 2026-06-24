@@ -13,13 +13,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 
+object GalleryMotionSpec {
+    const val DampingRatio = 0.75f
+    const val Stiffness = 300f
+    const val PressedScale = 0.95f
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun Modifier.bouncyClickable(
     enabled: Boolean = true,
-    pressedScale: Float = 0.975f,
-    pressDampingRatio: Float = 0.86f,
-    pressStiffness: Float = Spring.StiffnessMedium,
+    pressedScale: Float = GalleryMotionSpec.PressedScale,
+    pressDampingRatio: Float = GalleryMotionSpec.DampingRatio,
+    pressStiffness: Float = GalleryMotionSpec.Stiffness,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ): Modifier {

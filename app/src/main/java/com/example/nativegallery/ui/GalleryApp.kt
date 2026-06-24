@@ -92,6 +92,7 @@ import com.example.nativegallery.model.Album
 import com.example.nativegallery.model.AlbumLayoutMode
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.model.RecentlyDeletedMedia
+import com.example.nativegallery.ui.components.GalleryMotionSpec
 import com.example.nativegallery.ui.components.MediaAccessNotice
 import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.bouncyClickable
@@ -143,7 +144,7 @@ private data class AlbumTransitionSpec(
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 private val GalleryMediaBoundsTransform = BoundsTransform { _, _ ->
-    tween(durationMillis = 300, easing = FastOutSlowInEasing)
+    spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
 }
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalSharedTransitionApi::class)
@@ -323,7 +324,7 @@ fun GalleryApp() {
             if (mainPagerState.currentPage != targetPage) {
                 mainPagerState.animateScrollToPage(
                     page = targetPage,
-                    animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow)
+                    animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
                 )
             }
         }
@@ -543,8 +544,8 @@ fun GalleryApp() {
                                 val tabFlingBehavior = PagerDefaults.flingBehavior(
                                     state = mainPagerState,
                                     snapAnimationSpec = spring(
-                                        dampingRatio = 0.78f,
-                                        stiffness = Spring.StiffnessMediumLow
+                                        dampingRatio = GalleryMotionSpec.DampingRatio,
+                                        stiffness = GalleryMotionSpec.Stiffness
                                     )
                                 )
                                 HorizontalPager(
@@ -1021,7 +1022,7 @@ private fun AlbumTouchOriginTransitionOverlay(
     LaunchedEffect(transition.key) {
         progress.animateTo(
             targetValue = if (transition.mode == AlbumTransitionMode.Closing) 0f else 1f,
-            animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+            animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness)
         )
         onFinished(transition)
     }
@@ -1149,7 +1150,7 @@ private fun GalleryBottomBar(
                     val tabStepPx = with(density) { (tabWidth + tabGap).toPx() }
                     val indicatorProgress by animateFloatAsState(
                         targetValue = selectedTab.pageIndex().toFloat(),
-                        animationSpec = spring(dampingRatio = 0.77f, stiffness = 380f),
+                        animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness),
                         label = "bottom nav pill progress"
                     )
 
@@ -1211,16 +1212,16 @@ private fun GalleryNavigationItem(
     val inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
     val color by animateColorAsState(
         targetValue = if (selected) activeColor else inactiveColor,
-        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        animationSpec = spring(dampingRatio = GalleryMotionSpec.DampingRatio, stiffness = GalleryMotionSpec.Stiffness),
         label = "bottom nav item color"
     )
 
     Column(
         modifier = modifier
             .bouncyClickable(
-                pressedScale = 0.9f,
-                pressDampingRatio = 0.67f,
-                pressStiffness = 500f,
+                pressedScale = GalleryMotionSpec.PressedScale,
+                pressDampingRatio = GalleryMotionSpec.DampingRatio,
+                pressStiffness = GalleryMotionSpec.Stiffness,
                 onClick = onClick
             )
             .padding(horizontal = 22.dp, vertical = 10.dp),
