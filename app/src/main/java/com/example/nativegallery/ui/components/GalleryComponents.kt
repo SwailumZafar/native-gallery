@@ -407,7 +407,7 @@ fun SkeletonBlock(
         initialValue = -420f,
         targetValue = 840f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1350, easing = LinearEasing)
+            animation = tween(durationMillis = GalleryMotion.SkeletonShimmerMillis, easing = LinearEasing)
         ),
         label = "skeleton shimmer offset"
     )
@@ -492,6 +492,41 @@ fun VideoBadge(
     }
 }
 
+suspend fun prefetchMediaThumbnails(
+    context: Context,
+    mediaItems: List<MediaItem>,
+    thumbnailSizes: List<Int> = listOf(384, 512),
+    maxItems: Int = 96
+) {
+    if (mediaItems.isEmpty()) return
+    val appContext = context.applicationContext
+    val sizes = thumbnailSizes
+        .filter { it > 0 }
+        .distinct()
+        .ifEmpty { listOf(384) }
+
+    withContext(Dispatchers.IO) {
+        mediaItems.asSequence()
+            .mapNotNull { it.contentUri }
+            .distinct()
+            .take(maxItems)
+            .forEach { uri ->
+                sizes.forEach { size ->
+                    val cacheKey = ThumbnailMemoryCache.key(uri, size)
+                    if (ThumbnailMemoryCache.get(cacheKey) == null) {
+                        val loadedBitmap = if (size >= 1024) {
+                            loadHighQualityBitmap(appContext, uri, size) ?: loadThumbnail(appContext, uri, size)
+                        } else {
+                            loadThumbnail(appContext, uri, size)
+                        }
+                        loadedBitmap?.let { bitmap ->
+                            ThumbnailMemoryCache.put(cacheKey, bitmap)
+                        }
+                    }
+                }
+            }
+    }
+}
 @Composable
 private fun rememberContentUriBitmap(
     imageUri: Uri?,

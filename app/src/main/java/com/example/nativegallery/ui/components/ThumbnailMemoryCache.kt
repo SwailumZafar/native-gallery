@@ -5,7 +5,9 @@ import android.net.Uri
 import android.util.LruCache
 
 object ThumbnailMemoryCache {
-    private const val MaxCacheKilobytes = 48 * 1024
+    private val MaxCacheKilobytes = ((Runtime.getRuntime().maxMemory() / 1024L) / 6L)
+        .coerceIn(48L * 1024L, 128L * 1024L)
+        .toInt()
 
     private val cache = object : LruCache<String, Bitmap>(MaxCacheKilobytes) {
         override fun sizeOf(key: String, value: Bitmap): Int {

@@ -49,6 +49,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -73,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
+import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
@@ -82,7 +84,7 @@ private enum class DragSelectMode {
     Remove
 }
 
-private const val RefreshSkeletonMillis = 1600L
+private val RefreshSkeletonMillis = GalleryMotion.SkeletonVisibleMillis
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -100,6 +102,7 @@ fun PhotosScreen(
     onSelectAllVisible: () -> Unit = {},
     onDeleteSelected: () -> Unit = {},
     onShareSelected: () -> Unit = {},
+    onHideSelected: () -> Unit = {},
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
@@ -128,7 +131,7 @@ fun PhotosScreen(
     var localRefreshing by remember { mutableStateOf(false) }
     val isSelectionMode = selectedMediaIds.isNotEmpty()
     val showLoading = isLoading || localRefreshing
-    val pullThresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
+    val pullThresholdPx = with(LocalDensity.current) { GalleryMotion.PullThresholdDp.dp.toPx() }
     val refreshProgress = (pullDistance / pullThresholdPx).coerceIn(0f, 1f)
 
     LaunchedEffect(localRefreshing) {
@@ -227,7 +230,8 @@ fun PhotosScreen(
                     totalVisibleCount = mediaItems.size,
                     onSelectionClear = onSelectionClear,
                     onSelectAllVisible = onSelectAllVisible,
-                    onDeleteSelected = onDeleteSelected
+                    onDeleteSelected = onDeleteSelected,
+                    onHideSelected = onHideSelected
                 )
             }
 
@@ -271,6 +275,7 @@ fun PhotosScreen(
             selectedCount = selectedMediaIds.size,
             contentPadding = contentPadding,
             onShare = onShareSelected,
+            onHide = onHideSelected,
             onDelete = onDeleteSelected,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -288,7 +293,8 @@ private fun PicturesHeader(
     totalVisibleCount: Int,
     onSelectionClear: () -> Unit,
     onSelectAllVisible: () -> Unit,
-    onDeleteSelected: () -> Unit
+    onDeleteSelected: () -> Unit,
+    onHideSelected: () -> Unit
 ) {
     val progress = collapseProgress.coerceIn(0f, 1f)
     val topPadding = interpolate(96f, 34f, progress).dp
@@ -355,7 +361,8 @@ private fun PicturesHeader(
                 totalVisibleCount = totalVisibleCount,
                 onClear = onSelectionClear,
                 onSelectAll = onSelectAllVisible,
-                onDelete = onDeleteSelected
+                onDelete = onDeleteSelected,
+                onHide = onHideSelected
             )
         }
         if (mediaAccessNotice != null) {
@@ -389,7 +396,8 @@ private fun SelectionToolbar(
     totalVisibleCount: Int,
     onClear: () -> Unit,
     onSelectAll: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onHide: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -419,6 +427,13 @@ private fun SelectionToolbar(
                 onClick = onSelectAll
             ) {
                 Text("Select all")
+            }
+            IconButton(onClick = onHide) {
+                Icon(
+                    imageVector = Icons.Filled.Lock,
+                    contentDescription = "Hide selected",
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
             IconButton(onClick = onDelete) {
                 Icon(
@@ -468,14 +483,15 @@ private fun SelectionBottomActionBar(
     selectedCount: Int,
     contentPadding: PaddingValues,
     onShare: () -> Unit,
+    onHide: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
         visible = visible,
         modifier = modifier,
-        enter = fadeIn(animationSpec = tween(100)) + slideInVertically(initialOffsetY = { it + 120 }),
-        exit = fadeOut(animationSpec = tween(90)) + slideOutVertically(targetOffsetY = { it + 120 })
+        enter = fadeIn(animationSpec = tween(100)) + slideInVertically(initialOffsetY = { it + GalleryMotion.BottomSelectionOffsetPx }),
+        exit = fadeOut(animationSpec = tween(GalleryMotion.ViewerChromeFadeMillis)) + slideOutVertically(targetOffsetY = { it + GalleryMotion.BottomSelectionOffsetPx })
     ) {
         Surface(
             modifier = Modifier
@@ -504,6 +520,13 @@ private fun SelectionBottomActionBar(
                     Icon(
                         imageVector = Icons.Filled.Share,
                         contentDescription = "Share selected",
+                        tint = if (selectedCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                }
+                IconButton(enabled = selectedCount > 0, onClick = onHide) {
+                    Icon(
+                        imageVector = Icons.Filled.Lock,
+                        contentDescription = "Hide selected",
                         tint = if (selectedCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )
                 }

@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Movie
@@ -104,6 +105,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryImage
+import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaThumbnail
 import java.util.Locale
@@ -127,6 +129,7 @@ fun PhotoViewerOverlay(
     visible: Boolean,
     onClose: () -> Unit,
     onDelete: (MediaItem, Int) -> Unit,
+    onHide: (MediaItem, Int) -> Unit = { _, _ -> },
     onCurrentMediaChanged: (MediaItem) -> Unit = {},
     albumNameForMedia: (MediaItem) -> String? = { null },
     sharedTransitionScope: SharedTransitionScope? = null,
@@ -207,14 +210,17 @@ fun PhotoViewerOverlay(
         controlsVisible = false
         detailsVisible = false
         scope.launch {
-            delay(70)
+            delay(GalleryMotion.ViewerChromeCloseDelayMillis)
             onClose()
         }
     }
 
     val animatedVerticalDragOffset by animateFloatAsState(
         targetValue = verticalDragOffset,
-        animationSpec = spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMediumLow),
+        animationSpec = spring(
+            dampingRatio = GalleryMotion.ViewerDismissDamping,
+            stiffness = GalleryMotion.ViewerDismissStiffness
+        ),
         label = "viewer dismiss offset"
     )
     val displayedVerticalDragOffset = if (isViewerDragging) {
@@ -334,11 +340,11 @@ fun PhotoViewerOverlay(
                 .zIndex(3f),
             enter = fadeIn(animationSpec = tween(100)) + slideInVertically(
                 initialOffsetY = { it / 3 },
-                animationSpec = tween(180, easing = ViewerEnterEasing)
+                animationSpec = tween(GalleryMotion.ViewerActionEnterMillis, easing = ViewerEnterEasing)
             ),
             exit = fadeOut(animationSpec = tween(90)) + slideOutVertically(
                 targetOffsetY = { it / 4 },
-                animationSpec = tween(140, easing = ViewerExitEasing)
+                animationSpec = tween(GalleryMotion.ViewerActionExitMillis, easing = ViewerExitEasing)
             )
         ) {
             Column(
@@ -372,6 +378,7 @@ fun PhotoViewerOverlay(
                         detailsVisible = true
                         controlsVisible = false
                     },
+                    onHide = { onHide(currentItem, deleteDirection) },
                     onDelete = { onDelete(currentItem, deleteDirection) }
                 )
             }
@@ -384,11 +391,11 @@ fun PhotoViewerOverlay(
                 .zIndex(4f),
             enter = fadeIn(animationSpec = tween(120)) + slideInVertically(
                 initialOffsetY = { it / 2 },
-                animationSpec = tween(220, easing = ViewerEnterEasing)
+                animationSpec = tween(GalleryMotion.ViewerDetailsEnterMillis, easing = ViewerEnterEasing)
             ),
             exit = fadeOut(animationSpec = tween(100)) + slideOutVertically(
                 targetOffsetY = { it / 3 },
-                animationSpec = tween(160, easing = ViewerExitEasing)
+                animationSpec = tween(GalleryMotion.ViewerDetailsExitMillis, easing = ViewerExitEasing)
             )
         ) {
             MediaDetailsPanel(
@@ -464,6 +471,7 @@ private fun ViewerActionBar(
     onFavorite: () -> Unit,
     onShare: () -> Unit,
     onInfo: () -> Unit,
+    onHide: () -> Unit,
     onDelete: () -> Unit
 ) {
     Surface(
@@ -495,6 +503,11 @@ private fun ViewerActionBar(
                 icon = Icons.Filled.Info,
                 contentDescription = "Info",
                 onClick = onInfo
+            )
+            ViewerActionButton(
+                icon = Icons.Filled.Lock,
+                contentDescription = "Hide",
+                onClick = onHide
             )
             ViewerActionButton(
                 icon = Icons.Filled.Delete,
@@ -756,12 +769,18 @@ private fun ZoomableViewerMedia(
     var gestureActive by remember(mediaItem.id) { mutableStateOf(false) }
     val animatedScale by animateFloatAsState(
         targetValue = targetScale,
-        animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow),
+        animationSpec = spring(
+            dampingRatio = GalleryMotion.ViewerTransformDamping,
+            stiffness = GalleryMotion.ViewerTransformStiffness
+        ),
         label = "viewer photo zoom scale"
     )
     val animatedOffset by animateOffsetAsState(
         targetValue = targetOffset,
-        animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow),
+        animationSpec = spring(
+            dampingRatio = GalleryMotion.ViewerTransformDamping,
+            stiffness = GalleryMotion.ViewerTransformStiffness
+        ),
         label = "viewer photo pan offset"
     )
     val displayScale = if (gestureActive) targetScale else animatedScale

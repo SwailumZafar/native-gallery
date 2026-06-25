@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
@@ -98,9 +99,11 @@ fun AlbumsScreen(
     layoutMode: AlbumLayoutMode,
     onLayoutModeChange: (AlbumLayoutMode) -> Unit,
     onOpenHiddenItems: () -> Unit,
+    onOpenLockedMedia: () -> Unit,
     onOpenRecentlyDeleted: () -> Unit,
     hiddenAlbumCount: Int = 0,
     hiddenItemCount: Int = 0,
+    lockedItemCount: Int = 0,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit,
     contentPadding: PaddingValues,
@@ -170,7 +173,7 @@ fun AlbumsScreen(
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Hidden items") },
+                            text = { Text("Hidden albums") },
                             leadingIcon = { Icon(Icons.Filled.Security, contentDescription = null) },
                             trailingIcon = {
                                 if (hiddenAlbumCount > 0) Text("%1$,d".format(hiddenAlbumCount))
@@ -178,6 +181,17 @@ fun AlbumsScreen(
                             onClick = {
                                 overflowExpanded = false
                                 onOpenHiddenItems()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Locked media") },
+                            leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null) },
+                            trailingIcon = {
+                                if (lockedItemCount > 0) Text("%1$,d".format(lockedItemCount))
+                            },
+                            onClick = {
+                                overflowExpanded = false
+                                onOpenLockedMedia()
                             }
                         )
                         DropdownMenuItem(
@@ -264,6 +278,13 @@ fun AlbumsScreen(
                     onClick = onOpenHiddenItems
                 )
             }
+            item(key = "locked-media-pill", contentType = "album-list-action") {
+                Spacer(Modifier.height(10.dp))
+                LockedMediaPill(
+                    lockedItemCount = lockedItemCount,
+                    onClick = onOpenLockedMedia
+                )
+            }
             item(key = "recently-deleted-pill", contentType = "album-list-action") {
                 Spacer(Modifier.height(10.dp))
                 RecentlyDeletedPill(onClick = onOpenRecentlyDeleted)
@@ -327,7 +348,7 @@ private fun HiddenItemsPill(
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Hidden items",
+                    text = "Hidden albums",
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 15.sp,
                         lineHeight = 19.sp,
@@ -347,6 +368,64 @@ private fun HiddenItemsPill(
             }
             Text(
                 text = "Manage",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
+}
+
+@Composable
+private fun LockedMediaPill(
+    lockedItemCount: Int,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .bouncyClickable(onClick = onClick),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+        shape = RoundedCornerShape(34.dp),
+        shadowElevation = 1.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 22.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Lock,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Locked media",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 15.sp,
+                        lineHeight = 19.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = lockedMediaPillLabel(lockedItemCount),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 12.5.sp,
+                        lineHeight = 16.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = "Open",
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontSize = 14.sp,
                     lineHeight = 18.sp,
@@ -642,6 +721,7 @@ fun AlbumDetailScreen(
     onSelectionClear: () -> Unit = {},
     onSelectAllVisible: () -> Unit = {},
     onDeleteSelected: () -> Unit = {},
+    onHideSelected: () -> Unit = {},
     onHideAlbum: (() -> Unit)? = null,
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
@@ -655,17 +735,7 @@ fun AlbumDetailScreen(
         AlbumDetailGridMode.Compact -> 4
         AlbumDetailGridMode.Comfortable -> 3
     }
-    var contentEntered by remember(album.id) { mutableStateOf(false) }
-    LaunchedEffect(album.id) {
-        contentEntered = false
-        delay(115)
-        contentEntered = true
-    }
-    val contentProgress by animateFloatAsState(
-        targetValue = if (contentEntered) 1f else 0f,
-        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
-        label = "album detail content reveal"
-    )
+    val contentProgress = 1f
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -680,7 +750,9 @@ fun AlbumDetailScreen(
                 bottom = contentPadding.calculateBottomPadding() + 34.dp
             )
         ) {
-            if (sortedMediaItems.isEmpty()) {
+            if (sortedMediaItems.isEmpty() && album.itemCount > 0) {
+                albumDetailSkeletonRows(columns = columns)
+            } else if (sortedMediaItems.isEmpty()) {
                 item(key = "album-detail-empty", contentType = "album-detail-empty") {
                     Text(
                         text = "No photos here yet.",
@@ -725,6 +797,7 @@ fun AlbumDetailScreen(
                 onSelectionClear = onSelectionClear,
                 onSelectAllVisible = onSelectAllVisible,
                 onDeleteSelected = onDeleteSelected,
+                onHideSelected = onHideSelected,
                 onHideAlbum = onHideAlbum,
                 onBack = onBack,
                 modifier = Modifier.padding(start = 10.dp, top = 42.dp, end = 10.dp, bottom = 14.dp)
@@ -746,6 +819,7 @@ private fun AlbumDetailHeader(
     onSelectionClear: () -> Unit,
     onSelectAllVisible: () -> Unit,
     onDeleteSelected: () -> Unit,
+    onHideSelected: () -> Unit,
     onHideAlbum: (() -> Unit)?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -876,7 +950,8 @@ private fun AlbumDetailHeader(
                 totalVisibleCount = totalVisibleCount,
                 onClear = onSelectionClear,
                 onSelectAll = onSelectAllVisible,
-                onDelete = onDeleteSelected
+                onDelete = onDeleteSelected,
+                onHide = onHideSelected
             )
         }
     }
@@ -889,7 +964,8 @@ private fun AlbumSelectionToolbar(
     totalVisibleCount: Int,
     onClear: () -> Unit,
     onSelectAll: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onHide: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -919,6 +995,13 @@ private fun AlbumSelectionToolbar(
                 onClick = onSelectAll
             ) {
                 Text("Select all")
+            }
+            IconButton(onClick = onHide) {
+                Icon(
+                    imageVector = Icons.Filled.Lock,
+                    contentDescription = "Hide selected",
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
             IconButton(onClick = onDelete) {
                 Icon(
@@ -1015,6 +1098,35 @@ private fun AlbumDetailRow(
     }
 }
 
+private fun LazyListScope.albumDetailSkeletonRows(columns: Int) {
+    val spacing = if (columns == 3) 5.dp else 3.dp
+    items(
+        items = List(5) { it },
+        key = { rowIndex -> "album-detail-loading-row-$columns-$rowIndex" },
+        contentType = { "album-detail-loading-row" }
+    ) {
+        AlbumDetailSkeletonRow(columns = columns, spacing = spacing)
+        Spacer(Modifier.height(spacing))
+    }
+}
+
+@Composable
+private fun AlbumDetailSkeletonRow(
+    columns: Int,
+    spacing: androidx.compose.ui.unit.Dp
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+            repeat(columns) {
+                SkeletonBlock(
+                    modifier = Modifier.size(cellSize),
+                    cornerRadius = 0.dp
+                )
+            }
+        }
+    }
+}
 @Composable
 private fun AlbumsLoadingState(layoutMode: AlbumLayoutMode) {
     if (layoutMode == AlbumLayoutMode.BigTiles) {
@@ -1160,5 +1272,13 @@ private fun hiddenItemsPillLabel(hiddenAlbumCount: Int, hiddenItemCount: Int): S
         "%1$,d albums, %2$,d items hidden".format(hiddenAlbumCount, hiddenItemCount)
     } else {
         "Choose albums to hide"
+    }
+}
+
+private fun lockedMediaPillLabel(lockedItemCount: Int): String {
+    return if (lockedItemCount > 0) {
+        "%1$,d locked photos and videos".format(lockedItemCount)
+    } else {
+        "PIN, face, or fingerprint protected"
     }
 }
