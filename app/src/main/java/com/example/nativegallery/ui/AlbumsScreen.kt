@@ -713,6 +713,7 @@ fun AlbumDetailScreen(
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
     activeSharedElementKey: Any? = null,
+    albumEnterProgress: Float = 1f,
     gridMode: AlbumDetailGridMode,
     onGridModeChange: (AlbumDetailGridMode) -> Unit,
     selectedMediaIds: Set<String> = emptySet(),
@@ -735,7 +736,9 @@ fun AlbumDetailScreen(
         AlbumDetailGridMode.Compact -> 4
         AlbumDetailGridMode.Comfortable -> 3
     }
-    val contentProgress = 1f
+    val contentProgress = FastOutSlowInEasing.transform(
+        ((albumEnterProgress.coerceIn(0f, 1f) - 0.58f) / 0.42f).coerceIn(0f, 1f)
+    )
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -781,7 +784,11 @@ fun AlbumDetailScreen(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .align(Alignment.TopCenter),
+                .align(Alignment.TopCenter)
+                .graphicsLayer {
+                    alpha = contentProgress
+                    translationY = (1f - contentProgress) * -18f
+                },
             color = MaterialTheme.colorScheme.background,
             shadowElevation = 3.dp
         ) {

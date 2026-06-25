@@ -9,12 +9,14 @@ import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.tween
 import kotlin.math.min
+import kotlin.math.abs
 import kotlinx.coroutines.delay
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -24,6 +26,8 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.fadeOut
@@ -169,45 +173,78 @@ fun PhotosScreen(
                     }
                 }
 
-                detectDragGestures(
-                    onDragStart = { startOffset ->
-                        if (isSelectionMode) {
+                if (isSelectionMode) {
+                    detectDragGestures(
+                        onDragStart = { startOffset ->
                             baseSelectedIds = latestSelectedMediaIds
                             visitedMediaIds.clear()
                             val hit = hitMedia(startOffset)
                             dragMode = hit?.let { if (baseSelectedIds.contains(it.id)) DragSelectMode.Remove else DragSelectMode.Add }
                             applyDragSelectionAt(startOffset)
-                        }
-                    },
-                    onDrag = { change, dragAmount ->
-                        if (isSelectionMode) {
+                        },
+                        onDrag = { change, _ ->
                             applyDragSelectionAt(change.position)
                             change.consume()
-                        } else {
-                            val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                            val pullingDown = dragAmount.y > 0f || pullDistance > 0f
-                            if (atTop && pullingDown && !showLoading) {
-                                val rawPull = (pullDistance + dragAmount.y).coerceAtLeast(0f)
-                                pullDistance = min(rawPull / (1f + rawPull / 100f), pullThresholdPx * 1.3f)
-                                change.consume()
+                        },
+                        onDragEnd = {
+                            dragMode = null
+                            visitedMediaIds.clear()
+                        },
+                        onDragCancel = {
+                            dragMode = null
+                            visitedMediaIds.clear()
+                        }
+                    )
+                } else {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val touchSlop = viewConfiguration.touchSlop
+                        var activePointerId = down.id
+                        var lastPosition = down.position
+                        var handlingPull = false
+                        var endedNormally = false
+
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull { it.id == activePointerId }
+                                ?: event.changes.firstOrNull { it.pressed }
+                                ?: break
+                            activePointerId = change.id
+                            if (!change.pressed) {
+                                endedNormally = true
+                                break
+                            }
+
+                            val delta = change.position - lastPosition
+                            lastPosition = change.position
+                            if (!handlingPull) {
+                                val totalDrag = change.position - down.position
+                                val passedSlop = abs(totalDrag.x) > touchSlop || abs(totalDrag.y) > touchSlop
+                                if (!passedSlop) continue
+                                if (abs(totalDrag.y) <= abs(totalDrag.x) * 1.15f) break
+                                handlingPull = true
+                            }
+
+                            if (handlingPull) {
+                                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                                val pullingDown = delta.y > 0f || pullDistance > 0f
+                                if (atTop && pullingDown && !showLoading) {
+                                    val rawPull = (pullDistance + delta.y).coerceAtLeast(0f)
+                                    pullDistance = min(rawPull / (1f + rawPull / 100f), pullThresholdPx * 1.3f)
+                                    change.consume()
+                                }
                             }
                         }
-                    },
-                    onDragEnd = {
-                        if (!isSelectionMode && pullDistance >= pullThresholdPx && !showLoading) {
-                            localRefreshing = true
-                        } else if (!localRefreshing) {
-                            pullDistance = 0f
+
+                        if (handlingPull || endedNormally) {
+                            if (pullDistance >= pullThresholdPx && !showLoading) {
+                                localRefreshing = true
+                            } else if (!localRefreshing) {
+                                pullDistance = 0f
+                            }
                         }
-                        dragMode = null
-                        visitedMediaIds.clear()
-                    },
-                    onDragCancel = {
-                        if (!localRefreshing) pullDistance = 0f
-                        dragMode = null
-                        visitedMediaIds.clear()
                     }
-                )
+                }
             }
     ) {
         LazyColumn(

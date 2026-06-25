@@ -18,6 +18,7 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateOffsetAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -28,7 +29,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,6 +67,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -92,11 +94,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -108,10 +114,13 @@ import com.example.nativegallery.ui.components.GalleryImage
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -119,7 +128,7 @@ import kotlin.math.sqrt
 private val ViewerEnterEasing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
 private val ViewerExitEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 private val ViewerPhotoBackground = Color(0xFF111111)
-private val ViewerPhotoStageBackground = Color.Black
+private val ViewerPhotoStageBackground = Color.Transparent
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
@@ -127,9 +136,11 @@ fun PhotoViewerOverlay(
     mediaItems: List<MediaItem>,
     mediaItem: MediaItem?,
     visible: Boolean,
-    onClose: () -> Unit,
+    onClose: (Offset, Float, Float) -> Unit,
     onDelete: (MediaItem, Int) -> Unit,
     onHide: (MediaItem, Int) -> Unit = { _, _ -> },
+    favoriteMediaIds: Set<String> = emptySet(),
+    onFavoriteChange: (MediaItem, Boolean) -> Unit = { _, _ -> },
     onCurrentMediaChanged: (MediaItem) -> Unit = {},
     albumNameForMedia: (MediaItem) -> String? = { null },
     sharedTransitionScope: SharedTransitionScope? = null,
@@ -155,22 +166,22 @@ fun PhotoViewerOverlay(
     var closeRequested by remember { mutableStateOf(false) }
     var lastSettledPage by rememberSaveable { mutableIntStateOf(selectedIndex) }
     var deleteDirection by rememberSaveable { mutableIntStateOf(1) }
-    var verticalDragOffset by remember { mutableStateOf(0f) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var detailsDragOffset by remember { mutableStateOf(0f) }
     var isViewerDragging by remember { mutableStateOf(false) }
     var detailsVisible by remember { mutableStateOf(false) }
-    var favoriteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val dismissThresholdPx = with(LocalDensity.current) { 104.dp.toPx() }
     val detailsThresholdPx = with(LocalDensity.current) { 76.dp.toPx() }
 
     LaunchedEffect(visible, selectedIndex, viewerItems.size) {
-        if (visible && pagerState.currentPage != selectedIndex) {
+        if (visible && !pagerState.isScrollInProgress && pagerState.currentPage != selectedIndex) {
             pagerState.scrollToPage(selectedIndex)
+            lastSettledPage = selectedIndex
         }
     }
 
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }.collect { page ->
+    LaunchedEffect(pagerState, viewerItems) {
+        snapshotFlow { pagerState.settledPage.coerceIn(0, viewerItems.lastIndex) }.collect { page ->
             if (page != lastSettledPage) {
                 deleteDirection = if (page > lastSettledPage) 1 else -1
                 lastSettledPage = page
@@ -178,7 +189,8 @@ fun PhotoViewerOverlay(
         }
     }
 
-    val currentItem = viewerItems.getOrNull(pagerState.currentPage) ?: mediaItem
+    val currentPageForState = pagerState.settledPage.coerceIn(0, viewerItems.lastIndex)
+    val currentItem = viewerItems.getOrNull(currentPageForState) ?: mediaItem
     var activeMediaPlaced by remember(currentItem.id) { mutableStateOf(false) }
     LaunchedEffect(currentItem.id, visible) {
         if (visible) {
@@ -186,10 +198,21 @@ fun PhotoViewerOverlay(
             onCurrentMediaChanged(currentItem)
             controlsVisible = true
             detailsVisible = false
-            verticalDragOffset = 0f
+            dragOffset = Offset.Zero
             detailsDragOffset = 0f
             closeRequested = false
         }
+    }
+
+    LaunchedEffect(currentPageForState, viewerItems.map { it.id }) {
+        val nearbyItems = (currentPageForState - 1..currentPageForState + 1)
+            .mapNotNull { index -> viewerItems.getOrNull(index) }
+        prefetchMediaThumbnails(
+            context = context.applicationContext,
+            mediaItems = nearbyItems,
+            thumbnailSizes = listOf(1440, 512),
+            maxItems = 3
+        )
     }
 
     fun shareCurrentMedia() {
@@ -204,80 +227,130 @@ fun PhotoViewerOverlay(
         }
     }
 
-    fun closeViewerWithChromeFade() {
+    fun closeViewerWithChromeFade(closeOffset: Offset = Offset.Zero, closeScale: Float = 1f, closeBackdropAlpha: Float = 1f) {
         if (closeRequested) return
         closeRequested = true
         controlsVisible = false
         detailsVisible = false
         scope.launch {
             delay(GalleryMotion.ViewerChromeCloseDelayMillis)
-            onClose()
+            onClose(closeOffset, closeScale, closeBackdropAlpha)
         }
     }
 
-    val animatedVerticalDragOffset by animateFloatAsState(
-        targetValue = verticalDragOffset,
-        animationSpec = spring(
-            dampingRatio = GalleryMotion.ViewerDismissDamping,
-            stiffness = GalleryMotion.ViewerDismissStiffness
-        ),
+    val animatedDragOffset by animateOffsetAsState(
+        targetValue = dragOffset,
+        animationSpec = if (isViewerDragging) {
+            snap()
+        } else {
+            spring(
+                dampingRatio = GalleryMotion.ViewerDismissDamping,
+                stiffness = GalleryMotion.ViewerDismissStiffness
+            )
+        },
         label = "viewer dismiss offset"
     )
-    val displayedVerticalDragOffset = if (isViewerDragging) {
-        verticalDragOffset
+    val displayedDragOffset = if (isViewerDragging) {
+        dragOffset
     } else {
-        animatedVerticalDragOffset
+        animatedDragOffset
     }
-
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(
                 if (currentItem.isVideo) {
-                    Color.Black.copy(alpha = viewerBackdropAlpha(displayedVerticalDragOffset, dismissThresholdPx))
+                    Color.Black.copy(alpha = viewerBackdropAlpha(displayedDragOffset, dismissThresholdPx))
                 } else {
-                    ViewerPhotoBackground.copy(alpha = viewerBackdropAlpha(displayedVerticalDragOffset, dismissThresholdPx))
+                    ViewerPhotoBackground.copy(alpha = viewerBackdropAlpha(displayedDragOffset, dismissThresholdPx))
                 }
             )
-            .pointerInput(currentItem.id, dismissThresholdPx, detailsThresholdPx) {
-                detectVerticalDragGestures(
-                    onDragStart = { isViewerDragging = true },
-                    onVerticalDrag = { change, dragAmount ->
-                        val shouldPullViewer = dragAmount > 0f || verticalDragOffset > 0f
-                        val shouldRevealDetails = dragAmount < 0f || detailsDragOffset < 0f
-                        when {
-                            shouldPullViewer -> {
-                                detailsVisible = false
-                                verticalDragOffset = (verticalDragOffset + dragAmount)
-                                    .coerceIn(0f, dismissThresholdPx * 1.8f)
-                                change.consume()
+            .pointerInput(currentItem.id, dismissThresholdPx, detailsThresholdPx, closeRequested) {
+                val touchSlop = viewConfiguration.touchSlop
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (closeRequested) return@awaitEachGesture
+                    var activePointerId = down.id
+                    var lastPosition = down.position
+                    var lastUptimeMs = down.uptimeMillis
+                    var dragVelocity = Offset.Zero
+                    var passedTouchSlop = false
+                    var handlingViewerDrag = false
+
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (!handlingViewerDrag && event.changes.count { it.pressed } > 1) break
+
+                        val change = event.changes.firstOrNull { it.id == activePointerId }
+                            ?: event.changes.firstOrNull { it.pressed }
+                            ?: break
+                        activePointerId = change.id
+                        if (!change.pressed) break
+
+                        val delta = change.position - lastPosition
+                        val elapsedSeconds = ((change.uptimeMillis - lastUptimeMs).coerceAtLeast(1L)) / 1000f
+                        dragVelocity = Offset(delta.x / elapsedSeconds, delta.y / elapsedSeconds)
+                        lastPosition = change.position
+                        lastUptimeMs = change.uptimeMillis
+
+                        if (!passedTouchSlop) {
+                            val totalDrag = change.position - down.position
+                            if (positionDistance(change.position, down.position) < touchSlop) {
+                                continue
                             }
-                            shouldRevealDetails -> {
-                                detailsDragOffset = (detailsDragOffset + dragAmount)
-                                    .coerceIn(-detailsThresholdPx * 1.8f, 0f)
-                                change.consume()
+                            val verticalIntent = abs(totalDrag.y) > abs(totalDrag.x) * 0.7f
+                            val downwardIntent = totalDrag.y > touchSlop * 0.35f && abs(totalDrag.y) > abs(totalDrag.x) * 0.35f
+                            val detailsIntent = totalDrag.y < -touchSlop * 0.35f && abs(totalDrag.y) > abs(totalDrag.x) * 0.7f
+                            if (!verticalIntent && !downwardIntent && !detailsIntent) {
+                                break
                             }
+                            passedTouchSlop = true
+                            handlingViewerDrag = true
+                            isViewerDragging = true
+                            change.consume()
                         }
-                    },
-                    onDragEnd = {
-                        isViewerDragging = false
-                        if (verticalDragOffset > dismissThresholdPx * 0.92f) {
-                            closeViewerWithChromeFade()
+
+                        if (handlingViewerDrag) {
+                            val nextOffset = dragOffset + delta
+                            val detailsGestureActive = detailsDragOffset < 0f ||
+                                (nextOffset.y < 0f && abs(nextOffset.y) > abs(nextOffset.x) * 0.8f)
+                            if (detailsGestureActive) {
+                                dragOffset = Offset.Zero
+                                detailsDragOffset = (detailsDragOffset + delta.y)
+                                    .coerceIn(-detailsThresholdPx * 1.8f, 0f)
+                            } else {
+                                detailsVisible = false
+                                detailsDragOffset = 0f
+                                dragOffset = Offset(
+                                    x = nextOffset.x.coerceIn(-dismissThresholdPx * 1.55f, dismissThresholdPx * 1.55f),
+                                    y = nextOffset.y.coerceIn(-dismissThresholdPx * 0.58f, dismissThresholdPx * 1.85f)
+                                )
+                            }
+                            change.consume()
+                        }
+                    }
+
+                    if (handlingViewerDrag) {
+                        if (shouldDismissViewerDrag(dragOffset, dragVelocity, dismissThresholdPx)) {
+                            isViewerDragging = false
+                            closeViewerWithChromeFade(
+                                closeOffset = renderedViewerDragOffset(dragOffset),
+                                closeScale = viewerDismissScale(dragOffset, dismissThresholdPx),
+                                closeBackdropAlpha = viewerBackdropAlpha(dragOffset, dismissThresholdPx)
+                            )
                         } else {
                             if (detailsDragOffset < -detailsThresholdPx) {
                                 detailsVisible = true
                                 controlsVisible = false
+                            } else {
+                                controlsVisible = true
                             }
-                            verticalDragOffset = 0f
+                            isViewerDragging = false
+                            dragOffset = Offset.Zero
                         }
                         detailsDragOffset = 0f
-                    },
-                    onDragCancel = {
-                        isViewerDragging = false
-                        verticalDragOffset = 0f
-                        detailsDragOffset = 0f
                     }
-                )
+                }
             }
     ) {
         HorizontalPager(
@@ -285,20 +358,21 @@ fun PhotoViewerOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    val pullDown = displayedVerticalDragOffset.coerceAtLeast(0f)
-                    val pullProgress = (pullDown / (dismissThresholdPx * 1.15f)).coerceIn(0f, 1f)
-                    val pullScale = 1f - pullProgress * 0.3f
-                    translationY = pullDown * 0.96f
+                    val pullProgress = viewerDismissProgress(displayedDragOffset, dismissThresholdPx)
+                    val pullScale = viewerDismissScale(displayedDragOffset, dismissThresholdPx)
+                    translationX = displayedDragOffset.x * 0.96f
+                    translationY = displayedDragOffset.y * 0.96f
                     scaleX = pullScale
                     scaleY = pullScale
                 },
-            beyondViewportPageCount = 0,
+            beyondViewportPageCount = 1,
+            userScrollEnabled = !isViewerDragging && dragOffset == Offset.Zero && !closeRequested,
             key = { page -> viewerItems[page].id }
         ) { page ->
             val pageItem = viewerItems[page]
             ZoomableViewerMedia(
                 mediaItem = pageItem,
-                isActive = page == pagerState.currentPage,
+                isActive = page == currentPageForState,
                 controlsVisible = controlsVisible,
                 sharedTransitionScope = sharedTransitionScope,
                 animatedVisibilityScope = animatedVisibilityScope,
@@ -306,11 +380,11 @@ fun PhotoViewerOverlay(
                 sharedElementKeyPrefix = sharedElementKeyPrefix,
                 isSharedTransitionReady = activeMediaPlaced,
                 onActiveMediaPlaced = {
-                    if (page == pagerState.currentPage) {
+                    if (page == currentPageForState) {
                         activeMediaPlaced = true
                     }
                 },
-                onClose = ::closeViewerWithChromeFade,
+                onClose = { closeViewerWithChromeFade() },
                 onToggleControls = {
                     if (detailsVisible) {
                         detailsVisible = false
@@ -330,7 +404,7 @@ fun PhotoViewerOverlay(
             enter = fadeIn(animationSpec = tween(90)),
             exit = fadeOut(animationSpec = tween(90))
         ) {
-            ViewerTopBar(onClose = ::closeViewerWithChromeFade)
+            ViewerTopBar(onClose = { closeViewerWithChromeFade() })
         }
 
         AnimatedVisibility(
@@ -365,13 +439,9 @@ fun PhotoViewerOverlay(
                     Spacer(Modifier.height(14.dp))
                 }
                 ViewerActionBar(
-                    isFavorite = favoriteIds.contains(currentItem.id),
+                    isFavorite = favoriteMediaIds.contains(currentItem.id),
                     onFavorite = {
-                        favoriteIds = if (favoriteIds.contains(currentItem.id)) {
-                            favoriteIds - currentItem.id
-                        } else {
-                            favoriteIds + currentItem.id
-                        }
+                        onFavoriteChange(currentItem, !favoriteMediaIds.contains(currentItem.id))
                     },
                     onShare = ::shareCurrentMedia,
                     onInfo = {
@@ -745,8 +815,8 @@ private fun ZoomableViewerMedia(
     onClose: () -> Unit,
     onToggleControls: () -> Unit
 ) {
-    val activeSharedElementKeyPrefix = sharedElementKeyPrefix.takeIf { isActive && isSharedTransitionReady }
-    val activeMediaAlpha = if (isActive && !isSharedTransitionReady) 0f else 1f
+    val activeSharedElementKeyPrefix: String? = null
+    val activeMediaAlpha = 1f
 
     if (mediaItem.isVideo && mediaItem.contentUri != null) {
         ViewerVideoPlayer(
@@ -785,15 +855,7 @@ private fun ZoomableViewerMedia(
     )
     val displayScale = if (gestureActive) targetScale else animatedScale
     val displayOffset = if (gestureActive) targetOffset else animatedOffset
-    val mediaModifier = Modifier
-        .fillMaxSize()
-        .mediaSharedElement(
-        mediaItem = mediaItem,
-        sharedTransitionScope = sharedTransitionScope,
-        animatedVisibilityScope = animatedVisibilityScope,
-        sharedBoundsTransform = sharedBoundsTransform,
-        sharedElementKeyPrefix = activeSharedElementKeyPrefix
-    )
+    val mediaModifier = Modifier.fillMaxSize()
 
     Box(
         modifier = mediaModifier
@@ -913,12 +975,17 @@ private fun ViewerVideoPlayer(
     var textureView by remember(uri) { mutableStateOf<TextureView?>(null) }
     var isPrepared by remember(uri) { mutableStateOf(false) }
     var isPlaying by remember(uri) { mutableStateOf(false) }
+    var isMuted by remember(uri) { mutableStateOf(false) }
+    var videoFillFrame by remember(uri) { mutableStateOf(false) }
+    var hasPlaybackError by remember(uri) { mutableStateOf(false) }
+    var hasRenderedFirstFrame by remember(uri) { mutableStateOf(false) }
     var durationMs by remember(uri) { mutableStateOf(0) }
     var positionMs by remember(uri) { mutableStateOf(0) }
     var isScrubbing by remember(uri) { mutableStateOf(false) }
     var videoWidth by remember(uri) { mutableStateOf(0) }
     var videoHeight by remember(uri) { mutableStateOf(0) }
     val activeState by rememberUpdatedState(isActive)
+    val rootView = LocalView.current
 
     fun releasePlayer() {
         playerState.value?.let { player ->
@@ -936,6 +1003,7 @@ private fun ViewerVideoPlayer(
         surfaceState.value = null
         isPrepared = false
         isPlaying = false
+        hasRenderedFirstFrame = false
         durationMs = 0
         positionMs = 0
         isScrubbing = false
@@ -960,6 +1028,7 @@ private fun ViewerVideoPlayer(
         if (!view.isAvailable) return
         releasePlayer()
         val surfaceTexture = view.surfaceTexture ?: return
+        hasRenderedFirstFrame = false
         val surface = Surface(surfaceTexture)
         surfaceState.value = surface
 
@@ -968,16 +1037,18 @@ private fun ViewerVideoPlayer(
         runCatching {
             player.setDataSource(context, uri)
             player.setSurface(surface)
+            player.setVolume(if (isMuted) 0f else 1f, if (isMuted) 0f else 1f)
             player.setOnVideoSizeChangedListener { _, width, height ->
                 videoWidth = width
                 videoHeight = height
-                view.applyVideoFitTransform(width, height)
+                view.applyVideoFitTransform(width, height, fillFrame = videoFillFrame)
             }
             player.setOnPreparedListener { preparedPlayer ->
+                hasPlaybackError = false
                 isPrepared = true
                 durationMs = preparedPlayer.duration.coerceAtLeast(0)
                 positionMs = preparedPlayer.currentPosition.coerceAtLeast(0)
-                view.applyVideoFitTransform(videoWidth, videoHeight)
+                view.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
                 if (activeState) {
                     preparedPlayer.start()
                     isPlaying = true
@@ -989,6 +1060,7 @@ private fun ViewerVideoPlayer(
                 runCatching { completedPlayer.seekTo(0) }
             }
             player.setOnErrorListener { _, _, _ ->
+                hasPlaybackError = true
                 isPrepared = false
                 isPlaying = false
                 true
@@ -1003,6 +1075,26 @@ private fun ViewerVideoPlayer(
         newValue = { view -> preparePlayer(view) }
     )
 
+    LaunchedEffect(isMuted, playerState.value) {
+        val volume = if (isMuted) 0f else 1f
+        runCatching { playerState.value?.setVolume(volume, volume) }
+    }
+
+    LaunchedEffect(videoFillFrame, videoWidth, videoHeight, textureView) {
+        textureView?.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
+    }
+
+    DisposableEffect(isActive, isPrepared, isPlaying, rootView) {
+        val keepScreenOn = isActive && isPrepared && isPlaying
+        if (keepScreenOn) {
+            rootView.keepScreenOn = true
+        }
+        onDispose {
+            if (keepScreenOn) {
+                rootView.keepScreenOn = false
+            }
+        }
+    }
     LaunchedEffect(isActive, isPrepared) {
         val player = playerState.value ?: return@LaunchedEffect
         if (!isPrepared) return@LaunchedEffect
@@ -1060,17 +1152,18 @@ private fun ViewerVideoPlayer(
                     sharedBoundsTransform = sharedBoundsTransform,
                     sharedElementKeyPrefix = sharedElementKeyPrefix
                 )
-                .graphicsLayer { alpha = if (isPrepared) 0f else 1f },
+                .graphicsLayer { alpha = if (hasRenderedFirstFrame) 0f else 1f },
             cornerRadius = 0.dp,
             contentScale = ContentScale.Fit,
             thumbnailSize = 1440,
-            loadQuality = ImageLoadQuality.Thumbnail
+            loadQuality = ImageLoadQuality.Thumbnail,
+            backgroundColor = Color.Black
         )
 
         AndroidView(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer { alpha = if (isPrepared) 1f else 0f }
+                .graphicsLayer { alpha = if (hasRenderedFirstFrame) 1f else 0f }
                 .pointerInput(uri) {
                     detectTapGestures(onTap = { onToggleControls() })
                 },
@@ -1080,7 +1173,7 @@ private fun ViewerVideoPlayer(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
-                    isOpaque = true
+                    isOpaque = false
                     tag = uri
                     val texture = this
                     surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -1092,7 +1185,7 @@ private fun ViewerVideoPlayer(
                             if (playerState.value == null) {
                                 preparePlayerForSurface(texture)
                             } else {
-                                texture.applyVideoFitTransform(videoWidth, videoHeight)
+                                texture.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
                             }
                         }
 
@@ -1101,7 +1194,7 @@ private fun ViewerVideoPlayer(
                             width: Int,
                             height: Int
                         ) {
-                            texture.applyVideoFitTransform(videoWidth, videoHeight)
+                            texture.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
                         }
 
                         override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
@@ -1109,7 +1202,11 @@ private fun ViewerVideoPlayer(
                             return true
                         }
 
-                        override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
+                        override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
+                            if (isPrepared) {
+                                hasRenderedFirstFrame = true
+                            }
+                        }
                     }
                     textureView = this
                 }
@@ -1124,10 +1221,28 @@ private fun ViewerVideoPlayer(
                 } else if (view.isAvailable && playerState.value == null) {
                     preparePlayer(view)
                 } else {
-                    view.applyVideoFitTransform(videoWidth, videoHeight)
+                    view.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
                 }
             }
         )
+
+        if (hasPlaybackError) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 28.dp),
+                color = Color.Black.copy(alpha = 0.62f),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Text(
+                    text = "This video could not be played here.",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+            }
+        }
+
 
         AnimatedVisibility(
             visible = controlsVisible && isPrepared,
@@ -1188,9 +1303,17 @@ private fun ViewerVideoPlayer(
                 Spacer(Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    VideoControlButton(
+                        icon = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = if (isMuted) "Unmute video" else "Mute video",
+                        size = 46.dp,
+                        iconSize = 24.dp,
+                        containerAlpha = if (isMuted) 0.56f else 0.34f,
+                        onClick = { isMuted = !isMuted }
+                    )
                     VideoControlButton(
                         icon = Icons.Filled.Replay10,
                         contentDescription = "Rewind 10 seconds",
@@ -1198,7 +1321,6 @@ private fun ViewerVideoPlayer(
                         iconSize = 27.dp,
                         onClick = { seekBy(-10_000) }
                     )
-                    Spacer(Modifier.width(18.dp))
                     VideoControlButton(
                         icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                         contentDescription = if (isPlaying) "Pause video" else "Play video",
@@ -1216,7 +1338,6 @@ private fun ViewerVideoPlayer(
                             }
                         }
                     )
-                    Spacer(Modifier.width(18.dp))
                     VideoControlButton(
                         icon = Icons.Filled.Forward10,
                         contentDescription = "Forward 10 seconds",
@@ -1224,12 +1345,20 @@ private fun ViewerVideoPlayer(
                         iconSize = 27.dp,
                         onClick = { seekBy(10_000) }
                     )
+                    VideoControlButton(
+                        icon = Icons.Filled.AspectRatio,
+                        contentDescription = if (videoFillFrame) "Fit video" else "Fill screen",
+                        size = 46.dp,
+                        iconSize = 24.dp,
+                        containerAlpha = if (videoFillFrame) 0.56f else 0.34f,
+                        onClick = { videoFillFrame = !videoFillFrame }
+                    )
                 }
-            }
         }
     }
 }
 
+}
 @Composable
 private fun VideoControlButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -1255,10 +1384,38 @@ private fun VideoControlButton(
 }
 
 
-private fun viewerBackdropAlpha(offset: Float, dismissThresholdPx: Float): Float {
-    if (dismissThresholdPx <= 0f) return 1f
-    val progress = (offset / (dismissThresholdPx * 1.15f)).coerceIn(0f, 1f)
-    return 1f - progress
+private fun viewerBackdropAlpha(offset: Offset, dismissThresholdPx: Float): Float {
+    return 1f - viewerDismissProgress(offset, dismissThresholdPx)
+}
+
+private fun renderedViewerDragOffset(offset: Offset): Offset {
+    return Offset(offset.x * 0.96f, offset.y * 0.96f)
+}
+
+private fun viewerDismissScale(offset: Offset, dismissThresholdPx: Float): Float {
+    return 1f - viewerDismissProgress(offset, dismissThresholdPx) * 0.3f
+}
+
+private fun viewerDismissProgress(offset: Offset, dismissThresholdPx: Float): Float {
+    if (dismissThresholdPx <= 0f) return 0f
+    val downwardOffset = offset.y.coerceAtLeast(0f)
+    val distance = sqrt(offset.x * offset.x + downwardOffset * downwardOffset)
+    return (distance / (dismissThresholdPx * 1.15f)).coerceIn(0f, 1f)
+}
+
+private fun shouldDismissViewerDrag(
+    offset: Offset,
+    velocity: Offset,
+    dismissThresholdPx: Float
+): Boolean {
+    if (dismissThresholdPx <= 0f) return false
+    val downwardOffset = offset.y.coerceAtLeast(0f)
+    val distance = sqrt(offset.x * offset.x + downwardOffset * downwardOffset)
+    val velocityMagnitude = sqrt(velocity.x * velocity.x + velocity.y * velocity.y)
+    return downwardOffset > dismissThresholdPx * 0.88f ||
+        (downwardOffset > dismissThresholdPx * 0.32f && distance > dismissThresholdPx * 1.18f) ||
+        (downwardOffset > dismissThresholdPx * 0.22f && velocity.y > 950f) ||
+        (downwardOffset > dismissThresholdPx * 0.28f && velocityMagnitude > 1300f)
 }
 
 private fun MediaItem.resolutionLabel(): String? {
@@ -1286,12 +1443,18 @@ private fun formatFileSize(bytes: Long): String {
         String.format(Locale.US, "%.1f %s", size, units[unitIndex])
     }
 }
-private fun TextureView.applyVideoFitTransform(videoWidth: Int, videoHeight: Int) {
+private fun TextureView.applyVideoFitTransform(
+    videoWidth: Int,
+    videoHeight: Int,
+    fillFrame: Boolean = false
+) {
     if (width == 0 || height == 0 || videoWidth == 0 || videoHeight == 0) return
 
     val viewWidth = width.toFloat()
     val viewHeight = height.toFloat()
-    val scale = min(viewWidth / videoWidth.toFloat(), viewHeight / videoHeight.toFloat())
+    val fitScale = min(viewWidth / videoWidth.toFloat(), viewHeight / videoHeight.toFloat())
+    val fillScale = max(viewWidth / videoWidth.toFloat(), viewHeight / videoHeight.toFloat())
+    val scale = if (fillFrame) fillScale else fitScale
     val scaledWidth = videoWidth * scale
     val scaledHeight = videoHeight * scale
     val matrix = Matrix().apply {

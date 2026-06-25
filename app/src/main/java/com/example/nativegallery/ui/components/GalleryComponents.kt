@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
+import com.example.nativegallery.util.GalleryPerformanceMonitor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.max
@@ -505,26 +506,28 @@ suspend fun prefetchMediaThumbnails(
         .distinct()
         .ifEmpty { listOf(384) }
 
-    withContext(Dispatchers.IO) {
-        mediaItems.asSequence()
-            .mapNotNull { it.contentUri }
-            .distinct()
-            .take(maxItems)
-            .forEach { uri ->
-                sizes.forEach { size ->
-                    val cacheKey = ThumbnailMemoryCache.key(uri, size)
-                    if (ThumbnailMemoryCache.get(cacheKey) == null) {
-                        val loadedBitmap = if (size >= 1024) {
-                            loadHighQualityBitmap(appContext, uri, size) ?: loadThumbnail(appContext, uri, size)
-                        } else {
-                            loadThumbnail(appContext, uri, size)
-                        }
-                        loadedBitmap?.let { bitmap ->
-                            ThumbnailMemoryCache.put(cacheKey, bitmap)
+    GalleryPerformanceMonitor.traceSuspend("Thumbnail prefetch ${mediaItems.size} items") {
+        withContext(Dispatchers.IO) {
+            mediaItems.asSequence()
+                .mapNotNull { it.contentUri }
+                .distinct()
+                .take(maxItems)
+                .forEach { uri ->
+                    sizes.forEach { size ->
+                        val cacheKey = ThumbnailMemoryCache.key(uri, size)
+                        if (ThumbnailMemoryCache.get(cacheKey) == null) {
+                            val loadedBitmap = if (size >= 1024) {
+                                loadHighQualityBitmap(appContext, uri, size) ?: loadThumbnail(appContext, uri, size)
+                            } else {
+                                loadThumbnail(appContext, uri, size)
+                            }
+                            loadedBitmap?.let { bitmap ->
+                                ThumbnailMemoryCache.put(cacheKey, bitmap)
+                            }
                         }
                     }
                 }
-            }
+        }
     }
 }
 @Composable

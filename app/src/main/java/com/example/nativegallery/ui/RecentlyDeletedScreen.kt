@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.nativegallery.data.RecentlyDeletedRepository
 import com.example.nativegallery.model.RecentlyDeletedMedia
 import com.example.nativegallery.ui.components.MediaThumbnail
 import java.util.concurrent.TimeUnit
@@ -97,7 +98,7 @@ fun RecentlyDeletedScreen(
             }
             Spacer(Modifier.height(14.dp))
             Text(
-                text = "Deleted photos and videos stay here inside this app until you restore them or remove them from the bin.",
+                text = "Deleted photos and videos stay here for 30 days inside this app before they are cleared from the bin.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -161,7 +162,7 @@ private fun RecentlyDeletedRow(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "${entry.mediaItem.dateLabel} - ${deletedAgeLabel(entry.deletedAtMillis)}",
+                text = "${entry.mediaItem.dateLabel} - ${daysLeftLabel(entry.deletedAtMillis)}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
@@ -178,13 +179,14 @@ private fun RecentlyDeletedRow(
     }
 }
 
-private fun deletedAgeLabel(deletedAtMillis: Long): String {
+private fun daysLeftLabel(deletedAtMillis: Long): String {
     val ageMillis = (System.currentTimeMillis() - deletedAtMillis).coerceAtLeast(0L)
-    val days = TimeUnit.MILLISECONDS.toDays(ageMillis)
-    val hours = TimeUnit.MILLISECONDS.toHours(ageMillis)
+    val remainingMillis = (RecentlyDeletedRepository.RetentionMillis - ageMillis).coerceAtLeast(0L)
+    val daysLeft = TimeUnit.MILLISECONDS.toDays(remainingMillis).coerceAtLeast(0L)
     return when {
-        days > 0L -> "deleted ${days}d ago"
-        hours > 0L -> "deleted ${hours}h ago"
-        else -> "deleted just now"
+        daysLeft > 1L -> "$daysLeft days left"
+        daysLeft == 1L -> "1 day left"
+        remainingMillis > 0L -> "less than a day left"
+        else -> "expires today"
     }
 }

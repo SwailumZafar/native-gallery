@@ -3,6 +3,7 @@
 package com.example.nativegallery.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -139,7 +140,10 @@ fun LockedMediaScreen(
                     key = { rowItems -> "locked-grid-row-${rowItems.first().id}" },
                     contentType = { "locked-grid-row" }
                 ) { rowItems ->
-                    LockedMediaGridRow(mediaItems = rowItems)
+                    LockedMediaGridRow(
+                        mediaItems = rowItems,
+                        onUnhideMedia = onUnhideMedia
+                    )
                     Spacer(Modifier.height(1.dp))
                 }
             }
@@ -366,6 +370,7 @@ private fun LockedMediaEmpty() {
 @Composable
 private fun LockedMediaGridRow(
     mediaItems: List<MediaItem>,
+    onUnhideMedia: (MediaItem) -> Unit,
     columns: Int = 4,
     spacing: androidx.compose.ui.unit.Dp = 1.dp
 ) {
@@ -377,11 +382,26 @@ private fun LockedMediaGridRow(
         val cellSize = (maxWidth - spacing * (columns - 1)) / columns
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
             mediaItems.forEach { mediaItem ->
-                MediaThumbnail(
-                    mediaItem = mediaItem,
-                    modifier = Modifier.size(cellSize),
-                    cornerRadius = 0.dp
-                )
+                Box(modifier = Modifier.size(cellSize)) {
+                    MediaThumbnail(
+                        mediaItem = mediaItem,
+                        modifier = Modifier.matchParentSize(),
+                        cornerRadius = 0.dp
+                    )
+                    TextButton(
+                        onClick = { onUnhideMedia(mediaItem) },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 4.dp, vertical = 4.dp)
+                            .height(28.dp)
+                    ) {
+                        Text(
+                            text = "Show",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
             }
             repeat(columns - mediaItems.size) {
                 Spacer(Modifier.size(cellSize))

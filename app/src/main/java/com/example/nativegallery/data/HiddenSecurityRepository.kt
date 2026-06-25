@@ -4,6 +4,15 @@ import android.content.Context
 import java.security.MessageDigest
 import java.security.SecureRandom
 
+data class PinFailureState(
+    val failedAttempts: Int,
+    val lockoutUntilMillis: Long
+) {
+    fun remainingMillis(nowMillis: Long = System.currentTimeMillis()): Long {
+        return (lockoutUntilMillis - nowMillis).coerceAtLeast(0L)
+    }
+}
+
 class HiddenSecurityRepository(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences(
         "native_gallery_hidden_security",
@@ -21,6 +30,8 @@ class HiddenSecurityRepository(context: Context) {
         preferences.edit()
             .putString(PIN_SALT_KEY, salt)
             .putString(PIN_HASH_KEY, hashPin(salt, pin))
+            .remove(PIN_FAILED_ATTEMPTS_KEY)
+            .remove(PIN_LOCKOUT_UNTIL_KEY)
             .apply()
         return true
     }
@@ -32,10 +43,50 @@ class HiddenSecurityRepository(context: Context) {
         return hashPin(salt, pin) == savedHash
     }
 
+    fun pinLockoutUntilMillis(): Long {
+        return preferences.getLong(PIN_LOCKOUT_UNTIL_KEY, 0L)
+    }
+
+    fun recordFailedPinAttempt(nowMillis: Long = System.currentTimeMillis()): PinFailureState {
+        val currentLockout = pinLockoutUntilMillis()
+        if (currentLockout > nowMillis) {
+            return PinFailureState(
+                failedAttempts = preferences.getInt(PIN_FAILED_ATTEMPTS_KEY, 0),
+                lockoutUntilMillis = currentLockout
+            )
+        }
+
+        val failedAttempts = preferences.getInt(PIN_FAILED_ATTEMPTS_KEY, 0) + 1
+        val lockoutUntilMillis = if (failedAttempts >= MaxFailedPinAttempts) {
+            nowMillis + PinLockoutMillis
+        } else {
+            0L
+        }
+
+        preferences.edit()
+            .putInt(PIN_FAILED_ATTEMPTS_KEY, if (lockoutUntilMillis > 0L) 0 else failedAttempts)
+            .putLong(PIN_LOCKOUT_UNTIL_KEY, lockoutUntilMillis)
+            .apply()
+
+        return PinFailureState(
+            failedAttempts = failedAttempts,
+            lockoutUntilMillis = lockoutUntilMillis
+        )
+    }
+
+    fun clearFailedPinAttempts() {
+        preferences.edit()
+            .remove(PIN_FAILED_ATTEMPTS_KEY)
+            .remove(PIN_LOCKOUT_UNTIL_KEY)
+            .apply()
+    }
+
     fun clearPin() {
         preferences.edit()
             .remove(PIN_SALT_KEY)
             .remove(PIN_HASH_KEY)
+            .remove(PIN_FAILED_ATTEMPTS_KEY)
+            .remove(PIN_LOCKOUT_UNTIL_KEY)
             .apply()
     }
 
@@ -58,6 +109,10 @@ class HiddenSecurityRepository(context: Context) {
     companion object {
         private const val PIN_SALT_KEY = "pin_salt"
         private const val PIN_HASH_KEY = "pin_hash"
+        private const val PIN_FAILED_ATTEMPTS_KEY = "pin_failed_attempts"
+        private const val PIN_LOCKOUT_UNTIL_KEY = "pin_lockout_until"
+        private const val MaxFailedPinAttempts = 5
+        private const val PinLockoutMillis = 30_000L
 
         fun isValidPin(pin: String): Boolean {
             return pin.length in 4..12 && pin.all { it.isDigit() }

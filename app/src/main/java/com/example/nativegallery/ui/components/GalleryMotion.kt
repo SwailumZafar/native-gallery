@@ -15,9 +15,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 
 object GalleryMotion {
     const val SharedBoundsMillis = 420
-    const val AlbumOpenMillis = 430
-    const val AlbumHeroOpenDamping = 0.92f
-    const val AlbumHeroOpenStiffness = 165f
+    const val AlbumOpenMillis = 390
+    const val AlbumHeroOpenDamping = 0.86f
+    const val AlbumHeroOpenStiffness = 190f
     const val MediaOpenDamping = 0.91f
     const val MediaOpenStiffness = 260f
     const val ViewerDismissDamping = 0.9f
