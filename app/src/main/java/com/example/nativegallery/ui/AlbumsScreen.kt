@@ -6,9 +6,6 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -80,7 +78,6 @@ import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
-import kotlinx.coroutines.delay
 
 enum class AlbumDetailGridMode {
     Compact,
@@ -107,6 +104,7 @@ fun AlbumsScreen(
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit,
     contentPadding: PaddingValues,
+    listState: LazyListState,
     activeTransitionAlbumId: String? = null,
     mediaAccessNotice: (@Composable () -> Unit)? = null,
     isLoading: Boolean = false,
@@ -128,6 +126,7 @@ fun AlbumsScreen(
     val regularAlbums = sortedAlbums.filterNot { it.isAllPhotos }
 
     LazyColumn(
+        state = listState,
         contentPadding = PaddingValues(
             start = 18.dp,
             top = 58.dp,
@@ -736,15 +735,12 @@ fun AlbumDetailScreen(
         AlbumDetailGridMode.Compact -> 4
         AlbumDetailGridMode.Comfortable -> 3
     }
-    val contentProgress = FastOutSlowInEasing.transform(
-        ((albumEnterProgress.coerceIn(0f, 1f) - 0.58f) / 0.42f).coerceIn(0f, 1f)
-    )
+    val revealProgress = if (albumEnterProgress >= 0.84f) 1f else 0f
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.graphicsLayer {
-                alpha = contentProgress
-                translationY = (1f - contentProgress) * 42f
+                alpha = revealProgress
             },
             contentPadding = PaddingValues(
                 start = 10.dp,
@@ -785,10 +781,7 @@ fun AlbumDetailScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .graphicsLayer {
-                    alpha = contentProgress
-                    translationY = (1f - contentProgress) * -18f
-                },
+                .graphicsLayer { alpha = revealProgress },
             color = MaterialTheme.colorScheme.background,
             shadowElevation = 3.dp
         ) {

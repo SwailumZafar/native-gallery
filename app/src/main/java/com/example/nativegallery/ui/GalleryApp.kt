@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
@@ -85,6 +86,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -119,6 +121,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
@@ -227,6 +230,7 @@ fun GalleryApp() {
     var albumTransition by remember { mutableStateOf<AlbumTransitionSpec?>(null) }
     var albumTransitionKey by remember { mutableIntStateOf(0) }
     var albumTransitionProgress by remember { mutableStateOf(1f) }
+    var albumDetailContentReady by remember { mutableStateOf(true) }
     var mediaOpenTransition by remember { mutableStateOf<MediaOpenTransitionSpec?>(null) }
     var mediaOpenTransitionKey by remember { mutableIntStateOf(0) }
     var mediaCloseTransition by remember { mutableStateOf<MediaCloseTransitionSpec?>(null) }
@@ -235,6 +239,7 @@ fun GalleryApp() {
         initialPage = selectedTab.pageIndex(),
         pageCount = { 3 }
     )
+    val albumsListState = rememberLazyListState()
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -540,8 +545,41 @@ fun GalleryApp() {
         selectedAlbumId = album.id
         selectedTab = GalleryTab.Albums
         selectedMediaIds = emptySet()
-        destination = GalleryDestination.AlbumDetail
         val openingAlbumMedia = appMediaForAlbum(album, visibleMedia, favoriteMediaIds)
+        val hasTileTransition = tileBounds != null && tileBounds != Rect.Zero
+        albumDetailContentReady = !hasTileTransition
+        if (hasTileTransition) {
+            albumTransitionProgress = 0f
+            albumTileBounds[album.id] = tileBounds
+            albumTransitionKey += 1
+            val openingTransitionKey = albumTransitionKey
+            albumTransition = AlbumTransitionSpec(
+                key = openingTransitionKey,
+                album = album,
+                tileBounds = tileBounds,
+                mode = AlbumTransitionMode.Opening
+            )
+            prefetchScope.launch {
+                withTimeoutOrNull(1000) {
+                    prefetchMediaThumbnails(
+                        context = context.applicationContext,
+                        mediaItems = openingAlbumMedia.take(16),
+                        thumbnailSizes = listOf(384),
+                        maxItems = 16
+                    )
+                }
+                if (albumTransition?.key == openingTransitionKey || (destination == GalleryDestination.AlbumDetail && selectedAlbumId == album.id)) {
+                    albumDetailContentReady = true
+                }
+                prefetchMediaThumbnails(
+                    context = context.applicationContext,
+                    mediaItems = openingAlbumMedia,
+                    thumbnailSizes = listOf(384, 512),
+                    maxItems = 120
+                )
+            }
+            return
+        }
         prefetchScope.launch {
             prefetchMediaThumbnails(
                 context = context.applicationContext,
@@ -550,19 +588,8 @@ fun GalleryApp() {
                 maxItems = 120
             )
         }
-        if (tileBounds != null && tileBounds != Rect.Zero) {
-            albumTransitionProgress = 0f
-            albumTileBounds[album.id] = tileBounds
-            albumTransitionKey += 1
-            albumTransition = AlbumTransitionSpec(
-                key = albumTransitionKey,
-                album = album,
-                tileBounds = tileBounds,
-                mode = AlbumTransitionMode.Opening
-            )
-            return
-        }
         albumTransitionProgress = 1f
+        destination = GalleryDestination.AlbumDetail
     }
     fun closeAlbumDetail() {
         val closingAlbum = selectedAlbum
@@ -986,6 +1013,7 @@ fun GalleryApp() {
                                                     }
                                                 },
                                                 contentPadding = innerPadding,
+                                                listState = albumsListState,
                                                 activeTransitionAlbumId = albumTransition?.album?.id,
                                                 mediaAccessNotice = mediaAccessNotice,
                                                 isLoading = isLoadingMedia,
@@ -1084,14 +1112,21 @@ fun GalleryApp() {
                     transition = albumTransition,
                     rootWidthPx = rootWidthPx,
                     rootHeightPx = rootHeightPx,
+                    contentReady = albumDetailContentReady,
                     onProgressChanged = { runningTransition, progressValue ->
                         if (albumTransition?.key == runningTransition.key) {
                             albumTransitionProgress = progressValue
+                            if (runningTransition.mode == AlbumTransitionMode.Opening && progressValue >= 0.97f) {
+                                destination = GalleryDestination.AlbumDetail
+                            }
                         }
                     },
                     onFinished = { finishedTransition ->
                         if (albumTransition?.key == finishedTransition.key) {
                             albumTransitionProgress = if (finishedTransition.mode == AlbumTransitionMode.Opening) 1f else 0f
+                            if (finishedTransition.mode == AlbumTransitionMode.Opening) {
+                                destination = GalleryDestination.AlbumDetail
+                            }
                             albumTransition = null
                         }
                     }
@@ -1519,6 +1554,7 @@ private fun AlbumTouchOriginTransitionOverlay(
     transition: AlbumTransitionSpec?,
     rootWidthPx: Float,
     rootHeightPx: Float,
+    contentReady: Boolean,
     onProgressChanged: (AlbumTransitionSpec, Float) -> Unit = { _, _ -> },
     onFinished: (AlbumTransitionSpec) -> Unit
 ) {
@@ -1528,17 +1564,30 @@ private fun AlbumTouchOriginTransitionOverlay(
     val progress = remember(transition.key) {
         Animatable(if (transition.mode == AlbumTransitionMode.Closing) 1f else 0f)
     }
+    val coverReveal = remember(transition.key) { Animatable(0f) }
 
     LaunchedEffect(transition.key) {
         val targetValue = if (transition.mode == AlbumTransitionMode.Closing) 0f else 1f
         progress.animateTo(
             targetValue = targetValue,
-            animationSpec = spring(
-                dampingRatio = GalleryMotion.AlbumHeroOpenDamping,
-                stiffness = GalleryMotion.AlbumHeroOpenStiffness
-            )
+            animationSpec = tween(durationMillis = 760, easing = FastOutSlowInEasing)
         )
-        onFinished(transition)
+        if (transition.mode == AlbumTransitionMode.Closing) {
+            onFinished(transition)
+        }
+    }
+
+    LaunchedEffect(transition.key, contentReady) {
+        if (transition.mode == AlbumTransitionMode.Opening && contentReady) {
+            while (progress.value < 0.999f) {
+                delay(16)
+            }
+            coverReveal.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing)
+            )
+            onFinished(transition)
+        }
     }
 
     val easedProgress = progress.value.coerceIn(0f, 1f)
@@ -1549,7 +1598,8 @@ private fun AlbumTouchOriginTransitionOverlay(
     val height = lerp(startHeight, rootHeightPx, easedProgress)
     val translationX = lerp(transition.tileBounds.left, 0f, easedProgress)
     val translationY = lerp(transition.tileBounds.top, 0f, easedProgress)
-    val radius = lerp(22f, 0f, easedProgress)
+    val startRadius = (minOf(startWidth, startHeight) * 0.13f).coerceIn(18f, 24f)
+    val radius = lerp(startRadius, 0f, easedProgress)
     val motionProgress = if (transition.mode == AlbumTransitionMode.Opening) {
         easedProgress
     } else {
@@ -1560,12 +1610,17 @@ private fun AlbumTouchOriginTransitionOverlay(
     } else {
         (1f - motionProgress) * 2f
     }).coerceIn(0f, 1f)
-    val coverFade = ((motionProgress - 0.68f) / 0.32f).coerceIn(0f, 1f)
-    val labelFade = ((motionProgress - 0.48f) / 0.34f).coerceIn(0f, 1f)
-    val backdropAlpha = transitionPulse * 0.22f
-    val surfaceAlpha = ((1f - coverFade) * 0.10f + transitionPulse * 0.04f).coerceIn(0f, 0.14f)
+    val coverFade = if (transition.mode == AlbumTransitionMode.Opening) {
+        coverReveal.value.coerceIn(0f, 1f)
+    } else {
+        ((motionProgress - 0.84f) / 0.16f).coerceIn(0f, 1f)
+    }
+    val labelFade = ((motionProgress - 0.18f) / 0.22f).coerceIn(0f, 1f)
+    val backdropAlpha = transitionPulse * 0.08f
+    val surfaceTintAlpha = transitionPulse * 0.035f
     val coverAlpha = 1f - coverFade
     val labelAlpha = 1f - labelFade
+
 
     Box(
         modifier = Modifier
@@ -1580,10 +1635,11 @@ private fun AlbumTouchOriginTransitionOverlay(
                     transformOrigin = TransformOrigin(0f, 0f)
                     this.translationX = translationX
                     this.translationY = translationY
+                    shadowElevation = transitionPulse * 22f
                     clip = true
                     shape = RoundedCornerShape(with(density) { radius.toDp() })
                 }
-                .background(MaterialTheme.colorScheme.background.copy(alpha = surfaceAlpha))
+                .background(MaterialTheme.colorScheme.background.copy(alpha = 1f - coverFade))
         ) {
             GalleryImage(
                 imageRes = transition.album.coverRes,
@@ -1601,17 +1657,17 @@ private fun AlbumTouchOriginTransitionOverlay(
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(Color.Black.copy(alpha = coverAlpha * 0.18f))
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = coverAlpha * 0.66f)),
+                            startY = height * 0.52f
+                        )
+                    )
             )
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = surfaceAlpha))
-            )
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = lerp(0.06f, 0f, easedProgress)))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = surfaceTintAlpha))
             )
             Column(
                 modifier = Modifier
@@ -1621,7 +1677,7 @@ private fun AlbumTouchOriginTransitionOverlay(
             ) {
                 Text(
                     text = transition.album.name,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = Color.White,
                     style = MaterialTheme.typography.bodyLarge.copy(
                         fontSize = 18.sp,
                         lineHeight = 22.sp,
@@ -1631,7 +1687,7 @@ private fun AlbumTouchOriginTransitionOverlay(
                 )
                 Text(
                     text = "%1$,d items".format(transition.album.itemCount),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = Color.White.copy(alpha = 0.92f),
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 13.sp,
                         lineHeight = 16.sp,

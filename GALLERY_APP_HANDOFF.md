@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-06-26
+Last updated: 2026-06-28
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -23,7 +23,7 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Latest feature commit: gallery animation and locked folder polish
+Latest feature commit: Smooth album open handoff
 Repository visibility: private
 ```
 
@@ -44,10 +44,10 @@ F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
 Last verified APK:
 
 ```text
-Last write time: 2026-06-26 03:37 AM
-Size: 19,343,581 bytes
-Build result: passed via :app:assembleDebug after the coordinated album handoff fix
-Install result: not installed in this pass; run the direct ADB command below with the phone connected
+Last write time: 2026-06-28 12:25 AM
+Size: 19,346,151 bytes
+Build result: passed via :app:assembleDebug after the smooth album open handoff fix
+Install result: installed successfully with adb install -r
 ```
 
 Preferred user-facing install command:
@@ -58,7 +58,7 @@ Preferred user-facing install command:
 
 Available helper scripts remain in scripts, but user-facing handoffs should give the direct ADB command above.
 
-Latest build produced the debug APK above. Reconnect the phone and run the direct ADB install command above.
+Latest build produced the debug APK above and was installed on the connected phone.
 
 ## Current Implementation
 
@@ -1244,3 +1244,48 @@ Immediate real-device checks:
 - Swipe quickly between photos and videos; confirm adjacent media does not blink or vanish.
 - Pull upward in the viewer; confirm the info panel slides up again.
 - Open videos; confirm no black blink before the first video frame.
+## 2026-06-28 Smooth Album Open Handoff Save Point
+
+This is the latest saved project state after the real-device album opening polish requested in the current thread.
+
+Latest verified APK:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 2026-06-28 12:25:37 AM
+Size: 19,346,151 bytes
+Build result: passed (:app:assembleDebug)
+Install result: installed successfully with adb install -r
+Launch result: com.example.nativegallery/.MainActivity focused after install
+```
+
+Install command:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
+```
+
+Current album-animation state saved here:
+
+- Albums list scroll position is preserved with a remembered `LazyListState`, so returning from an album keeps the user at the same scrolled section.
+- Album detail photos no longer bounce, slide, or expand into the first picture. The inner grid sits still and is revealed only after the album container motion is ready.
+- Album opening now prefetches the first visible destination thumbnails before reveal, with a short timeout, then continues warming the larger destination batch in the background.
+- The expanding album cover uses a single controlled open motion, holds until the geometry is complete and content is ready, then fades away over a short cover reveal.
+- The destination handoff was moved from halfway through the expansion to the end of the cover motion, preventing the album list/detail swap from popping underneath the moving tile.
+- The transition overlay now carries the album cover with a readable gradient/tint and no white full-screen surface.
+- The opening path keeps a fallback for albums without measured tile bounds by switching directly to album detail and still prefetching thumbnails.
+
+Main files involved in this save point:
+
+```text
+app/src/main/java/com/example/nativegallery/ui/GalleryApp.kt
+app/src/main/java/com/example/nativegallery/ui/AlbumsScreen.kt
+GALLERY_APP_HANDOFF.md
+```
+
+Immediate real-device checks:
+
+- Open `All photos` from the big tile and confirm there is no white screen, late placeholder pop, or abrupt destination swap.
+- Scroll down in Albums, open a lower album, go back, and confirm the Albums list returns to the same scrolled section.
+- Open albums from both `Big tiles` and `Basic` layouts and confirm only the album container animates while the inside photos stay still.
+- Confirm the first visible photos look already loaded when the cover fades away.
