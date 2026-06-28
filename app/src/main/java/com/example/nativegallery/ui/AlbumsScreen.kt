@@ -78,6 +78,7 @@ import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
+import kotlinx.coroutines.delay
 
 enum class AlbumDetailGridMode {
     Compact,
@@ -726,17 +727,25 @@ fun AlbumDetailScreen(
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
     var sortMode by rememberSaveable(album.id) { mutableStateOf(AlbumDetailSortMode.Newest) }
-    val sortedMediaItems = when (sortMode) {
-        AlbumDetailSortMode.Newest -> mediaItems
-        AlbumDetailSortMode.Oldest -> mediaItems.asReversed()
-        AlbumDetailSortMode.Name -> mediaItems.sortedBy { it.title.lowercase() }
+    val sortedMediaItems = remember(mediaItems, sortMode) {
+        when (sortMode) {
+            AlbumDetailSortMode.Newest -> mediaItems
+            AlbumDetailSortMode.Oldest -> mediaItems.asReversed()
+            AlbumDetailSortMode.Name -> mediaItems.sortedBy { it.title.lowercase() }
+        }
     }
     val columns = when (gridMode) {
         AlbumDetailGridMode.Compact -> 4
         AlbumDetailGridMode.Comfortable -> 3
     }
-    val revealProgress = if (albumEnterProgress >= 0.84f) 1f else 0f
+    val revealProgress = 1f
+    var interactiveGridReady by remember(album.id) { mutableStateOf(false) }
 
+    LaunchedEffect(album.id) {
+        interactiveGridReady = false
+        delay(1400)
+        interactiveGridReady = true
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.graphicsLayer {
@@ -749,7 +758,9 @@ fun AlbumDetailScreen(
                 bottom = contentPadding.calculateBottomPadding() + 34.dp
             )
         ) {
-            if (sortedMediaItems.isEmpty() && album.itemCount > 0) {
+            if (!interactiveGridReady && sortedMediaItems.isNotEmpty()) {
+                albumDetailPreviewRows(mediaItems = sortedMediaItems, columns = columns)
+            } else if (sortedMediaItems.isEmpty() && album.itemCount > 0) {
                 albumDetailSkeletonRows(columns = columns)
             } else if (sortedMediaItems.isEmpty()) {
                 item(key = "album-detail-empty", contentType = "album-detail-empty") {
@@ -806,6 +817,103 @@ fun AlbumDetailScreen(
     }
 }
 
+@Composable
+fun AlbumDetailTransitionPreview(
+    album: Album,
+    mediaItems: List<MediaItem>,
+    contentPadding: PaddingValues,
+    gridMode: AlbumDetailGridMode
+) {
+    val columns = when (gridMode) {
+        AlbumDetailGridMode.Compact -> 4
+        AlbumDetailGridMode.Comfortable -> 3
+    }
+    val spacing = if (columns == 3) 5.dp else 3.dp
+    val previewItems = mediaItems.take(columns * 6)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = 10.dp,
+                    top = 150.dp,
+                    end = 10.dp,
+                    bottom = contentPadding.calculateBottomPadding() + 34.dp
+                )
+        ) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val cellSize = (maxWidth - spacing * (columns - 1)) / columns
+                Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                    repeat(6) { rowIndex ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+                            repeat(columns) { columnIndex ->
+                                val mediaItem = previewItems.getOrNull(rowIndex * columns + columnIndex)
+                                if (mediaItem != null) {
+                                    ResourceImage(
+                                        imageRes = mediaItem.imageRes,
+                                        imageUri = mediaItem.contentUri,
+                                        contentDescription = mediaItem.title,
+                                        modifier = Modifier.size(cellSize),
+                                        cornerRadius = 0.dp,
+                                        thumbnailSize = 160
+                                    )
+                                } else {
+                                    Spacer(Modifier.size(cellSize))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter),
+            color = MaterialTheme.colorScheme.background,
+            shadowElevation = 3.dp
+        ) {
+            Row(
+                modifier = Modifier.padding(start = 10.dp, top = 42.dp, end = 10.dp, bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 4.dp)
+                ) {
+                    Text(
+                        text = album.name,
+                        maxLines = 1,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "%1$,d items".format(mediaItems.size),
+                        maxLines = 1,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null)
+                }
+                Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = null)
+                }
+            }
+        }
+    }
+}
 @Composable
 private fun AlbumDetailHeader(
     album: Album,
@@ -1093,6 +1201,80 @@ private fun AlbumDetailRow(
             }
             repeat(columns - mediaItems.size) {
                 Spacer(Modifier.size(cellSize))
+            }
+        }
+    }
+}
+
+private fun LazyListScope.albumDetailPreviewRows(
+    mediaItems: List<MediaItem>,
+    columns: Int
+) {
+    val spacing = if (columns == 3) 5.dp else 3.dp
+    val rowCount = (mediaItems.size + columns - 1) / columns
+    items(
+        count = rowCount,
+        key = { rowIndex -> "album-detail-preview-row-$columns-$rowIndex" },
+        contentType = { "album-detail-preview-row" }
+    ) { rowIndex ->
+        val startIndex = rowIndex * columns
+        val rowItems = mediaItems.subList(startIndex, minOf(startIndex + columns, mediaItems.size))
+        AlbumDetailPreviewRow(mediaItems = rowItems, columns = columns, spacing = spacing)
+        Spacer(Modifier.height(spacing))
+    }
+}
+
+@Composable
+private fun AlbumDetailPreviewRow(
+    mediaItems: List<MediaItem>,
+    columns: Int,
+    spacing: androidx.compose.ui.unit.Dp
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+            mediaItems.forEach { mediaItem ->
+                ResourceImage(
+                    imageRes = mediaItem.imageRes,
+                    imageUri = mediaItem.contentUri,
+                    contentDescription = mediaItem.title,
+                    modifier = Modifier.size(cellSize),
+                    cornerRadius = 0.dp,
+                    thumbnailSize = 160
+                )
+            }
+            repeat(columns - mediaItems.size) {
+                Spacer(Modifier.size(cellSize))
+            }
+        }
+    }
+}
+private fun LazyListScope.albumDetailOpeningRows(columns: Int) {
+    val spacing = if (columns == 3) 5.dp else 3.dp
+    items(
+        items = List(4) { it },
+        key = { rowIndex -> "album-detail-opening-row-$columns-$rowIndex" },
+        contentType = { "album-detail-opening-row" }
+    ) {
+        AlbumDetailOpeningRow(columns = columns, spacing = spacing)
+        Spacer(Modifier.height(spacing))
+    }
+}
+
+@Composable
+private fun AlbumDetailOpeningRow(
+    columns: Int,
+    spacing: androidx.compose.ui.unit.Dp
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+            repeat(columns) {
+                Box(
+                    modifier = Modifier
+                        .size(cellSize)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f))
+                )
             }
         }
     }

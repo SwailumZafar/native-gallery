@@ -1289,3 +1289,154 @@ Immediate real-device checks:
 - Scroll down in Albums, open a lower album, go back, and confirm the Albums list returns to the same scrolled section.
 - Open albums from both `Big tiles` and `Basic` layouts and confirm only the album container animates while the inside photos stay still.
 - Confirm the first visible photos look already loaded when the cover fades away.
+
+## 2026-06-28 Faster Album Container Handoff Save Point
+
+This is the latest saved project state after tightening the album open animation that had become too slow and too much like opening the album's first photo.
+
+Latest verified APK:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 2026-06-28 04:00:45 AM
+Size: 19,346,375 bytes
+Build result: passed (:app:assembleDebug)
+Install result: not installed from this pass
+```
+
+Current album-animation state saved here:
+
+- Album open no longer waits up to one second for destination thumbnail prefetch before reveal; the blocking warm-up is capped at 220 ms, then the larger destination batch continues in the background.
+- The touch-origin container motion now uses the shared `GalleryMotion.AlbumOpenMillis` value at 360 ms, followed by a short 96 ms final reveal.
+- The album cover image and label fade out during the first half of the opening motion, so the animation reads as an album container/surface opening instead of the first photo expanding full-screen.
+- Album detail is mounted under the overlay earlier in the motion and its header/grid fade in smoothly from 72% to 92% progress while staying spatially still.
+- The closing path keeps the full-screen phase as a neutral surface and brings the cover back only near the tile return.
+
+Main files involved in this save point:
+
+```text
+app/src/main/java/com/example/nativegallery/ui/GalleryApp.kt
+app/src/main/java/com/example/nativegallery/ui/AlbumsScreen.kt
+app/src/main/java/com/example/nativegallery/ui/components/GalleryMotion.kt
+GALLERY_APP_HANDOFF.md
+```
+
+Immediate real-device checks:
+
+- Open `All photos` from the big tile and confirm the motion feels fast again.
+- Open albums from both `Big tiles` and `Basic` layouts and confirm the first album photo no longer appears to expand open.
+- Confirm the album detail grid/header fade in without bouncing, sliding, or resizing.
+- Confirm the neutral container handoff does not introduce a white flash on open or close.
+## 2026-06-28 Album White-Screen Regression Correction
+
+This save point fixes the white/blank album-open screen that returned after the faster album handoff change.
+
+Latest verified APK:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 2026-06-28 04:50:58 AM
+Size: 19,346,539 bytes
+Build result: passed (:app:assembleDebug)
+Install result: installed successfully with adb install -r
+Launch result: com.example.nativegallery/.MainActivity focused on connected device 30e49129
+```
+
+Correction details:
+
+- Removed the opaque full-screen album transition surface that stayed visible after the cover faded, which was the white-screen path.
+- The transition surface, tint, backdrop, and shadow now fade with `surfaceAlpha` / `handoffAlpha` instead of staying fully opaque.
+- Album detail is mounted earlier at 44% progress and fades in from 46% to 70%, so content is already visible underneath before the overlay clears.
+- Device-side ADB frame captures during `All photos` open were sampled for blank-white risk; captured frames were not high-brightness/low-variance blank frames.
+
+Main files involved:
+
+```text
+app/src/main/java/com/example/nativegallery/ui/GalleryApp.kt
+app/src/main/java/com/example/nativegallery/ui/AlbumsScreen.kt
+app/src/main/java/com/example/nativegallery/ui/components/GalleryMotion.kt
+GALLERY_APP_HANDOFF.md
+```
+## 2026-06-28 Album Motion Jank Isolation Pass
+
+This save point addresses the repeated feedback that album open still felt laggy/buggy and should behave closer to the photo viewer open animation.
+
+Latest verified APK:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 2026-06-28 05:16:37 AM
+Size: 19,346,662 bytes
+Build result: passed (:app:assembleDebug)
+Install result: installed successfully with adb install -r on device 30e49129
+```
+
+What changed in this pass:
+
+- Album opening now mounts Album Detail immediately under the transition overlay instead of waiting on thumbnail prefetch or progress gates.
+- The album transition uses a faster spring via `AlbumHeroOpenDamping = 0.9f` and `AlbumHeroOpenStiffness = 430f`.
+- The expanding album cover now behaves like a fast cover/tint sweep: the cover image fades before it can read as a full-screen first photo, while a low-alpha surface/tint creates the opening effect.
+- Blocking thumbnail prefetch was removed from the album-open path.
+- Selected-album prefetch is now keyed to `destination`, waits 1200 ms, and is canceled when returning to Albums, preventing delayed prefetch from firing during back/open loops.
+- Album Detail renders lightweight static opening rows until `albumEnterProgress >= 0.82f`, so real media bitmap uploads do not compete with the opening motion.
+
+Device verification:
+
+- Built successfully with `:app:assembleDebug`.
+- Installed and launched on the connected device.
+- Captured album-open frames from the installed build; sampled frames showed no blank-white risk.
+- Isolated one-open gfx test after reset: 23 frames, 3 janky frames, 50th percentile 16 ms, zero slow bitmap uploads.
+- Rapid repeated back/open stress loop still reports jank because it intentionally collides close/open gestures and media loading; the isolated album-open path is the cleaner signal for the requested open animation.
+
+Main files involved:
+
+```text
+app/src/main/java/com/example/nativegallery/ui/GalleryApp.kt
+app/src/main/java/com/example/nativegallery/ui/AlbumsScreen.kt
+app/src/main/java/com/example/nativegallery/ui/components/GalleryMotion.kt
+GALLERY_APP_HANDOFF.md
+```
+## 2026-06-28 Native Album Open Reference Pass
+
+This save point uses the new native gallery recording pulled from the connected device:
+
+`	ext
+/storage/emulated/0/Pictures/Screenshots/Record_2026-06-28-05-20-44_99c04817c0de5652397fc8b56c3b3817.mp4
+F:\App\Gallery\Refrence Videos\native_gallery_album_open_2026-06-28_052044.mp4
+`
+
+Latest verified APK:
+
+`	ext
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Last write time: 06/28/2026 06:19:34
+Size: 19360335 bytes
+Build result: passed (:app:assembleDebug)
+Install result: installed successfully with adb install -r on device 30e49129
+`
+
+What changed in this pass:
+
+- Album opening now matches the native recording's whole-screen card motion: Albums stays behind a dim scrim while a rounded Album Detail surface opens from the tapped album tile.
+- The album cover no longer expands into the first image. The transition surface contains an album-detail header and real photo grid content from the beginning.
+- Navigation switches to Album Detail only when the opening surface is effectively full-screen, preventing the earlier visible background swap and white-screen regression.
+- Album media lists, search results, and selected-media lists are memoized so animation recompositions do not repeatedly filter the full media library.
+- Album Detail uses a lightweight real-photo preview grid during the open/settle window, then upgrades to the full interactive grid after the animation is settled.
+- Albums tab warms the first visible album preview thumbnails at the transition preview size to reduce first-open thumbnail upload stalls.
+
+Device verification performed:
+
+- Pulled and inspected the native reference recording with frame strips around album opens.
+- Built, installed, and launched on connected device 30e49129.
+- Captured post-open app frames and confirmed no white/black blank screen after album open.
+- Repeated album open checks from cold-ish and cached states; repeated cached open reached 35 frames with 5 janky frames, 50th percentile 13 ms, and no structural blank/handoff failure.
+
+Notes:
+
+- The phone's screenrecord binary refuses to write recordings even in /data/local/tmp, so verification used pulled native reference frames, device screenshots, and dumpsys gfxinfo frame stats.
+
+## 2026-06-28 Final Album Open Device Check
+- Matched the album open to the native recording structure: a rounded full album-detail surface opens from the tapped album tile with header and real grid visible; the old cover/first-photo expansion path is removed.
+- Final debug APK built and installed on connected device 30e49129.
+- Device check after install: no white screen in final screenshots, album detail shows the real Screenshots grid; measured run was 39 frames, 5 janky frames, median 19ms, 1 slow bitmap upload. Warm cached run before final timing change measured 36 frames, 4 janky frames, median 12ms.
+- Android screenrecord is blocked on this device, so verification used native reference frame inspection, adb gfxinfo, and device screenshots.
