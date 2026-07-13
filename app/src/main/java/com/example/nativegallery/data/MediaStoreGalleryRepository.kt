@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.provider.BaseColumns
 import android.provider.MediaStore
 import com.example.nativegallery.model.Album
+import com.example.nativegallery.model.RecentlyDeletedMedia
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.model.MediaType
 import com.example.nativegallery.util.GalleryPerformanceMonitor
@@ -37,6 +38,21 @@ class MediaStoreGalleryRepository(
         }
     }
 
+    fun loadTrashedMedia(mediaKinds: Set<MediaKind>): List<RecentlyDeletedMedia> {
+        return GalleryPerformanceMonitor.trace("MediaStore trashed media load") {
+            if (mediaKinds.isEmpty() || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                return@trace emptyList()
+            }
+
+            queryMedia(mediaKinds = mediaKinds, onlyTrashed = true).map { row ->
+                RecentlyDeletedMedia(
+                    mediaItem = row.mediaItem,
+                    deletedAtMillis = row.deletedAtMillis()
+                )
+            }
+        }
+    }
+
     fun loadGalleryPage(
         mediaKinds: Set<MediaKind>,
         limit: Int,
@@ -62,7 +78,8 @@ class MediaStoreGalleryRepository(
     private fun queryMedia(
         mediaKinds: Set<MediaKind>,
         limit: Int? = null,
-        offset: Int = 0
+        offset: Int = 0,
+        onlyTrashed: Boolean = false
     ): List<MediaStoreRow> {
         val resolver = appContext.contentResolver
         val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -92,6 +109,7 @@ class MediaStoreGalleryRepository(
             add(MediaStore.MediaColumns.HEIGHT)
             add(MediaStore.Video.Media.DURATION)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add(MediaStore.MediaColumns.DATE_EXPIRES)
                 add(MediaStore.MediaColumns.RELATIVE_PATH)
             } else {
                 @Suppress("DEPRECATION")
@@ -99,9 +117,8 @@ class MediaStoreGalleryRepository(
             }
         }.toTypedArray()
         val placeholders = mediaTypes.joinToString(separator = ",") { "?" }
-        val selection = (listOf(
-            "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($placeholders)"
-        ) + MediaStoreVisibilityPolicy.selectionClauses()).joinToString(separator = " AND ")
+        val selection = (listOf("${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($placeholders)") +
+            visibilitySelectionClauses(onlyTrashed)).joinToString(separator = " AND ")
         val selectionArgs = mediaTypes.map { it.toString() }.toTypedArray()
         val sortOrder = "${MediaStore.MediaColumns.DATE_TAKEN} DESC, ${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
         val rows = mutableListOf<MediaStoreRow>()
@@ -113,6 +130,7 @@ class MediaStoreGalleryRepository(
             selection = selection,
             selectionArgs = selectionArgs,
             sortOrder = sortOrder,
+            onlyTrashed = onlyTrashed,
             limit = limit,
             offset = offset
         )
@@ -136,6 +154,7 @@ class MediaStoreGalleryRepository(
                 @Suppress("DEPRECATION")
                 mediaCursor.getColumnIndex(MediaStore.MediaColumns.DATA)
             }
+            val dateExpiresColumn = mediaCursor.getColumnIndex(MediaStore.MediaColumns.DATE_EXPIRES)
 
             while (mediaCursor.moveToNext()) {
                 val path = if (pathColumn >= 0 && !mediaCursor.isNull(pathColumn)) {
@@ -182,6 +201,11 @@ class MediaStoreGalleryRepository(
                     null
                 }
                 val contentUri = contentUriFor(mediaType, id)
+                val dateExpiresSeconds = if (dateExpiresColumn >= 0 && !mediaCursor.isNull(dateExpiresColumn)) {
+                    mediaCursor.getLong(dateExpiresColumn).takeIf { it > 0L }
+                } else {
+                    null
+                }
                 val mediaItem = MediaItem(
                     id = "${mediaType.name.lowercase(Locale.US)}-$id",
                     albumId = bucketId,
@@ -197,7 +221,7 @@ class MediaStoreGalleryRepository(
                     width = width,
                     height = height
                 )
-                rows += MediaStoreRow(mediaItem, bucketName)
+                rows += MediaStoreRow(mediaItem, bucketName, dateExpiresSeconds)
             }
         }
 
@@ -211,27 +235,40 @@ class MediaStoreGalleryRepository(
         selection: String,
         selectionArgs: Array<String>,
         sortOrder: String,
+        onlyTrashed: Boolean,
         limit: Int?,
         offset: Int
-    ) = if (limit == null) {
+    ) = if (limit == null && !onlyTrashed) {
         resolver.query(collection, projection, selection, selectionArgs, sortOrder)
     } else {
         runCatching {
             val queryArgs = Bundle().apply {
                 putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
                 putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    putInt(
+                        MediaStore.QUERY_ARG_MATCH_TRASHED,
+                        if (onlyTrashed) MediaStore.MATCH_ONLY else MediaStore.MATCH_EXCLUDE
+                    )
+                }
                 putStringArray(
                     ContentResolver.QUERY_ARG_SORT_COLUMNS,
                     arrayOf(MediaStore.MediaColumns.DATE_TAKEN, MediaStore.MediaColumns.DATE_MODIFIED)
                 )
                 putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
-                putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
-                putInt(ContentResolver.QUERY_ARG_OFFSET, offset.coerceAtLeast(0))
+                limit?.let { pageLimit ->
+                    putInt(ContentResolver.QUERY_ARG_LIMIT, pageLimit)
+                    putInt(ContentResolver.QUERY_ARG_OFFSET, offset.coerceAtLeast(0))
+                }
             }
             resolver.query(collection, projection, queryArgs, null)
         }.getOrElse {
-            val limitedSortOrder = "$sortOrder LIMIT $limit OFFSET ${offset.coerceAtLeast(0)}"
-            resolver.query(collection, projection, selection, selectionArgs, limitedSortOrder)
+            if (limit == null) {
+                resolver.query(collection, projection, selection, selectionArgs, sortOrder)
+            } else {
+                val limitedSortOrder = "$sortOrder LIMIT $limit OFFSET ${offset.coerceAtLeast(0)}"
+                resolver.query(collection, projection, selection, selectionArgs, limitedSortOrder)
+            }
         }
     }
 
@@ -304,10 +341,28 @@ class MediaStoreGalleryRepository(
         }
     }
 
+    private fun visibilitySelectionClauses(onlyTrashed: Boolean): List<String> {
+        return buildList {
+            add("${MediaStore.MediaColumns.SIZE} > 0")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                add("${MediaStore.MediaColumns.IS_PENDING} = 0")
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                add("${MediaStore.MediaColumns.IS_TRASHED} = ${if (onlyTrashed) 1 else 0}")
+            }
+        }
+    }
+
     private data class MediaStoreRow(
         val mediaItem: MediaItem,
-        val albumName: String
-    )
+        val albumName: String,
+        val dateExpiresSeconds: Long? = null
+    ) {
+        fun deletedAtMillis(): Long {
+            return dateExpiresSeconds?.let { (it * 1000L) - RecentlyDeletedRepository.RetentionMillis }
+                ?: System.currentTimeMillis()
+        }
+    }
 
     companion object {
         const val InitialGalleryPageSize = 360

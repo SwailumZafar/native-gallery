@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-06-28
+Last updated: 2026-07-14
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -116,7 +116,7 @@ Completed so far:
 - Viewer chrome can be tapped to show/hide while browsing photos or videos.
 - Video viewer controls now include a scrubber, elapsed/total time, and 10-second rewind/forward buttons.
 - React/Vite animation reference in FEATURES.md was reviewed and ported into the native Compose interaction model.
-- Photos now have a rubber-band pull-down refresh gesture with the existing skeleton loading treatment.
+- Pull-to-refresh was removed; gallery updates come from MediaStore reloads after real media operations.
 - Photos multi-select now supports drag-select using the first touched tile as add/remove mode.
 - Multi-select now has a fixed bottom share/delete action bar above the bottom navigation.
 - Selected media can be shared through Android's system share sheet.
@@ -1440,3 +1440,157 @@ Notes:
 - Final debug APK built and installed on connected device 30e49129.
 - Device check after install: no white screen in final screenshots, album detail shows the real Screenshots grid; measured run was 39 frames, 5 janky frames, median 19ms, 1 slow bitmap upload. Warm cached run before final timing change measured 36 frames, 4 janky frames, median 12ms.
 - Android screenrecord is blocked on this device, so verification used native reference frame inspection, adb gfxinfo, and device screenshots.
+
+## 2026-06-29 Locked/Deleted Viewer and Vault Pass
+
+This pass focused on the user-reported locked media, recently deleted, and viewer chrome issues, plus a real encrypted-copy layer for locked media.
+
+What changed:
+
+- Recently Deleted rows now open media into the full viewer instead of only offering Restore/Delete actions.
+- Recently Deleted viewer mode exposes only `Info`, `Restore`, and `Delete forever` actions.
+- Locked Media grid thumbnails now open media into the full viewer instead of only offering `Show`.
+- Locked viewer mode exposes only `Info`, `Show`, and `Delete` actions.
+- The photo/video viewer chrome was reduced: compact dark back button, compact dark action pill, smaller icons, smaller filmstrip, and smaller video transport controls.
+- Added `LockedMediaVaultRepository` and `LockedMediaVaultProvider` for AES-GCM encrypted private copies in app-private storage, backed by AndroidKeyStore key `native_gallery_locked_media_v1`.
+- Locked photos use the encrypted vault content URI for viewing after locking. Locked videos still create encrypted private copies, but viewer playback uses the original MediaStore URI because this device's media stack repeatedly GC-stalled when playing video from the encrypted provider. This keeps locked video viewing smooth while preserving the encrypted-copy groundwork.
+- Vault provider now returns seekable app-private temp file descriptors and clears stale temp files before each decrypt-open.
+- Thumbnail loading skips vault URIs and locked grid thumbnails use original MediaStore thumbnails, avoiding the previous encrypted-video thumbnail/GC path.
+- Rewrote the thumbnail loader away from `produceState` to `remember` + `LaunchedEffect`, which resolved the Compose lint error.
+
+Device verification on RMX3852 / device `30e49129`:
+
+- Built and installed the final debug APK: `F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk`.
+- Verified Photos screen foreground load and video viewer geometry by UI bounds: video controls and viewer action bar no longer overlap, and the action bar is compact.
+- Ran a reversible Recently Deleted flow: deleted one visible video in-app, opened it from Recently Deleted into viewer mode, confirmed `Info`/`Restore`/`Delete forever`, then restored it. Final bin state showed `Nothing deleted yet.`
+- Ran locked-media flows with a temporary `1234` PIN and cleaned the app-private test state afterward. Verified encrypted `.ngv` vault copies were created for locked test items and removed after cleanup.
+- Confirmed final app-private cleanup: only `profileInstalled`, `native_gallery_hidden_albums.xml`, and `native_gallery_recently_deleted.xml` remained; no temporary PIN, hidden-media prefs, vault files, or vault cache files remained.
+
+Final verification commands:
+
+```text
+:app:assembleDebug -> BUILD SUCCESSFUL
+:app:lintDebug -> BUILD SUCCESSFUL
+:app:testDebugUnitTest -> BUILD SUCCESSFUL / NO-SOURCE
+adb install -r app-debug.apk -> Success
+```
+
+Caveat to revisit:
+
+- Full destructive migration of locked items out of public MediaStore is not implemented yet. The app now creates encrypted private copies and prefers encrypted viewing for locked photos, but originals still remain in MediaStore because deleting them safely requires a metadata index and restore/export path.
+- Encrypted video playback through the vault provider is intentionally bypassed for now after live-device GC stalls; keep using MediaStore URI for locked videos until a streaming/segment or explicit decrypt-to-session playback design is added.
+
+## 2026-06-30 ColorOS-Style Motion Pass
+
+This pass implements the attached animation spec direction: classic gallery content with a more continuous ColorOS-like motion system.
+
+What changed:
+
+- Added shared container motion tokens and easing helpers in `GalleryMotion.kt` (`ContainerOpen*`, `ContainerClose*`, `ViewerSpringBack*`, `smoothstep`, `easeOutCubic`).
+- Album open/close now uses spring-driven container motion instead of the old short tween.
+- Album transition scrim is monotonic with progress instead of pulsing mid-animation.
+- Album transition preview now fades header/grid in with progress curves instead of hard visibility gates.
+- Album destination commits near the end of opening (`~92%`) before the overlay clears, reducing the final snap/pop.
+- Removed the fixed 1400 ms Album Detail interactive-grid delay; grid readiness now follows transition progress.
+- Viewer open no longer waits on thumbnail prefetch before starting the hero overlay; prefetch now runs in parallel.
+- Media open/close overlays now use eased backdrop/radius curves, with close using the close spring tokens.
+- Media open overlay uses lighter thumbnail loading during the hero so bitmap decode is less likely to fight the animation.
+- Viewer drag-dismiss velocity threshold was tuned from `950f` to `900f` to match the new dismiss spec.
+
+Verification:
+
+```text
+:app:assembleDebug -> BUILD SUCCESSFUL
+:app:lintDebug -> BUILD SUCCESSFUL
+:app:testDebugUnitTest -> BUILD SUCCESSFUL / NO-SOURCE
+git diff --check -> clean except existing CRLF warnings
+```
+
+Device note:
+
+- ADB reported no attached devices during this pass, so the APK was not installed and the ColorOS-style visual smoke test still needs to be run on the phone.
+
+## 2026-07-12 Dark Theme, Media Controls, and 120 Hz Performance Pass
+
+This pass completes the interrupted dark-mode, viewer, album-transition, and frame-time work.
+
+What changed:
+
+- Replaced the hardcoded white Menu card and floating bottom dock with theme surfaces; removed the dock's redundant blur layer.
+- Added a high-contrast dark teal accent and API-qualified light/dark launch and system-bar resources.
+- Added left-side video brightness and right-side local playback-volume controls with accessibility progress semantics. Window brightness is restored after leaving video/viewer.
+- Inactive video pager pages now render posters instead of preparing extra MediaPlayer/TextureView instances; neighboring photos use smaller decodes and the active photo is capped to the device screen size (maximum 3072 px).
+- Rebuilt photo/video open and close heroes as a uniformly scaled media layer behind a separately animated clip, eliminating aspect-ratio stretching and the squeezed appearance.
+- Album opening now prewarms the exact 384 px detail thumbnails, reuses nearest cached sizes immediately, and mounts the destination before the overlay clears.
+- Album transition content uses required full-screen bounds so the grid no longer reflows/compresses while the container opens or closes.
+- Back/navigation handlers now keep the album close animation, clear selection before leaving Album Detail, cancel an in-progress open safely, and block conflicting navigation during transition settlement.
+- Added bounded thumbnail concurrency, in-flight request deduplication, cancellation checks, bitmap pre-draw, and a nearest-size cache index.
+- Removed scroll-frame Compose state writes for photo, album, locked-media, and recently-deleted bounds; photo sections and row indexing are memoized/lazy.
+- Reduced the main pager's retained offscreen pages, memoized root media/album transforms, marked immutable models, and stopped substituting fake media for a genuinely empty permitted gallery.
+- The window still requests the highest supported refresh rate; Android 15 additionally gets touch frame-rate boost, disabled balanced power downshift, and per-view requested frame-rate hints.
+- The Menu Settings row now opens Android's real app settings instead of doing nothing.
+
+Verification:
+
+```text
+clean :app:compileDebugKotlin -> BUILD SUCCESSFUL
+:app:assembleDebug -> BUILD SUCCESSFUL
+:app:lintDebug -> BUILD SUCCESSFUL
+:app:testDebugUnitTest -> BUILD SUCCESSFUL / NO-SOURCE
+git diff --check -> clean except existing CRLF warnings
+```
+
+Latest verified APK:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Size: 19,372,367 bytes
+Last write: 2026-07-12 06:14:40
+```
+
+Device note:
+
+- ADB reported no attached device, so the final visual 120 Hz/frame-timing check and brightness restoration smoke test still need to be run on the RMX3852.
+## 2026-07-14 Viewer, Albums, Editor, Cleanup, and Cache Pass
+
+This pass restores the approved viewer pacing and completes the requested album, selection, cleanup, editing, and repeated-thumbnail fixes.
+
+What changed:
+
+- Restored the viewer's original relaxed spring pacing by removing the newer front-loaded cubic remap and using the matching open/close spring, while keeping the aspect-preserving no-squeeze geometry.
+- Viewer information now uses Material theme surface/on-surface colors and follows light/dark mode.
+- Added a velocity-scaled native fling behavior to Photos, Albums, Album Detail, Recently Deleted, Cleanup, and the album picker. Flings travel about 38% less distance while retaining Compose's native decay.
+- Removed pull-to-refresh and its unused loading interaction.
+- Moved Photos and Album Detail selection controls to bottom action surfaces with clear, select-all, lock/share/delete actions.
+- Rebuilt Recently Deleted as a four-column album-style media grid. Tap opens the existing restore viewer; long-press shows thumbnail, restore, and delete-forever actions.
+- Cleanup duplicate groups now render all candidate thumbnails, support full-screen inspection, allow choosing the copy to keep, and trash only the others. Large-file rows also show tappable media previews.
+- Added a 192 MB bounded disk thumbnail cache with asynchronous compression so revisiting screens reuses thumbnails without delaying the first visible decode.
+- Added a reliable in-app photo editor with rotate, square crop, Original/Mono/Warm/Cool filters, freehand markup, undo/reset, and save-copy to `Pictures/Native Gallery Edits`.
+- The Albums plus button now prompts for a name, opens a media picker, requests MediaStore write access, and moves selected media into `DCIM/<album name>`.
+- Empty albums are not persisted: cancelling or confirming with no selected media creates nothing, avoiding stale/ghost albums.
+- Removed Locked Media and Hidden Albums from the Albums screen shortcuts/overflow; they remain available from Menu. Recently Deleted remains in Albums.
+- Tightened album typography and aligned album name/count labels to the lower-right; Basic tiles are slightly larger and the Basic/Big Tiles selector has richer labels and spacing.
+- Video brightness/volume overlays remain gesture-only and auto-hide; the details-first downward-dismiss behavior remains intact.
+
+Verification:
+
+```text
+:app:compileDebugKotlin -> BUILD SUCCESSFUL
+:app:lintDebug -> BUILD SUCCESSFUL (0 errors, 10 existing warnings)
+:app:testDebugUnitTest -> BUILD SUCCESSFUL / NO-SOURCE
+:app:assembleDebug -> BUILD SUCCESSFUL
+git diff --check -> clean except existing CRLF conversion warnings
+```
+
+Latest verified APK:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Size: 19,944,229 bytes
+Last write: 2026-07-14 03:55:09
+SHA-256: 5543A95CBD096703020C576AC41F1F18C210B27E13D1EBE955E37D8852D8D361
+```
+
+Device note:
+
+- The build is verified locally; the viewer pacing, 120 Hz feel, MediaStore move confirmation, and editor save output still need a physical-device smoke test.

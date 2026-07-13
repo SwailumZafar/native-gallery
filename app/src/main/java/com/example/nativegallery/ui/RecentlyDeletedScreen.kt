@@ -3,6 +3,8 @@
 package com.example.nativegallery.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,18 +13,26 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -30,28 +40,36 @@ import androidx.compose.ui.unit.sp
 import com.example.nativegallery.data.RecentlyDeletedRepository
 import com.example.nativegallery.model.RecentlyDeletedMedia
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.rememberGalleryFlingBehavior
 import java.util.concurrent.TimeUnit
+private class RecentlyDeletedBoundsRef(var value: Rect = Rect.Zero)
+
 
 @Composable
 fun RecentlyDeletedScreen(
     deletedItems: List<RecentlyDeletedMedia>,
     onBack: () -> Unit,
-    onOpenMedia: (RecentlyDeletedMedia) -> Unit,
+    onOpenMedia: (RecentlyDeletedMedia, Rect) -> Unit,
     onRestore: (RecentlyDeletedMedia) -> Unit,
     onRestoreAll: () -> Unit,
     onDeleteForever: (RecentlyDeletedMedia) -> Unit,
     onDeleteAllForever: () -> Unit,
     contentPadding: PaddingValues
 ) {
-    LazyColumn(
+    var actionEntry by remember { mutableStateOf<RecentlyDeletedMedia?>(null) }
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(4),
+        flingBehavior = rememberGalleryFlingBehavior(),
         contentPadding = PaddingValues(
-            start = 18.dp,
+            start = 4.dp,
             top = 48.dp,
-            end = 18.dp,
+            end = 4.dp,
             bottom = contentPadding.calculateBottomPadding() + 34.dp
-        )
+        ),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        item(key = "recently-deleted-header", contentType = "recently-deleted-header") {
+        item(key = "recently-deleted-header", span = { GridItemSpan(maxLineSpan) }, contentType = "recently-deleted-header") {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -106,7 +124,7 @@ fun RecentlyDeletedScreen(
         }
 
         if (deletedItems.isEmpty()) {
-            item(key = "recently-deleted-empty", contentType = "recently-deleted-empty") {
+            item(key = "recently-deleted-empty", span = { GridItemSpan(maxLineSpan) }, contentType = "recently-deleted-empty") {
                 Text(
                     text = "Nothing deleted yet.",
                     style = MaterialTheme.typography.titleMedium,
@@ -117,66 +135,71 @@ fun RecentlyDeletedScreen(
             items(
                 items = deletedItems,
                 key = { entry -> entry.mediaItem.id },
-                contentType = { "recently-deleted-row" }
+                contentType = { "recently-deleted-tile" }
             ) { entry ->
-                RecentlyDeletedRow(
+                RecentlyDeletedTile(
                     entry = entry,
-                    onOpenMedia = { onOpenMedia(entry) },
-                    onRestore = { onRestore(entry) },
-                    onDeleteForever = { onDeleteForever(entry) }
+                    onOpenMedia = { bounds -> onOpenMedia(entry, bounds) },
+                    onShowActions = { actionEntry = entry }
                 )
-                Spacer(Modifier.height(14.dp))
             }
         }
+    }
+
+    actionEntry?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { actionEntry = null },
+            title = { Text(entry.mediaItem.title, maxLines = 1) },
+            text = {
+                Column {
+                    MediaThumbnail(
+                        mediaItem = entry.mediaItem,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f),
+                        cornerRadius = 18.dp
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(daysLeftLabel(entry.deletedAtMillis))
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    actionEntry = null
+                    onRestore(entry)
+                }) {
+                    Text("Restore")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    actionEntry = null
+                    onDeleteForever(entry)
+                }) {
+                    Text("Delete forever")
+                }
+            }
+        )
     }
 }
 
 @Composable
-private fun RecentlyDeletedRow(
+private fun RecentlyDeletedTile(
     entry: RecentlyDeletedMedia,
-    onOpenMedia: () -> Unit,
-    onRestore: () -> Unit,
-    onDeleteForever: () -> Unit
+    onOpenMedia: (Rect) -> Unit,
+    onShowActions: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        MediaThumbnail(
-            mediaItem = entry.mediaItem,
-            modifier = Modifier.size(76.dp),
-            cornerRadius = 18.dp,
-            onClick = onOpenMedia
-        )
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 16.dp, end = 12.dp)
-        ) {
-            Text(
-                text = entry.mediaItem.title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 1
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "${entry.mediaItem.dateLabel} - ${daysLeftLabel(entry.deletedAtMillis)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-        }
-        Column(horizontalAlignment = Alignment.End) {
-            Button(onClick = onRestore) {
-                Text("Restore")
-            }
-            TextButton(onClick = onDeleteForever) {
-                Text("Delete")
-            }
-        }
-    }
+    val itemBounds = remember(entry.mediaItem.id) { RecentlyDeletedBoundsRef() }
+    MediaThumbnail(
+        mediaItem = entry.mediaItem,
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f),
+        cornerRadius = 4.dp,
+        onBoundsChanged = { itemBounds.value = it },
+        onClick = { onOpenMedia(itemBounds.value) },
+        onLongClick = onShowActions
+    )
 }
 
 private fun daysLeftLabel(deletedAtMillis: Long): String {

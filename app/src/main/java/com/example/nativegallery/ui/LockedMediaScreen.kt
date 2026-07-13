@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -50,6 +51,8 @@ import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
+
+private class LockedMediaBoundsRef(var value: Rect = Rect.Zero)
 
 @Composable
 fun LockedMediaScreen(
@@ -63,6 +66,7 @@ fun LockedMediaScreen(
     onPinUnlock: (String) -> Unit,
     onBiometricUnlock: () -> Unit,
     onUnhideMedia: (MediaItem) -> Unit,
+    onOpenMedia: (MediaItem, Rect) -> Unit,
     contentPadding: PaddingValues
 ) {
     val context = LocalContext.current
@@ -142,7 +146,8 @@ fun LockedMediaScreen(
                 ) { rowItems ->
                     LockedMediaGridRow(
                         mediaItems = rowItems,
-                        onUnhideMedia = onUnhideMedia
+                        onUnhideMedia = onUnhideMedia,
+                        onOpenMedia = onOpenMedia
                     )
                     Spacer(Modifier.height(1.dp))
                 }
@@ -371,6 +376,7 @@ private fun LockedMediaEmpty() {
 private fun LockedMediaGridRow(
     mediaItems: List<MediaItem>,
     onUnhideMedia: (MediaItem) -> Unit,
+    onOpenMedia: (MediaItem, Rect) -> Unit,
     columns: Int = 4,
     spacing: androidx.compose.ui.unit.Dp = 1.dp
 ) {
@@ -382,11 +388,14 @@ private fun LockedMediaGridRow(
         val cellSize = (maxWidth - spacing * (columns - 1)) / columns
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
             mediaItems.forEach { mediaItem ->
+                val itemBounds = remember(mediaItem.id) { LockedMediaBoundsRef() }
                 Box(modifier = Modifier.size(cellSize)) {
                     MediaThumbnail(
                         mediaItem = mediaItem,
                         modifier = Modifier.matchParentSize(),
-                        cornerRadius = 0.dp
+                        cornerRadius = 0.dp,
+                        onBoundsChanged = { itemBounds.value = it },
+                        onClick = { onOpenMedia(mediaItem, itemBounds.value) }
                     )
                     TextButton(
                         onClick = { onUnhideMedia(mediaItem) },

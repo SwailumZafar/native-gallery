@@ -5,6 +5,7 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
         <item name="android:windowBackground">#F0EDE4</item>
         <item name="android:navigationBarColor">#F0EDE4</item>
         <item name="android:statusBarColor">#F0EDE4</item>

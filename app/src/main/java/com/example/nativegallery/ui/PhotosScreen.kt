@@ -18,7 +18,6 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.CircularProgressIndicator
@@ -71,7 +70,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
@@ -79,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryMotion
+import com.example.nativegallery.ui.components.rememberGalleryFlingBehavior
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
@@ -87,6 +86,8 @@ private enum class DragSelectMode {
     Add,
     Remove
 }
+
+private class PhotoBoundsRef(var value: Rect = Rect.Zero)
 
 private val RefreshSkeletonMillis = GalleryMotion.SkeletonVisibleMillis
 
@@ -98,6 +99,7 @@ fun PhotosScreen(
     mediaAccessNotice: (@Composable () -> Unit)? = null,
     isLoading: Boolean = false,
     searchQuery: String = "",
+    gridColumns: Int = 4,
     onSearchQueryChange: (String) -> Unit = {},
     selectedMediaIds: Set<String> = emptySet(),
     onMediaLongClick: (MediaItem) -> Unit = {},
@@ -113,40 +115,24 @@ fun PhotosScreen(
     activeSharedElementKey: Any? = null,
     onMediaClick: (MediaItem, Rect, String, String) -> Unit = { _, _, _, _ -> }
 ) {
-    val sections = mediaItems
-        .groupBy { it.dateLabel }
-        .entries
-        .toList()
+    val sections = remember(mediaItems) {
+        mediaItems
+            .groupBy { it.dateLabel }
+            .entries
+            .toList()
+    }
     val listState = rememberLazyListState()
-    val rawHeaderCollapse by remember {
-        derivedStateOf {
-            if (listState.firstVisibleItemIndex > 0) {
-                1f
-            } else {
-                (listState.firstVisibleItemScrollOffset / 220f).coerceIn(0f, 1f)
-            }
-        }
-    }
-    val headerCollapse = rawHeaderCollapse
-    val tileBounds = remember { mutableStateMapOf<String, Rect>() }
-    var rootBounds by remember { mutableStateOf(Rect.Zero) }
+    val headerCollapse = 0f
+    val tileBounds = remember { mutableMapOf<String, Rect>() }
+    val rootBounds = remember { PhotoBoundsRef() }
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
-    var pullDistance by remember { mutableFloatStateOf(0f) }
-    var localRefreshing by remember { mutableStateOf(false) }
     val isSelectionMode = selectedMediaIds.isNotEmpty()
-    val showLoading = isLoading || localRefreshing
-    val pullThresholdPx = with(LocalDensity.current) { GalleryMotion.PullThresholdDp.dp.toPx() }
-    val refreshProgress = (pullDistance / pullThresholdPx).coerceIn(0f, 1f)
+    val showLoading = isLoading
 
-    LaunchedEffect(localRefreshing) {
-        if (localRefreshing) {
-            delay(RefreshSkeletonMillis)
-            localRefreshing = false
-            pullDistance = 0f
-        }
-    }
-
-    fun rootPoint(localPoint: Offset): Offset = Offset(rootBounds.left + localPoint.x, rootBounds.top + localPoint.y)
+    fun rootPoint(localPoint: Offset): Offset = Offset(
+        rootBounds.value.left + localPoint.x,
+        rootBounds.value.top + localPoint.y
+    )
 
     fun hitMedia(localPoint: Offset): MediaItem? {
         val point = rootPoint(localPoint)
@@ -156,8 +142,8 @@ fun PhotosScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned { rootBounds = it.boundsInRoot() }
-            .pointerInput(isSelectionMode, mediaItems, pullThresholdPx, showLoading) {
+            .onGloballyPositioned { rootBounds.value = it.boundsInRoot() }
+            .pointerInput(isSelectionMode, mediaItems) {
                 var dragMode: DragSelectMode? = null
                 var baseSelectedIds = emptySet<String>()
                 val visitedMediaIds = mutableSetOf<String>()
@@ -195,66 +181,18 @@ fun PhotosScreen(
                             visitedMediaIds.clear()
                         }
                     )
-                } else {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        val touchSlop = viewConfiguration.touchSlop
-                        var activePointerId = down.id
-                        var lastPosition = down.position
-                        var handlingPull = false
-                        var endedNormally = false
-
-                        while (true) {
-                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                            val change = event.changes.firstOrNull { it.id == activePointerId }
-                                ?: event.changes.firstOrNull { it.pressed }
-                                ?: break
-                            activePointerId = change.id
-                            if (!change.pressed) {
-                                endedNormally = true
-                                break
-                            }
-
-                            val delta = change.position - lastPosition
-                            lastPosition = change.position
-                            if (!handlingPull) {
-                                val totalDrag = change.position - down.position
-                                val passedSlop = abs(totalDrag.x) > touchSlop || abs(totalDrag.y) > touchSlop
-                                if (!passedSlop) continue
-                                if (abs(totalDrag.y) <= abs(totalDrag.x) * 1.15f) break
-                                handlingPull = true
-                            }
-
-                            if (handlingPull) {
-                                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                                val pullingDown = delta.y > 0f || pullDistance > 0f
-                                if (atTop && pullingDown && !showLoading) {
-                                    val rawPull = (pullDistance + delta.y).coerceAtLeast(0f)
-                                    pullDistance = min(rawPull / (1f + rawPull / 100f), pullThresholdPx * 1.3f)
-                                    change.consume()
-                                }
-                            }
-                        }
-
-                        if (handlingPull || endedNormally) {
-                            if (pullDistance >= pullThresholdPx && !showLoading) {
-                                localRefreshing = true
-                            } else if (!localRefreshing) {
-                                pullDistance = 0f
-                            }
-                        }
-                    }
                 }
             }
     ) {
         LazyColumn(
-            modifier = Modifier.graphicsLayer { translationY = if (showLoading) 0f else pullDistance },
+            modifier = Modifier,
             state = listState,
+            flingBehavior = rememberGalleryFlingBehavior(),
             contentPadding = PaddingValues(
                 start = 0.dp,
                 top = 0.dp,
                 end = 0.dp,
-                bottom = contentPadding.calculateBottomPadding() + 34.dp
+                bottom = contentPadding.calculateBottomPadding() + if (isSelectionMode) 178.dp else 34.dp
             )
         ) {
             item(key = "pictures-header", contentType = "pictures-header") {
@@ -283,7 +221,7 @@ fun PhotosScreen(
                     photoSection(
                         title = section.key,
                         mediaItems = section.value,
-                        columns = 4,
+                        columns = gridColumns,
                         selectedMediaIds = selectedMediaIds,
                         sharedTransitionScope = sharedTransitionScope,
                         animatedVisibilityScope = animatedVisibilityScope,
@@ -298,18 +236,14 @@ fun PhotosScreen(
             }
         }
 
-        PullRefreshIndicator(
-            progress = refreshProgress,
-            refreshing = localRefreshing,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 46.dp)
-                .zIndex(2f)
-        )
+
 
         SelectionBottomActionBar(
             visible = isSelectionMode,
             selectedCount = selectedMediaIds.size,
+            totalVisibleCount = mediaItems.size,
+            onClear = onSelectionClear,
+            onSelectAll = onSelectAllVisible,
             contentPadding = contentPadding,
             onShare = onShareSelected,
             onHide = onHideSelected,
@@ -347,7 +281,7 @@ private fun PicturesHeader(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = if (selectedCount > 0) "%1$,d selected".format(selectedCount) else "Pictures",
+            text = if (selectedCount > 0) "%1$,d selected".format(selectedCount) else "Photos",
             modifier = Modifier.graphicsLayer {
                 alpha = titleAlpha
                 transformOrigin = TransformOrigin(0.5f, 0f)
@@ -391,17 +325,6 @@ private fun PicturesHeader(
                 onQueryChange = onSearchQueryChange
             )
         }
-        if (selectedCount > 0) {
-            Spacer(Modifier.height(12.dp))
-            SelectionToolbar(
-                selectedCount = selectedCount,
-                totalVisibleCount = totalVisibleCount,
-                onClear = onSelectionClear,
-                onSelectAll = onSelectAllVisible,
-                onDelete = onDeleteSelected,
-                onHide = onHideSelected
-            )
-        }
         if (mediaAccessNotice != null) {
             Spacer(Modifier.height(18.dp))
             mediaAccessNotice()
@@ -414,110 +337,28 @@ private fun PicturesHeader(
 private fun SearchCircle() {
     Surface(
         modifier = Modifier.size(50.dp),
-        color = Color(0xFFF3F3F3),
+        color = MaterialTheme.colorScheme.surfaceVariant,
         shape = CircleShape,
         shadowElevation = 0.dp
     ) {
         Icon(
             imageVector = Icons.Filled.Search,
             contentDescription = "Search",
-            tint = Color.Black,
+            tint = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.padding(13.dp)
         )
     }
 }
 
-@Composable
-private fun SelectionToolbar(
-    selectedCount: Int,
-    totalVisibleCount: Int,
-    onClear: () -> Unit,
-    onSelectAll: () -> Unit,
-    onDelete: () -> Unit,
-    onHide: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-        shape = RoundedCornerShape(28.dp),
-        shadowElevation = 0.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(start = 8.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onClear) {
-                Icon(
-                    imageVector = Icons.Filled.Close,
-                    contentDescription = "Clear selection",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-            Text(
-                text = "%1$,d selected".format(selectedCount),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.primary
-            )
-            TextButton(
-                enabled = selectedCount < totalVisibleCount,
-                onClick = onSelectAll
-            ) {
-                Text("Select all")
-            }
-            IconButton(onClick = onHide) {
-                Icon(
-                    imageVector = Icons.Filled.Lock,
-                    contentDescription = "Hide selected",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "Delete selected",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-    }
-}
 
-@Composable
-private fun PullRefreshIndicator(
-    progress: Float,
-    refreshing: Boolean,
-    modifier: Modifier = Modifier
-) {
-    val visible = progress > 0f || refreshing
-    AnimatedVisibility(
-        visible = visible,
-        modifier = modifier,
-        enter = fadeIn(animationSpec = tween(90)) + slideInVertically(initialOffsetY = { -it / 2 }),
-        exit = fadeOut(animationSpec = tween(120)) + slideOutVertically(targetOffsetY = { -it / 2 })
-    ) {
-        Surface(
-            modifier = Modifier.size(52.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-            shape = CircleShape,
-            shadowElevation = 8.dp
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    progress = { if (refreshing) 1f else progress.coerceIn(0.08f, 1f) },
-                    modifier = Modifier.size(28.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    strokeWidth = 3.dp
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun SelectionBottomActionBar(
     visible: Boolean,
     selectedCount: Int,
+    totalVisibleCount: Int,
+    onClear: () -> Unit,
+    onSelectAll: () -> Unit,
     contentPadding: PaddingValues,
     onShare: () -> Unit,
     onHide: () -> Unit,
@@ -537,47 +378,79 @@ private fun SelectionBottomActionBar(
                 .padding(
                     start = 18.dp,
                     end = 18.dp,
-                    bottom = contentPadding.calculateBottomPadding() + 84.dp
+                    bottom = contentPadding.calculateBottomPadding() + 8.dp
                 ),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
             shape = RoundedCornerShape(36.dp),
             shadowElevation = 14.dp
         ) {
-            Row(
-                modifier = Modifier.padding(start = 18.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "%1$,d selected".format(selectedCount),
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                IconButton(enabled = selectedCount > 0, onClick = onShare) {
-                    Icon(
-                        imageVector = Icons.Filled.Share,
-                        contentDescription = "Share selected",
-                        tint = if (selectedCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onClear) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Clear selection",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Text(
+                        text = "%1$,d selected".format(selectedCount),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface
                     )
+                    TextButton(
+                        enabled = selectedCount < totalVisibleCount,
+                        onClick = onSelectAll
+                    ) {
+                        Text("Select all")
+                    }
                 }
-                IconButton(enabled = selectedCount > 0, onClick = onHide) {
-                    Icon(
-                        imageVector = Icons.Filled.Lock,
-                        contentDescription = "Hide selected",
-                        tint = if (selectedCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    SelectionBottomAction(
+                        label = "Share",
+                        icon = Icons.Filled.Share,
+                        enabled = selectedCount > 0,
+                        onClick = onShare,
+                        modifier = Modifier.weight(1f)
                     )
-                }
-                IconButton(enabled = selectedCount > 0, onClick = onDelete) {
-                    Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = "Delete selected",
-                        tint = if (selectedCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    SelectionBottomAction(
+                        label = "Lock",
+                        icon = Icons.Filled.Lock,
+                        enabled = selectedCount > 0,
+                        onClick = onHide,
+                        modifier = Modifier.weight(1f)
+                    )
+                    SelectionBottomAction(
+                        label = "Delete",
+                        icon = Icons.Filled.Delete,
+                        enabled = selectedCount > 0,
+                        onClick = onDelete,
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
         }
     }
 }
+@Composable
+private fun SelectionBottomAction(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    TextButton(modifier = modifier, enabled = enabled, onClick = onClick) {
+        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.size(6.dp))
+        Text(label)
+    }
+}
+
 @Composable
 private fun PhotoEmptyState(hasSearchQuery: Boolean) {
     Text(
@@ -619,11 +492,14 @@ private fun LazyListScope.photoSection(
         )
         Spacer(Modifier.height(10.dp))
     }
+    val rowCount = (mediaItems.size + columns - 1) / columns
     items(
-        items = mediaItems.chunked(columns),
-        key = { rowItems -> "row-$title-${rowItems.first().id}" },
+        count = rowCount,
+        key = { rowIndex -> "row-$title-${mediaItems[rowIndex * columns].id}" },
         contentType = { "photo-grid-row" }
-    ) { rowItems ->
+    ) { rowIndex ->
+        val startIndex = rowIndex * columns
+        val rowItems = mediaItems.subList(startIndex, minOf(startIndex + columns, mediaItems.size))
         PhotoGridRow(
             mediaItems = rowItems,
             columns = columns,
@@ -697,7 +573,6 @@ private fun PhotoGridRow(
             mediaItems.forEach { mediaItem ->
                 val sharedElementPrefix = "photos"
                 val sharedElementKey = "$sharedElementPrefix-media-${mediaItem.id}"
-                var mediaBounds by remember(mediaItem.id) { mutableStateOf(Rect.Zero) }
                 val selectionMode = selectedMediaIds.isNotEmpty()
                 MediaThumbnail(
                     mediaItem = mediaItem,
@@ -709,16 +584,17 @@ private fun PhotoGridRow(
                     sharedBoundsTransform = sharedBoundsTransform,
                     isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
                     selected = selectedMediaIds.contains(mediaItem.id),
-                    onBoundsChanged = { bounds ->
-                        mediaBounds = bounds
-                        onMediaBoundsChanged(mediaItem, bounds)
+                    onBoundsChanged = if (selectionMode) {
+                        { bounds -> onMediaBoundsChanged(mediaItem, bounds) }
+                    } else {
+                        null
                     },
                     onLongClick = { onMediaLongClick(mediaItem) },
-                    onClick = {
+                    onClickWithBounds = { bounds ->
                         if (selectionMode) {
                             onMediaSelectionToggle(mediaItem)
                         } else {
-                            onMediaClick(mediaItem, mediaBounds, sharedElementKey, sharedElementPrefix)
+                            onMediaClick(mediaItem, bounds, sharedElementKey, sharedElementPrefix)
                         }
                     }
                 )

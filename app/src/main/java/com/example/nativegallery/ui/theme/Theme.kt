@@ -21,7 +21,7 @@ private val LightColorScheme = lightColorScheme(
 
 private val DarkColorScheme = darkColorScheme(
     primary = GalleryBlueDark,
-    onPrimary = Color.Black,
+    onPrimary = GalleryOnPrimaryDark,
     background = IcyBackgroundDark,
     onBackground = Color(0xFFF4F8FB),
     surface = GallerySurfaceDark,

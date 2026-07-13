@@ -19,8 +19,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,7 +49,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,12 +61,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -68,7 +78,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.util.GalleryPerformanceMonitor
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -78,6 +98,32 @@ enum class ImageLoadQuality {
     Thumbnail,
     HighQuality
 }
+
+private class LayoutCoordinatesRef(var value: LayoutCoordinates? = null)
+
+private object ThumbnailLoadCoordinator {
+    private val loadSemaphore = Semaphore(permits = 4)
+    private val keyLocks = ConcurrentHashMap<String, Mutex>()
+
+    suspend fun load(cacheKey: String, loader: () -> Bitmap?): Bitmap? {
+        ThumbnailMemoryCache.get(cacheKey)?.let { return it }
+        val newLock = Mutex()
+        val keyLock = keyLocks.putIfAbsent(cacheKey, newLock) ?: newLock
+        return keyLock.withLock {
+            ThumbnailMemoryCache.get(cacheKey) ?: loadSemaphore.withPermit {
+                withContext(Dispatchers.IO) {
+                    currentCoroutineContext().ensureActive()
+                    loader()?.also { bitmap ->
+                        bitmap.prepareToDraw()
+                        ThumbnailMemoryCache.put(cacheKey, bitmap)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private val thumbnailPrefetchSemaphore = Semaphore(permits = 2)
 
 @Composable
 fun ScreenHeader(
@@ -214,7 +260,7 @@ fun SectionTitle(
     )
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class)
+@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun MediaThumbnail(
     mediaItem: MediaItem,
@@ -228,30 +274,48 @@ fun MediaThumbnail(
     selected: Boolean = false,
     onBoundsChanged: ((Rect) -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    onClickWithBounds: ((Rect) -> Unit)? = null
 ) {
-    val measuredModifier = modifier.onGloballyPositioned { coordinates ->
-        onBoundsChanged?.invoke(coordinates.boundsInRoot())
+    val measuredModifier = if (onBoundsChanged == null) {
+        modifier
+    } else {
+        modifier.onGloballyPositioned { coordinates ->
+            onBoundsChanged(coordinates.boundsInRoot())
+        }
     }
-    val containerModifier = if (onClick != null || onLongClick != null) {
-        measuredModifier.bouncyClickable(
+    val coordinatesRef = remember { LayoutCoordinatesRef() }
+    val positionedModifier = if (onClickWithBounds == null) {
+        measuredModifier
+    } else {
+        measuredModifier.onPlaced { coordinates -> coordinatesRef.value = coordinates }
+    }
+    val interactionSource = remember { MutableInteractionSource() }
+    val containerModifier = if (onClick != null || onClickWithBounds != null || onLongClick != null) {
+        positionedModifier.combinedClickable(
+            interactionSource = interactionSource,
+            indication = null,
             onLongClick = onLongClick,
-            onClick = { onClick?.invoke() }
+            onClick = {
+                val bounds = coordinatesRef.value
+                    ?.takeIf { it.isAttached }
+                    ?.boundsInRoot()
+                    ?: Rect.Zero
+                onClickWithBounds?.invoke(bounds) ?: onClick?.invoke()
+            }
         )
     } else {
         measuredModifier
     }
     val imageModifier = Modifier
         .fillMaxSize()
-        .mediaSharedElement(
-        sharedTransitionScope = sharedTransitionScope,
-        animatedVisibilityScope = animatedVisibilityScope,
-        sharedElementKey = sharedElementKey,
-        sharedBoundsTransform = sharedBoundsTransform,
-        callerManagedVisibility = !isSharedElementSourceHidden
-    )
 
-    Box(modifier = containerModifier.graphicsLayer { alpha = if (isSharedElementSourceHidden) 0f else 1f }) {
+    val visibleContainerModifier = if (isSharedElementSourceHidden) {
+        containerModifier.graphicsLayer { alpha = 0f }
+    } else {
+        containerModifier
+    }
+    Box(modifier = visibleContainerModifier) {
         GalleryImage(
             imageRes = mediaItem.imageRes,
             imageUri = mediaItem.contentUri,
@@ -361,13 +425,17 @@ fun GalleryImage(
     contentScale: ContentScale = ContentScale.Crop,
     thumbnailSize: Int = 512,
     loadQuality: ImageLoadQuality = ImageLoadQuality.Thumbnail,
-    backgroundColor: Color = MaterialTheme.colorScheme.surfaceVariant
+    backgroundColor: Color = MaterialTheme.colorScheme.surfaceVariant,
+    colorFilter: ColorFilter? = null
 ) {
     val bitmap = rememberContentUriBitmap(imageUri, thumbnailSize, loadQuality)
+    val shapedModifier = if (cornerRadius > 0.dp) {
+        modifier.clip(RoundedCornerShape(cornerRadius))
+    } else {
+        modifier
+    }
     Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(cornerRadius))
-            .background(backgroundColor)
+        modifier = shapedModifier.background(backgroundColor)
     ) {
         when {
             bitmap != null -> {
@@ -375,7 +443,8 @@ fun GalleryImage(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = contentDescription,
                     contentScale = contentScale,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    colorFilter = colorFilter
                 )
             }
             imageRes != null -> {
@@ -383,7 +452,8 @@ fun GalleryImage(
                     painter = painterResource(imageRes),
                     contentDescription = contentDescription,
                     contentScale = contentScale,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    colorFilter = colorFilter
                 )
             }
             else -> {
@@ -505,28 +575,33 @@ suspend fun prefetchMediaThumbnails(
         .filter { it > 0 }
         .distinct()
         .ifEmpty { listOf(384) }
+    val requests = mediaItems.asSequence()
+        .mapNotNull { mediaItem ->
+            val uri = mediaItem.contentUri ?: return@mapNotNull null
+            if (mediaItem.isVideo && uri.isNativeGalleryVaultUri()) null else uri
+        }
+        .distinct()
+        .take(maxItems.coerceAtLeast(0))
+        .flatMap { uri -> sizes.asSequence().map { size -> uri to size } }
+        .distinct()
+        .toList()
+    if (requests.isEmpty()) return
 
     GalleryPerformanceMonitor.traceSuspend("Thumbnail prefetch ${mediaItems.size} items") {
-        withContext(Dispatchers.IO) {
-            mediaItems.asSequence()
-                .mapNotNull { it.contentUri }
-                .distinct()
-                .take(maxItems)
-                .forEach { uri ->
-                    sizes.forEach { size ->
-                        val cacheKey = ThumbnailMemoryCache.key(uri, size)
-                        if (ThumbnailMemoryCache.get(cacheKey) == null) {
-                            val loadedBitmap = if (size >= 1024) {
-                                loadHighQualityBitmap(appContext, uri, size) ?: loadThumbnail(appContext, uri, size)
-                            } else {
-                                loadThumbnail(appContext, uri, size)
-                            }
-                            loadedBitmap?.let { bitmap ->
-                                ThumbnailMemoryCache.put(cacheKey, bitmap)
-                            }
-                        }
+        coroutineScope {
+            requests.map { (uri, size) ->
+                async {
+                    thumbnailPrefetchSemaphore.withPermit {
+                        currentCoroutineContext().ensureActive()
+                        loadCachedBitmap(
+                            context = appContext,
+                            imageUri = uri,
+                            thumbnailSize = size,
+                            loadQuality = if (size >= 1024) ImageLoadQuality.HighQuality else ImageLoadQuality.Thumbnail
+                        )
                     }
                 }
+            }.awaitAll()
         }
     }
 }
@@ -538,31 +613,55 @@ private fun rememberContentUriBitmap(
 ): Bitmap? {
     val context = LocalContext.current.applicationContext
     val cacheKey = imageUri?.let { ThumbnailMemoryCache.key(it, thumbnailSize) }
-    val cachedBitmap = cacheKey?.let { ThumbnailMemoryCache.get(it) }
-    val fastFallback = if (loadQuality == ImageLoadQuality.HighQuality && imageUri != null && cachedBitmap == null) {
-        listOf(1440, 512, 384).firstNotNullOfOrNull { fallbackSize ->
-            ThumbnailMemoryCache.get(ThumbnailMemoryCache.key(imageUri, fallbackSize))
-        }
-    } else {
-        null
+
+    var bitmap by remember(imageUri, thumbnailSize, loadQuality) {
+        mutableStateOf(
+            cacheKey?.let { ThumbnailMemoryCache.get(it) }
+                ?: imageUri?.let { ThumbnailMemoryCache.getNearest(it, thumbnailSize) }
+        )
     }
 
-    val bitmapState = produceState<Bitmap?>(initialValue = cachedBitmap ?: fastFallback, imageUri, thumbnailSize, loadQuality) {
-        value = cachedBitmap ?: fastFallback
-        if (imageUri != null && cacheKey != null && cachedBitmap == null) {
-            value = withContext(Dispatchers.IO) {
-                val loadedBitmap = when (loadQuality) {
-                    ImageLoadQuality.Thumbnail -> loadThumbnail(context, imageUri, thumbnailSize)
-                    ImageLoadQuality.HighQuality -> loadHighQualityBitmap(context, imageUri, thumbnailSize)
-                        ?: loadThumbnail(context, imageUri, thumbnailSize)
-                }
-                loadedBitmap?.also { loaded ->
-                    ThumbnailMemoryCache.put(cacheKey, loaded)
-                }
-            }
+    LaunchedEffect(imageUri, thumbnailSize, loadQuality) {
+        if (imageUri == null || cacheKey == null) {
+            bitmap = null
+            return@LaunchedEffect
+        }
+        ThumbnailMemoryCache.get(cacheKey)?.let { cachedBitmap ->
+            bitmap = cachedBitmap
+            return@LaunchedEffect
+        }
+        if (bitmap == null) {
+            bitmap = ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize)
+        }
+        loadCachedBitmap(context, imageUri, thumbnailSize, loadQuality)?.let { loadedBitmap ->
+            bitmap = loadedBitmap
         }
     }
-    return bitmapState.value
+    return bitmap
+}
+
+private suspend fun loadCachedBitmap(
+    context: Context,
+    imageUri: Uri,
+    thumbnailSize: Int,
+    loadQuality: ImageLoadQuality
+): Bitmap? {
+    val cacheKey = ThumbnailMemoryCache.key(imageUri, thumbnailSize)
+    val diskCacheEligible = loadQuality == ImageLoadQuality.Thumbnail && thumbnailSize <= 512
+    return ThumbnailLoadCoordinator.load(cacheKey) loader@{
+        if (diskCacheEligible) {
+            ThumbnailDiskCache.get(context, cacheKey)?.let { return@loader it }
+        }
+        val loaded = when (loadQuality) {
+            ImageLoadQuality.Thumbnail -> loadThumbnail(context, imageUri, thumbnailSize)
+            ImageLoadQuality.HighQuality -> loadHighQualityBitmap(context, imageUri, thumbnailSize)
+                ?: loadThumbnail(context, imageUri, thumbnailSize)
+        }
+        if (diskCacheEligible) {
+            loaded?.let { ThumbnailDiskCache.put(context, cacheKey, it) }
+        }
+        loaded
+    }
 }
 
 private fun loadHighQualityBitmap(context: Context, imageUri: Uri, maxSide: Int): Bitmap? {
@@ -608,6 +707,10 @@ private fun loadSampledBitmap(context: Context, imageUri: Uri, maxSide: Int): Bi
     }
 }
 
+private fun Uri.isNativeGalleryVaultUri(): Boolean {
+    return authority?.endsWith(".vault") == true
+}
+
 private fun sampleSizeFor(width: Int, height: Int, maxSide: Int): Int {
     var sampleSize = 1
     while (max(width / sampleSize, height / sampleSize) > maxSide) {
@@ -617,6 +720,7 @@ private fun sampleSizeFor(width: Int, height: Int, maxSide: Int): Int {
 }
 
 private fun loadThumbnail(context: Context, imageUri: Uri, thumbnailSize: Int): Bitmap? {
+    if (imageUri.isNativeGalleryVaultUri()) return null
     return try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             context.contentResolver.loadThumbnail(imageUri, Size(thumbnailSize, thumbnailSize), null)

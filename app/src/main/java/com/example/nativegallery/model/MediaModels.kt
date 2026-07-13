@@ -1,7 +1,9 @@
 package com.example.nativegallery.model
 
 import android.net.Uri
+import androidx.compose.runtime.Immutable
 
+@Immutable
 data class MediaItem(
     val id: String,
     val albumId: String,
@@ -19,6 +21,7 @@ data class MediaItem(
     val height: Int? = null
 )
 
+@Immutable
 data class RecentlyDeletedMedia(
     val mediaItem: MediaItem,
     val deletedAtMillis: Long
@@ -29,6 +32,7 @@ enum class MediaType {
     Video
 }
 
+@Immutable
 data class Album(
     val id: String,
     val name: String,
@@ -46,6 +50,7 @@ enum class AlbumLayoutMode {
     BigTiles
 }
 
+@Immutable
 data class HiddenAlbumState(
     val albumId: String,
     val isHidden: Boolean
