@@ -42,11 +42,12 @@ fun AlbumMediaPickerScreen(
     onToggleMedia: (MediaItem) -> Unit,
     onSelectAll: () -> Unit,
     onCancel: () -> Unit,
-    onMoveSelected: () -> Unit
+    onMoveSelected: () -> Unit,
+    gridColumns: Int = 4
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         LazyVerticalGrid(
-            columns = GridCells.Fixed(4),
+            columns = GridCells.Fixed(gridColumns.coerceAtLeast(2)),
             contentPadding = PaddingValues(start = 4.dp, top = 132.dp, end = 4.dp, bottom = 112.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)

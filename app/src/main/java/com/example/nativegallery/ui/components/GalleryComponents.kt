@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -79,6 +80,7 @@ import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.util.GalleryPerformanceMonitor
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -91,6 +93,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 
@@ -103,20 +106,38 @@ private class LayoutCoordinatesRef(var value: LayoutCoordinates? = null)
 
 private object ThumbnailLoadCoordinator {
     private val loadSemaphore = Semaphore(permits = 4)
-    private val keyLocks = ConcurrentHashMap<String, Mutex>()
+    private val keyLocks = ConcurrentHashMap<String, KeyLock>()
+
+    private class KeyLock {
+        val mutex = Mutex()
+        val users = AtomicInteger(0)
+    }
 
     suspend fun load(cacheKey: String, loader: () -> Bitmap?): Bitmap? {
         ThumbnailMemoryCache.get(cacheKey)?.let { return it }
-        val newLock = Mutex()
-        val keyLock = keyLocks.putIfAbsent(cacheKey, newLock) ?: newLock
-        return keyLock.withLock {
-            ThumbnailMemoryCache.get(cacheKey) ?: loadSemaphore.withPermit {
-                withContext(Dispatchers.IO) {
-                    currentCoroutineContext().ensureActive()
-                    loader()?.also { bitmap ->
-                        bitmap.prepareToDraw()
-                        ThumbnailMemoryCache.put(cacheKey, bitmap)
+        val keyLock = keyLocks.compute(cacheKey) { _, existing ->
+            (existing ?: KeyLock()).also { it.users.incrementAndGet() }
+        } ?: return null
+        return try {
+            keyLock.mutex.withLock {
+                ThumbnailMemoryCache.get(cacheKey) ?: loadSemaphore.withPermit {
+                    withContext(Dispatchers.IO) {
+                        currentCoroutineContext().ensureActive()
+                        loader()?.also { bitmap ->
+                            bitmap.prepareToDraw()
+                            ThumbnailMemoryCache.put(cacheKey, bitmap)
+                        }
                     }
+                }
+            }
+        } finally {
+            keyLocks.computeIfPresent(cacheKey) { _, current ->
+                if (current !== keyLock) {
+                    current
+                } else if (current.users.decrementAndGet() == 0) {
+                    null
+                } else {
+                    current
                 }
             }
         }
@@ -728,11 +749,45 @@ private fun loadThumbnail(context: Context, imageUri: Uri, thumbnailSize: Int): 
     return try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             context.contentResolver.loadThumbnail(imageUri, Size(thumbnailSize, thumbnailSize), null)
+        } else if (context.contentResolver.getType(imageUri)?.startsWith("video/") == true) {
+            loadLegacyVideoThumbnail(context, imageUri, thumbnailSize)
         } else {
-            @Suppress("DEPRECATION")
-            MediaStore.Images.Media.getBitmap(context.contentResolver, imageUri)
+            loadSampledBitmap(context, imageUri, thumbnailSize)
         }
     } catch (_: Exception) {
         null
     }
+}
+
+private fun loadLegacyVideoThumbnail(context: Context, uri: Uri, thumbnailSize: Int): Bitmap? {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(context, uri)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            retriever.getScaledFrameAtTime(
+                0L,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                thumbnailSize,
+                thumbnailSize
+            )
+        } else {
+            retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?.scaledToFit(thumbnailSize)
+        }
+    } finally {
+        runCatching { retriever.release() }
+    }
+}
+
+private fun Bitmap.scaledToFit(maxSide: Int): Bitmap {
+    val scale = min(maxSide.toFloat() / width, maxSide.toFloat() / height).coerceAtMost(1f)
+    if (scale >= 1f) return this
+    val scaled = Bitmap.createScaledBitmap(
+        this,
+        (width * scale).roundToInt().coerceAtLeast(1),
+        (height * scale).roundToInt().coerceAtLeast(1),
+        true
+    )
+    if (scaled !== this) recycle()
+    return scaled
 }

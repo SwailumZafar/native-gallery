@@ -34,8 +34,14 @@ class RecentlyDeletedRepository(context: Context) {
     }
 
     fun restore(mediaId: String): Map<String, Long> {
-        val nextDeleted = initialDeletedMedia().toMutableMap()
-        nextDeleted.remove(mediaId)
+        return restore(listOf(mediaId))
+    }
+
+    fun restore(mediaIds: Collection<String>): Map<String, Long> {
+        val nextDeleted = restoredDeletedMedia(
+            deletedMedia = initialDeletedMedia(),
+            restoredMediaIds = mediaIds.toSet()
+        )
         saveDeleted(nextDeleted)
         return nextDeleted
     }
@@ -46,26 +52,23 @@ class RecentlyDeletedRepository(context: Context) {
     }
 
     fun deleteForever(mediaId: String): DeleteForeverState {
-        val nextDeleted = initialDeletedMedia().toMutableMap()
-        nextDeleted.remove(mediaId)
-        val nextPermanent = initialPermanentlyDeletedMediaIds() + mediaId
-        saveDeleted(nextDeleted)
-        savePermanentlyDeleted(nextPermanent)
-        return DeleteForeverState(
-            deletedMedia = nextDeleted,
-            permanentlyDeletedMediaIds = nextPermanent
+        return deleteForever(listOf(mediaId))
+    }
+
+    fun deleteForever(mediaIds: Collection<String>): DeleteForeverState {
+        val nextState = permanentlyDeletedState(
+            deletedMedia = initialDeletedMedia(),
+            permanentlyDeletedMediaIds = initialPermanentlyDeletedMediaIds(),
+            deletedMediaIds = mediaIds.toSet()
         )
+        saveDeleted(nextState.deletedMedia)
+        savePermanentlyDeleted(nextState.permanentlyDeletedMediaIds)
+        return nextState
     }
 
     fun deleteAllForever(): DeleteForeverState {
-        val deletedIds = initialDeletedMedia().keys
-        val nextPermanent = initialPermanentlyDeletedMediaIds() + deletedIds
-        saveDeleted(emptyMap())
-        savePermanentlyDeleted(nextPermanent)
-        return DeleteForeverState(
-            deletedMedia = emptyMap(),
-            permanentlyDeletedMediaIds = nextPermanent
-        )
+        val deletedMedia = initialDeletedMedia()
+        return deleteForever(deletedMedia.keys)
     }
 
     private fun decodeDeletedMedia(): Map<String, Long> {
@@ -124,4 +127,23 @@ class RecentlyDeletedRepository(context: Context) {
         private const val PERMANENTLY_DELETED_IDS_KEY = "permanently_deleted_media_ids"
         private const val ENTRY_SEPARATOR = "|"
     }
+}
+
+internal fun restoredDeletedMedia(
+    deletedMedia: Map<String, Long>,
+    restoredMediaIds: Set<String>
+): Map<String, Long> {
+    if (restoredMediaIds.isEmpty()) return deletedMedia
+    return deletedMedia.filterKeys { mediaId -> mediaId !in restoredMediaIds }
+}
+
+internal fun permanentlyDeletedState(
+    deletedMedia: Map<String, Long>,
+    permanentlyDeletedMediaIds: Set<String>,
+    deletedMediaIds: Set<String>
+): RecentlyDeletedRepository.DeleteForeverState {
+    return RecentlyDeletedRepository.DeleteForeverState(
+        deletedMedia = deletedMedia.filterKeys { mediaId -> mediaId !in deletedMediaIds },
+        permanentlyDeletedMediaIds = permanentlyDeletedMediaIds + deletedMediaIds
+    )
 }

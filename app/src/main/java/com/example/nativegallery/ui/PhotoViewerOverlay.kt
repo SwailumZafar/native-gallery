@@ -6,13 +6,9 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
-import android.graphics.Matrix
-import android.graphics.SurfaceTexture
-import android.media.MediaPlayer
 import android.provider.Settings
-import android.view.Surface
-import android.view.TextureView
-import android.view.ViewGroup
+import android.view.LayoutInflater
+import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
@@ -51,6 +47,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -108,6 +105,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -127,6 +125,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import com.example.nativegallery.R
 import androidx.compose.ui.zIndex
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryImage
@@ -140,7 +145,6 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -181,7 +185,9 @@ fun PhotoViewerOverlay(
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
-    sharedElementKeyPrefix: String? = null
+    sharedElementKeyPrefix: String? = null,
+    predictiveBackProgressProvider: () -> Float = { 0f },
+    predictiveBackDirectionProvider: () -> Float = { 1f }
 ) {
     if (!visible || mediaItem == null) {
         return
@@ -212,6 +218,7 @@ fun PhotoViewerOverlay(
     var detailsDragOffset by remember { mutableFloatStateOf(0f) }
     var isViewerDragging by remember { mutableStateOf(false) }
     var detailsVisible by remember { mutableStateOf(false) }
+    var activePhotoZoomed by remember { mutableStateOf(false) }
     val dismissThresholdPx = with(density) { 104.dp.toPx() }
     val detailsThresholdPx = with(density) { 76.dp.toPx() }
     val videoSideControlZonePx = with(density) { 88.dp.toPx() }
@@ -280,8 +287,8 @@ fun PhotoViewerOverlay(
         if (visible) {
             activeMediaPlaced = false
             onCurrentMediaChanged(currentItem)
-            controlsVisible = true
             detailsVisible = false
+            activePhotoZoomed = false
             dragOffset = Offset.Zero
             detailsDragOffset = 0f
             closeRequested = false
@@ -342,6 +349,18 @@ fun PhotoViewerOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .graphicsLayer {
+                val predictiveProgress = predictiveBackProgressProvider().coerceIn(0f, 1f)
+                val direction = predictiveBackDirectionProvider().coerceIn(-1f, 1f)
+                val predictiveScale = 1f - 0.04f * predictiveProgress
+                scaleX = predictiveScale
+                scaleY = predictiveScale
+                translationX = direction * 24.dp.toPx() * predictiveProgress
+                transformOrigin = TransformOrigin(if (direction < 0f) 1f else 0f, 0.5f)
+                shadowElevation = 20.dp.toPx() * predictiveProgress
+                shape = RoundedCornerShape((28f * predictiveProgress).dp)
+                clip = predictiveProgress > 0f
+            }
             .background(
                 if (currentItem.isVideo) {
                     Color.Black.copy(alpha = viewerBackdropAlpha(displayedDragOffset, dismissThresholdPx))
@@ -357,12 +376,19 @@ fun PhotoViewerOverlay(
                 dismissThresholdPx,
                 detailsThresholdPx,
                 videoSideControlZonePx,
-                closeRequested
+                closeRequested,
+                activePhotoZoomed
             ) {
                 val touchSlop = viewConfiguration.touchSlop
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     if (closeRequested) return@awaitEachGesture
+                    if (activePhotoZoomed) {
+                        while (awaitPointerEvent().changes.any { it.pressed }) {
+                            // The zoomable photo owns this gesture until every pointer is up.
+                        }
+                        return@awaitEachGesture
+                    }
                     val startedInVideoControlZone = currentItemHasVideoPlayer &&
                         (
                             down.position.x <= videoSideControlZonePx ||
@@ -455,8 +481,6 @@ fun PhotoViewerOverlay(
                             if (detailsDragOffset < -detailsThresholdPx) {
                                 detailsVisible = true
                                 controlsVisible = false
-                            } else {
-                                controlsVisible = true
                             }
                             isViewerDragging = false
                             dragOffset = Offset.Zero
@@ -479,7 +503,10 @@ fun PhotoViewerOverlay(
                     scaleY = pullScale
                 },
             beyondViewportPageCount = 1,
-            userScrollEnabled = !isViewerDragging && dragOffset == Offset.Zero && !closeRequested,
+            userScrollEnabled = !activePhotoZoomed &&
+                !isViewerDragging &&
+                dragOffset == Offset.Zero &&
+                !closeRequested,
             key = { page -> viewerItems[page].id }
         ) { page ->
             val pageItem = viewerItems[page]
@@ -505,11 +532,21 @@ fun PhotoViewerOverlay(
                 },
                 onClose = { closeViewerWithChromeFade() },
                 onToggleControls = {
+                    if (activePhotoZoomed) return@ZoomableViewerMedia
                     if (detailsVisible) {
                         detailsVisible = false
                         controlsVisible = true
                     } else {
                         controlsVisible = !controlsVisible
+                    }
+                },
+                onZoomStateChanged = { zoomed ->
+                    if (page == currentPageForState) {
+                        activePhotoZoomed = zoomed
+                        if (zoomed) {
+                            detailsVisible = false
+                            controlsVisible = false
+                        }
                     }
                 }
             )
@@ -630,7 +667,22 @@ private fun ViewerFilmstrip(
     selectedIndex: Int,
     onItemClick: (Int) -> Unit
 ) {
+    val density = LocalDensity.current
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = (selectedIndex - 3).coerceAtLeast(0)
+    )
+    LaunchedEffect(selectedIndex, mediaItems.size) {
+        if (mediaItems.isEmpty()) return@LaunchedEffect
+        val viewportWidth = listState.layoutInfo.viewportSize.width
+        val itemWidth = with(density) { 38.dp.roundToPx() }
+        val centerOffset = -((viewportWidth - itemWidth) / 2).coerceAtLeast(0)
+        listState.animateScrollToItem(
+            index = selectedIndex.coerceIn(0, mediaItems.lastIndex),
+            scrollOffset = centerOffset
+        )
+    }
     LazyRow(
+        state = listState,
         modifier = Modifier
             .fillMaxWidth()
             .height(50.dp),
@@ -966,7 +1018,8 @@ private fun ZoomableViewerMedia(
     isSharedTransitionReady: Boolean,
     onActiveMediaPlaced: () -> Unit,
     onClose: () -> Unit,
-    onToggleControls: () -> Unit
+    onToggleControls: () -> Unit,
+    onZoomStateChanged: (Boolean) -> Unit
 ) {
     val activeSharedElementKeyPrefix: String? = null
     val activeMediaAlpha = 1f
@@ -992,6 +1045,9 @@ private fun ZoomableViewerMedia(
             )
         } else {
             ViewerVideoPoster(mediaItem = mediaItem)
+        }
+        if (isActive) {
+            LaunchedEffect(mediaItem.id) { onZoomStateChanged(false) }
         }
         return
     }
@@ -1019,6 +1075,18 @@ private fun ZoomableViewerMedia(
     val displayOffset = if (gestureActive) targetOffset else animatedOffset
     val mediaModifier = Modifier.fillMaxSize()
 
+    LaunchedEffect(isActive, targetScale) {
+        if (isActive) {
+            onZoomStateChanged(targetScale > 1.02f)
+        }
+    }
+
+    DisposableEffect(isActive) {
+        onDispose {
+            if (isActive) onZoomStateChanged(false)
+        }
+    }
+
     Box(
         modifier = mediaModifier
             .background(ViewerPhotoStageBackground)
@@ -1030,7 +1098,9 @@ private fun ZoomableViewerMedia(
             }
             .pointerInput(mediaItem.id) {
                 detectTapGestures(
-                    onTap = { onToggleControls() },
+                    onTap = {
+                        if (targetScale <= 1.02f) onToggleControls()
+                    },
                     onDoubleTap = { tapOffset ->
                         gestureActive = false
                         if (targetScale > 1.05f) {
@@ -1080,6 +1150,16 @@ private fun ZoomableViewerMedia(
                             }
                             previousDistance = distance
                             previousCentroid = centroid
+                        } else if (pressedChanges.size == 1 && targetScale > 1.02f) {
+                            gestureActive = true
+                            previousDistance = 0f
+                            previousCentroid = Offset.Zero
+                            val change = pressedChanges.single()
+                            val pan = change.position - change.previousPosition
+                            val maxPanX = size.width * (targetScale - 1f) * 0.5f
+                            val maxPanY = size.height * (targetScale - 1f) * 0.5f
+                            targetOffset = (targetOffset + pan).coercePan(maxPanX, maxPanY)
+                            change.consume()
                         } else {
                             previousDistance = 0f
                             previousCentroid = Offset.Zero
@@ -1136,6 +1216,7 @@ private fun ViewerVideoPoster(mediaItem: MediaItem) {
 }
 
 @Composable
+@androidx.annotation.OptIn(UnstableApi::class)
 private fun ViewerVideoPlayer(
     mediaItem: MediaItem,
     isActive: Boolean,
@@ -1155,9 +1236,6 @@ private fun ViewerVideoPlayer(
 ) {
     val context = LocalContext.current
     val uri = mediaItem.contentUri ?: return
-    val playerState = remember(uri) { mutableStateOf<MediaPlayer?>(null) }
-    val surfaceState = remember(uri) { mutableStateOf<Surface?>(null) }
-    var textureView by remember(uri) { mutableStateOf<TextureView?>(null) }
     var isPrepared by remember(uri) { mutableStateOf(false) }
     var isPlaying by remember(uri) { mutableStateOf(false) }
     var videoFillFrame by remember(uri) { mutableStateOf(false) }
@@ -1166,15 +1244,20 @@ private fun ViewerVideoPlayer(
     var durationMs by remember(uri) { mutableIntStateOf(0) }
     var positionMs by remember(uri) { mutableIntStateOf(0) }
     var isScrubbing by remember(uri) { mutableStateOf(false) }
-    var videoWidth by remember(uri) { mutableIntStateOf(0) }
-    var videoHeight by remember(uri) { mutableIntStateOf(0) }
-    val activeState by rememberUpdatedState(isActive)
     val rootView = LocalView.current
     val density = LocalDensity.current
     val sideGestureZonePx = with(density) { 96.dp.toPx() }
     val videoBrightness = brightnessState.floatValue
     val playbackVolume = playbackVolumeState.floatValue
     val isMuted = playbackVolume <= 0.01f
+    val player = remember(context, uri) {
+        ExoPlayer.Builder(context.applicationContext).build().apply {
+            setMediaItem(androidx.media3.common.MediaItem.fromUri(uri))
+            volume = playbackVolume
+            playWhenReady = isActive && autoplay
+            prepare()
+        }
+    }
 
     var visibleSideControl by remember(uri) { mutableStateOf<VideoSideControl?>(null) }
     var sideControlAutoHideKey by remember(uri) { mutableIntStateOf(0) }
@@ -1192,36 +1275,13 @@ private fun ViewerVideoPlayer(
         }
     }
 
-    fun releasePlayer() {
-        playerState.value?.let { player ->
-            runCatching {
-                player.setOnPreparedListener(null)
-                player.setOnVideoSizeChangedListener(null)
-                player.setOnCompletionListener(null)
-                player.setOnErrorListener(null)
-                player.release()
-            }
-        }
-        playerState.value = null
-        surfaceState.value?.release()
-        surfaceState.value = null
-        isPrepared = false
-        isPlaying = false
-        hasRenderedFirstFrame = false
-        durationMs = 0
-        positionMs = 0
-        isScrubbing = false
-    }
-
     fun updatePlaybackVolume(targetVolume: Float) {
         val boundedVolume = targetVolume.coerceIn(0f, 1f)
         if (boundedVolume > 0.01f) {
             lastAudibleVolumeState.floatValue = boundedVolume
         }
         playbackVolumeState.floatValue = boundedVolume
-        runCatching {
-            playerState.value?.setVolume(boundedVolume, boundedVolume)
-        }
+        player.volume = boundedVolume
     }
 
     fun updateVideoBrightness(targetBrightness: Float) {
@@ -1230,13 +1290,12 @@ private fun ViewerVideoPlayer(
     }
 
     fun seekToPosition(targetMs: Int) {
-        val player = playerState.value ?: return
         val boundedTarget = if (durationMs > 0) {
             targetMs.coerceIn(0, durationMs)
         } else {
             targetMs.coerceAtLeast(0)
         }
-        runCatching { player.seekTo(boundedTarget) }
+        player.seekTo(boundedTarget.toLong())
         positionMs = boundedTarget
     }
 
@@ -1244,63 +1303,47 @@ private fun ViewerVideoPlayer(
         seekToPosition(positionMs + deltaMs)
     }
 
-    fun preparePlayer(view: TextureView) {
-        if (!view.isAvailable) return
-        releasePlayer()
-        val surfaceTexture = view.surfaceTexture ?: return
-        hasRenderedFirstFrame = false
-        val surface = Surface(surfaceTexture)
-        surfaceState.value = surface
-
-        val player = MediaPlayer()
-        playerState.value = player
-        runCatching {
-            player.setDataSource(context, uri)
-            player.setSurface(surface)
-            player.setVolume(playbackVolume, playbackVolume)
-            player.setOnVideoSizeChangedListener { _, width, height ->
-                videoWidth = width
-                videoHeight = height
-                view.applyVideoFitTransform(width, height, fillFrame = videoFillFrame)
-            }
-            player.setOnPreparedListener { preparedPlayer ->
-                hasPlaybackError = false
-                isPrepared = true
-                durationMs = preparedPlayer.duration.coerceAtLeast(0)
-                positionMs = preparedPlayer.currentPosition.coerceAtLeast(0)
-                view.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
-                if (activeState && autoplay) {
-                    preparedPlayer.start()
-                    isPlaying = true
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                isPrepared = playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED
+                if (playbackState == Player.STATE_READY) {
+                    hasPlaybackError = false
+                    durationMs = player.duration
+                        .takeIf { it > 0L }
+                        ?.coerceAtMost(Int.MAX_VALUE.toLong())
+                        ?.toInt()
+                        ?: durationMs
+                } else if (playbackState == Player.STATE_ENDED) {
+                    player.pause()
+                    player.seekTo(0L)
+                    positionMs = 0
                 }
             }
-            player.setOnCompletionListener { completedPlayer ->
-                isPlaying = false
-                seekToPosition(0)
-                runCatching { completedPlayer.seekTo(0) }
+
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
             }
-            player.setOnErrorListener { _, _, _ ->
+
+            override fun onRenderedFirstFrame() {
+                hasRenderedFirstFrame = true
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
                 hasPlaybackError = true
                 isPrepared = false
                 isPlaying = false
-                true
             }
-            player.prepareAsync()
-        }.onFailure {
-            releasePlayer()
+        }
+        player.addListener(listener)
+        onDispose {
+            player.removeListener(listener)
+            player.release()
         }
     }
 
-    val preparePlayerForSurface by rememberUpdatedState<(TextureView) -> Unit>(
-        newValue = { view -> preparePlayer(view) }
-    )
-
-    LaunchedEffect(playbackVolume, playerState.value) {
-        runCatching { playerState.value?.setVolume(playbackVolume, playbackVolume) }
-    }
-
-    LaunchedEffect(videoFillFrame, videoWidth, videoHeight, textureView) {
-        textureView?.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
+    LaunchedEffect(playbackVolume, player) {
+        player.volume = playbackVolume
     }
 
     DisposableEffect(isActive, isPrepared, isPlaying, rootView) {
@@ -1315,36 +1358,29 @@ private fun ViewerVideoPlayer(
         }
     }
     LaunchedEffect(isActive, isPrepared, autoplay) {
-        val player = playerState.value ?: return@LaunchedEffect
         if (!isPrepared) return@LaunchedEffect
 
         if (isActive && autoplay && !player.isPlaying) {
-            player.start()
-            isPlaying = true
+            player.play()
         } else if (!isActive && player.isPlaying) {
             player.pause()
-            isPlaying = false
         }
     }
 
     LaunchedEffect(isActive, isPrepared, uri) {
         while (isActive && isPrepared) {
-            val player = playerState.value
-            if (player != null) {
-                isPlaying = runCatching { player.isPlaying }.getOrDefault(false)
-                durationMs = runCatching { player.duration.coerceAtLeast(0) }.getOrDefault(durationMs)
-                if (!isScrubbing) {
-                    positionMs = runCatching { player.currentPosition.coerceAtLeast(0) }.getOrDefault(positionMs)
-                }
+            isPlaying = player.isPlaying
+            durationMs = player.duration
+                .takeIf { it > 0L }
+                ?.coerceAtMost(Int.MAX_VALUE.toLong())
+                ?.toInt()
+                ?: durationMs
+            if (!isScrubbing) {
+                positionMs = player.currentPosition
+                    .coerceIn(0L, Int.MAX_VALUE.toLong())
+                    .toInt()
             }
             delay(250)
-        }
-    }
-
-    DisposableEffect(uri) {
-        onDispose {
-            releasePlayer()
-            textureView = null
         }
     }
 
@@ -1453,60 +1489,21 @@ private fun ViewerVideoPlayer(
                     }
                 },
             factory = { viewContext ->
-                TextureView(viewContext).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    isOpaque = false
-                    tag = uri
-                    val texture = this
-                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(
-                            surfaceTexture: SurfaceTexture,
-                            width: Int,
-                            height: Int
-                        ) {
-                            if (playerState.value == null) {
-                                preparePlayerForSurface(texture)
-                            } else {
-                                texture.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
-                            }
-                        }
-
-                        override fun onSurfaceTextureSizeChanged(
-                            surfaceTexture: SurfaceTexture,
-                            width: Int,
-                            height: Int
-                        ) {
-                            texture.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
-                        }
-
-                        override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
-                            releasePlayer()
-                            return true
-                        }
-
-                        override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
-                            if (isPrepared && !hasRenderedFirstFrame) {
-                                hasRenderedFirstFrame = true
-                            }
-                        }
-                    }
-                    textureView = this
+                (LayoutInflater.from(viewContext).inflate(
+                    R.layout.viewer_player_view,
+                    FrameLayout(viewContext),
+                    false
+                ) as PlayerView).apply {
+                    useController = false
+                    this.player = player
                 }
             },
             update = { view ->
-                textureView = view
-                if (view.tag != uri) {
-                    view.tag = uri
-                    if (view.isAvailable) {
-                        preparePlayer(view)
-                    }
-                } else if (view.isAvailable && playerState.value == null) {
-                    preparePlayer(view)
+                view.player = player
+                view.resizeMode = if (videoFillFrame) {
+                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 } else {
-                    view.applyVideoFitTransform(videoWidth, videoHeight, fillFrame = videoFillFrame)
+                    AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
             }
         )
@@ -1657,13 +1654,10 @@ private fun ViewerVideoPlayer(
                         iconSize = 30.dp,
                         containerAlpha = 0.48f,
                         onClick = {
-                            val player = playerState.value ?: return@VideoControlButton
                             if (player.isPlaying) {
                                 player.pause()
-                                isPlaying = false
                             } else {
-                                player.start()
-                                isPlaying = true
+                                player.play()
                             }
                         }
                     )
@@ -1852,26 +1846,6 @@ private fun formatFileSize(bytes: Long): String {
         String.format(Locale.US, "%.1f %s", size, units[unitIndex])
     }
 }
-private fun TextureView.applyVideoFitTransform(
-    videoWidth: Int,
-    videoHeight: Int,
-    fillFrame: Boolean = false
-) {
-    if (width == 0 || height == 0 || videoWidth == 0 || videoHeight == 0) return
-
-    val viewWidth = width.toFloat()
-    val viewHeight = height.toFloat()
-    val fitScale = min(viewWidth / videoWidth.toFloat(), viewHeight / videoHeight.toFloat())
-    val fillScale = max(viewWidth / videoWidth.toFloat(), viewHeight / videoHeight.toFloat())
-    val scale = if (fillFrame) fillScale else fitScale
-    val scaledWidth = videoWidth * scale
-    val scaledHeight = videoHeight * scale
-    val matrix = Matrix().apply {
-        setScale(scaledWidth / viewWidth, scaledHeight / viewHeight, viewWidth / 2f, viewHeight / 2f)
-    }
-    setTransform(matrix)
-}
-
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun Modifier.mediaSharedElement(

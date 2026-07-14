@@ -8,25 +8,18 @@ import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.tween
-import kotlin.math.min
-import kotlin.math.abs
-import kotlinx.coroutines.delay
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.fadeOut
@@ -43,17 +36,20 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -66,6 +62,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,7 +74,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryMotion
+import com.example.nativegallery.ui.components.GalleryFastScroller
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.PremiumDropdownMenu
+import com.example.nativegallery.ui.components.PremiumOverflowButton
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
 
@@ -99,6 +99,8 @@ fun PhotosScreen(
     isLoading: Boolean = false,
     searchQuery: String = "",
     gridColumns: Int = 4,
+    listState: LazyListState,
+    revealMediaId: String? = null,
     onSearchQueryChange: (String) -> Unit = {},
     selectedMediaIds: Set<String> = emptySet(),
     onMediaLongClick: (MediaItem) -> Unit = {},
@@ -108,6 +110,9 @@ fun PhotosScreen(
     onDeleteSelected: () -> Unit = {},
     onShareSelected: () -> Unit = {},
     onHideSelected: () -> Unit = {},
+    onRefresh: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
+    onMediaBoundsChanged: (MediaItem, Rect) -> Unit = { _, _ -> },
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
@@ -120,13 +125,23 @@ fun PhotosScreen(
             .entries
             .toList()
     }
-    val listState = rememberLazyListState()
     val headerCollapse = 0f
     val tileBounds = remember { mutableMapOf<String, Rect>() }
     val rootBounds = remember { PhotoBoundsRef() }
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
     val isSelectionMode = selectedMediaIds.isNotEmpty()
     val showLoading = isLoading
+    val revealOffsetPx = with(LocalDensity.current) { 72.dp.roundToPx() }
+
+    LaunchedEffect(revealMediaId, sections, gridColumns) {
+        val mediaId = revealMediaId ?: return@LaunchedEffect
+        val targetIndex = galleryPhotoListIndex(
+            mediaItems = mediaItems,
+            mediaId = mediaId,
+            columns = gridColumns
+        ) ?: return@LaunchedEffect
+        listState.scrollToItem(targetIndex, scrollOffset = -revealOffsetPx)
+    }
 
     fun rootPoint(localPoint: Offset): Offset = Offset(
         rootBounds.value.left + localPoint.x,
@@ -204,12 +219,14 @@ fun PhotosScreen(
                     onSelectionClear = onSelectionClear,
                     onSelectAllVisible = onSelectAllVisible,
                     onDeleteSelected = onDeleteSelected,
-                    onHideSelected = onHideSelected
+                    onHideSelected = onHideSelected,
+                    onRefresh = onRefresh,
+                    onOpenSettings = onOpenSettings
                 )
             }
 
             if (showLoading) {
-                loadingPhotoSections()
+                loadingPhotoSections(columns = gridColumns)
             } else if (mediaItems.isEmpty()) {
                 item(key = "photos-empty", contentType = "photos-empty") {
                     PhotoEmptyState(hasSearchQuery = searchQuery.isNotBlank())
@@ -225,7 +242,10 @@ fun PhotosScreen(
                         animatedVisibilityScope = animatedVisibilityScope,
                         sharedBoundsTransform = sharedBoundsTransform,
                         activeSharedElementKey = activeSharedElementKey,
-                        onMediaBoundsChanged = { mediaItem, bounds -> tileBounds[mediaItem.id] = bounds },
+                        onMediaBoundsChanged = { mediaItem, bounds ->
+                            tileBounds[mediaItem.id] = bounds
+                            onMediaBoundsChanged(mediaItem, bounds)
+                        },
                         onMediaLongClick = onMediaLongClick,
                         onMediaSelectionToggle = onMediaSelectionToggle,
                         onMediaClick = onMediaClick
@@ -235,6 +255,15 @@ fun PhotosScreen(
         }
 
 
+
+        if (!showLoading && !isSelectionMode) {
+            GalleryFastScroller(
+                listState = listState,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .zIndex(2f)
+            )
+        }
 
         SelectionBottomActionBar(
             visible = isSelectionMode,
@@ -263,8 +292,11 @@ private fun PicturesHeader(
     onSelectionClear: () -> Unit,
     onSelectAllVisible: () -> Unit,
     onDeleteSelected: () -> Unit,
-    onHideSelected: () -> Unit
+    onHideSelected: () -> Unit,
+    onRefresh: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
+    var menuExpanded by rememberSaveable { mutableStateOf(false) }
     val progress = collapseProgress.coerceIn(0f, 1f)
     val topPadding = interpolate(96f, 34f, progress).dp
     val titleScale = interpolate(1.08f, 0.72f, progress)
@@ -307,12 +339,43 @@ private fun PicturesHeader(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 SearchCircle()
-                Icon(
-                    imageVector = Icons.Filled.MoreVert,
-                    contentDescription = "More options",
-                    tint = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.size(28.dp)
-                )
+                Box {
+                    PremiumOverflowButton(
+                        expanded = menuExpanded,
+                        contentDescription = "Photo options",
+                        onClick = { menuExpanded = true }
+                    )
+                    PremiumDropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Refresh") },
+                            leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onRefresh()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Select all") },
+                            leadingIcon = { Icon(Icons.Filled.SelectAll, contentDescription = null) },
+                            enabled = totalVisibleCount > 0 && selectedCount < totalVisibleCount,
+                            onClick = {
+                                menuExpanded = false
+                                onSelectAllVisible()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                            onClick = {
+                                menuExpanded = false
+                                onOpenSettings()
+                            }
+                        )
+                    }
+                }
             }
         }
         Spacer(Modifier.height(14.dp))
@@ -519,7 +582,7 @@ private fun LazyListScope.photoSection(
     }
 }
 
-private fun LazyListScope.loadingPhotoSections() {
+private fun LazyListScope.loadingPhotoSections(columns: Int) {
     repeat(4) { sectionIndex ->
         item(key = "loading-section-$sectionIndex", contentType = "loading-section-title") {
             SkeletonBlock(
@@ -536,7 +599,7 @@ private fun LazyListScope.loadingPhotoSections() {
             key = { rowIndex -> "loading-row-$sectionIndex-$rowIndex" },
             contentType = { "loading-photo-row" }
         ) {
-            PhotoSkeletonRow(columns = 4, spacing = 1.dp)
+            PhotoSkeletonRow(columns = columns, spacing = 1.dp)
             Spacer(Modifier.height(1.dp))
         }
         item(key = "loading-section-end-$sectionIndex", contentType = "loading-section-end") {
@@ -582,11 +645,7 @@ private fun PhotoGridRow(
                     sharedBoundsTransform = sharedBoundsTransform,
                     isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
                     selected = selectedMediaIds.contains(mediaItem.id),
-                    onBoundsChanged = if (selectionMode) {
-                        { bounds -> onMediaBoundsChanged(mediaItem, bounds) }
-                    } else {
-                        null
-                    },
+                    onBoundsChanged = { bounds -> onMediaBoundsChanged(mediaItem, bounds) },
                     onLongClick = { onMediaLongClick(mediaItem) },
                     onClickWithBounds = { bounds ->
                         if (selectionMode) {

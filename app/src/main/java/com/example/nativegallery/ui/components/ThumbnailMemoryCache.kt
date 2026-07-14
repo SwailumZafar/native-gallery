@@ -15,17 +15,25 @@ object ThumbnailMemoryCache {
 
     private val indexLock = Any()
     private val sizesByUri = mutableMapOf<String, MutableSet<Int>>()
+    private val keyReferenceCounts = mutableMapOf<String, Int>()
 
     private val cache = object : LruCache<String, Bitmap>(MaxCacheKilobytes) {
         override fun sizeOf(key: String, value: Bitmap): Int {
             return (value.byteCount / 1024).coerceAtLeast(1)
         }
 
+        override fun entryRemoved(evicted: Boolean, key: String, oldValue: Bitmap, newValue: Bitmap?) {
+            if (newValue == null) unindexKey(key)
+        }
     }
 
     private val pinnedCache = object : LruCache<String, Bitmap>(MaxPinnedKilobytes) {
         override fun sizeOf(key: String, value: Bitmap): Int {
             return (value.byteCount / 1024).coerceAtLeast(1)
+        }
+
+        override fun entryRemoved(evicted: Boolean, key: String, oldValue: Bitmap, newValue: Bitmap?) {
+            if (newValue == null) unindexKey(key)
         }
     }
 
@@ -55,24 +63,43 @@ object ThumbnailMemoryCache {
         return null
     }
 
+    @Synchronized
     fun put(key: String, bitmap: Bitmap) {
         if (cache.get(key) == null) {
-            cache.put(key, bitmap)
             indexKey(key)
+            cache.put(key, bitmap)
         }
     }
 
+    @Synchronized
     fun pin(key: String, bitmap: Bitmap) {
         if (pinnedCache.get(key) == null) {
-            pinnedCache.put(key, bitmap)
             indexKey(key)
+            pinnedCache.put(key, bitmap)
         }
     }
 
     private fun indexKey(key: String) {
         val parsedKey = parseKey(key) ?: return
         synchronized(indexLock) {
+            keyReferenceCounts[key] = keyReferenceCounts.getOrDefault(key, 0) + 1
             sizesByUri.getOrPut(parsedKey.first) { mutableSetOf() }.add(parsedKey.second)
+        }
+    }
+
+    private fun unindexKey(key: String) {
+        val parsedKey = parseKey(key) ?: return
+        synchronized(indexLock) {
+            val remainingReferences = keyReferenceCounts.getOrDefault(key, 0) - 1
+            if (remainingReferences > 0) {
+                keyReferenceCounts[key] = remainingReferences
+                return
+            }
+            keyReferenceCounts.remove(key)
+            sizesByUri[parsedKey.first]?.let { sizes ->
+                sizes.remove(parsedKey.second)
+                if (sizes.isEmpty()) sizesByUri.remove(parsedKey.first)
+            }
         }
     }
 

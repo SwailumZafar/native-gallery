@@ -19,7 +19,9 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.os.CancellationSignal
 import android.view.WindowManager
-import androidx.activity.compose.BackHandler
+import androidx.activity.BackEventCompat
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -38,6 +40,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -77,6 +81,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -93,6 +99,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -113,6 +120,10 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.nativegallery.data.FakeGalleryRepository
 import com.example.nativegallery.data.FavoritesRepository
 import com.example.nativegallery.data.GalleryPrivacyFilter
@@ -141,6 +152,7 @@ import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import com.example.nativegallery.ui.components.bouncyClickable
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -149,7 +161,7 @@ import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-private enum class GalleryTab {
+internal enum class GalleryTab {
     Photos,
     Albums,
     Menu
@@ -169,7 +181,7 @@ private fun pageToGalleryTab(page: Int): GalleryTab {
     }
 }
 
-private enum class GalleryDestination {
+internal enum class GalleryDestination {
     Main,
     AlbumDetail,
     HiddenItems,
@@ -179,6 +191,25 @@ private enum class GalleryDestination {
     PhotoEditor,
     Cleanup
 }
+
+private data class GalleryLocation(
+    val destination: GalleryDestination,
+    val selectedTab: GalleryTab,
+    val selectedAlbumId: String?
+)
+
+private data class ViewerSessionSnapshot(
+    val mediaItem: MediaItem,
+    val mediaItems: List<MediaItem>,
+    val sharedElementKey: Any?,
+    val sharedElementKeyPrefix: String?,
+    val actionMode: ViewerActionMode,
+    val returnFallbackBounds: Rect,
+    val sourceMediaId: String?,
+    val sourceMediaIds: List<String>,
+    val sourceBounds: Rect,
+    val sourceGridColumns: Int
+)
 
 private enum class AlbumTransitionMode {
     Opening,
@@ -244,6 +275,13 @@ fun GalleryApp(
     val mediaStoreWriteRepository = remember(context) { MediaStoreWriteRepository(context) }
     val prefetchScope = rememberCoroutineScope()
     val mediaStoreRepository = remember(context) { MediaStoreGalleryRepository(context) }
+    val initialMediaAccess = remember(context) { MediaPermissions.currentAccess(context) }
+    val mediaViewModel: GalleryMediaViewModel = viewModel(
+        factory = remember(mediaStoreRepository, initialMediaAccess) {
+            GalleryMediaViewModelFactory(mediaStoreRepository, initialMediaAccess)
+        }
+    )
+    val mediaUiState by mediaViewModel.uiState.collectAsStateWithLifecycle()
     val hiddenRepository = remember(context) { HiddenAlbumsRepository(context) }
     val hiddenMediaRepository = remember(context) { HiddenMediaRepository(context) }
     val favoritesRepository = remember(context) { FavoritesRepository(context) }
@@ -268,26 +306,22 @@ fun GalleryApp(
     var selectedTab by rememberSaveable { mutableStateOf(GalleryTab.Photos) }
     var destination by rememberSaveable { mutableStateOf(GalleryDestination.Main) }
     var selectedAlbumId by rememberSaveable { mutableStateOf<String?>(null) }
+    var overlayReturnLocation by remember { mutableStateOf<GalleryLocation?>(null) }
+    var editorReturnLocation by remember { mutableStateOf<GalleryLocation?>(null) }
+    var editorViewerSession by remember { mutableStateOf<ViewerSessionSnapshot?>(null) }
     var albumLayoutMode by rememberSaveable { mutableStateOf(AlbumLayoutMode.BigTiles) }
     var gallerySearchQuery by rememberSaveable { mutableStateOf("") }
-    var mediaReloadKey by remember { mutableIntStateOf(0) }
-    var observedMediaChangeKey by remember { mutableIntStateOf(0) }
-    var mediaStoreDeletedItems by remember { mutableStateOf<List<RecentlyDeletedMedia>>(emptyList()) }
+    var vaultRefreshKey by remember { mutableIntStateOf(0) }
     var pendingMediaStoreWriteAction by remember { mutableStateOf<PendingMediaStoreWriteAction?>(null) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingAlbumName by rememberSaveable { mutableStateOf<String?>(null) }
     var albumCreationSelectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var editingMediaItem by remember { mutableStateOf<MediaItem?>(null) }
-    var mediaAccess by remember { mutableStateOf(MediaPermissions.currentAccess(context)) }
-    var mediaStoreSnapshot by remember(mediaAccess.mediaKinds) {
-        mutableStateOf(
-            mediaAccess.takeIf { it.hasAccess }?.let { mediaStoreRepository.cachedGallery(it.mediaKinds) }
-        )
-    }
-    var initialMediaSyncComplete by remember(mediaAccess.mediaKinds) {
-        mutableStateOf(!mediaAccess.hasAccess)
-    }
+    val mediaAccess = mediaUiState.mediaAccess
+    val mediaStoreSnapshot = mediaUiState.snapshot
+    val initialMediaSyncComplete = mediaUiState.initialSyncComplete
+    val mediaStoreDeletedItems = mediaUiState.trashedMedia
     var viewerMediaItem by remember { mutableStateOf<MediaItem?>(null) }
     var viewerMediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var viewerVisible by remember { mutableStateOf(false) }
@@ -305,55 +339,64 @@ fun GalleryApp(
     var mediaOpenTransitionKey by remember { mutableIntStateOf(0) }
     var mediaCloseTransition by remember { mutableStateOf<MediaCloseTransitionSpec?>(null) }
     var mediaCloseTransitionKey by remember { mutableIntStateOf(0) }
+    var viewerCloseInProgress by remember { mutableStateOf(false) }
+    var viewerRevealMediaId by remember { mutableStateOf<String?>(null) }
     var transitionRootBoundsInWindow by remember { mutableStateOf(Rect.Zero) }
     val mainPagerState = rememberPagerState(
         initialPage = selectedTab.pageIndex(),
         pageCount = { 3 }
     )
+    val photosListState = rememberLazyListState()
     val albumsListState = rememberLazyListState()
+    val albumDetailListState = rememberLazyListState()
+    var bottomNavigationVisible by rememberSaveable { mutableStateOf(true) }
+    val predictiveBackProgress = remember { Animatable(0f) }
+    var predictiveBackSwipeEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_LEFT) }
+    var predictiveBackGestureAction by remember { mutableStateOf<GalleryBackAction?>(null) }
 
     LaunchedEffect(settings.gridDensity) {
         albumDetailGridModes.clear()
     }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) {
-        mediaAccess = MediaPermissions.currentAccess(context)
-    }
-
-    LaunchedEffect(mediaAccess, mediaReloadKey) {
-        if (mediaAccess.hasAccess) {
-            val snapshotBeforeRefresh = mediaStoreSnapshot
-            val latestPage = withContext(Dispatchers.IO) {
-                mediaStoreRepository.loadGalleryPage(
-                    mediaKinds = mediaAccess.mediaKinds,
-                    limit = MediaStoreGalleryRepository.InitialGalleryPageSize
-                )
-            }
-            mediaStoreSnapshot = mediaStoreRepository.mergeLatestPage(
-                mediaKinds = mediaAccess.mediaKinds,
-                baseSnapshot = snapshotBeforeRefresh,
-                latestPage = latestPage
-            )
-            initialMediaSyncComplete = true
-            mediaStoreSnapshot = withContext(Dispatchers.IO) {
-                mediaStoreRepository.loadGallery(mediaAccess.mediaKinds)
-            }
-            mediaStoreDeletedItems = withContext(Dispatchers.IO) {
-                mediaStoreRepository.loadTrashedMedia(mediaAccess.mediaKinds)
-            }
-        } else {
-            mediaStoreSnapshot = null
-            mediaStoreDeletedItems = emptyList()
-            initialMediaSyncComplete = true
+    LaunchedEffect(selectedAlbumId) {
+        if (selectedAlbumId != null) {
+            albumDetailListState.scrollToItem(0)
         }
     }
 
-    LaunchedEffect(observedMediaChangeKey) {
-        if (observedMediaChangeKey > 0) {
-            delay(180L)
-            mediaReloadKey += 1
+    LaunchedEffect(destination, selectedTab) {
+        if (destination != GalleryDestination.Main || selectedTab == GalleryTab.Menu) {
+            bottomNavigationVisible = true
+            return@LaunchedEffect
+        }
+        val listState = if (selectedTab == GalleryTab.Photos) photosListState else albumsListState
+        bottomNavigationVisible = true
+        var previousIndex = listState.firstVisibleItemIndex
+        var previousOffset = listState.firstVisibleItemScrollOffset
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect { (index, offset) ->
+                when {
+                    index == 0 && offset < 24 -> bottomNavigationVisible = true
+                    index > previousIndex -> bottomNavigationVisible = false
+                    index < previousIndex -> bottomNavigationVisible = true
+                    offset > previousOffset + 8 -> bottomNavigationVisible = false
+                    offset < previousOffset - 4 -> bottomNavigationVisible = true
+                }
+                previousIndex = index
+                previousOffset = offset
+            }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        mediaViewModel.updateAccess(MediaPermissions.currentAccess(context))
+    }
+
+    LaunchedEffect(mediaAccess.mediaKinds) {
+        if (mediaAccess.hasAccess) {
+            delay(900L)
+            mediaViewModel.requestQuickRefresh()
         }
     }
 
@@ -369,17 +412,41 @@ fun GalleryApp(
             }
             val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
                 override fun onChange(selfChange: Boolean) {
-                    observedMediaChangeKey += 1
+                    mediaViewModel.onMediaStoreChanged()
                 }
 
                 override fun onChange(selfChange: Boolean, uri: Uri?) {
-                    observedMediaChangeKey += 1
+                    mediaViewModel.onMediaStoreChanged()
                 }
             }
             resolver.registerContentObserver(collection, true, observer)
             onDispose {
                 resolver.unregisterContentObserver(observer)
             }
+        }
+    }
+
+    DisposableEffect(context) {
+        val activity = context.findActivity() as? ComponentActivity
+        if (activity == null) {
+            onDispose { }
+        } else {
+            var initialResumeDelivered = false
+            val lifecycleObserver = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    if (!initialResumeDelivered) {
+                        initialResumeDelivered = true
+                    } else {
+                        val currentAccess = MediaPermissions.currentAccess(context)
+                        mediaViewModel.updateAccess(currentAccess)
+                        if (currentAccess.hasAccess) {
+                            mediaViewModel.onMediaStoreChanged()
+                        }
+                    }
+                }
+            }
+            activity.lifecycle.addObserver(lifecycleObserver)
+            onDispose { activity.lifecycle.removeObserver(lifecycleObserver) }
         }
     }
 
@@ -468,8 +535,11 @@ fun GalleryApp(
     val hiddenAlbumMedia = remember(availableMedia, hiddenAlbumIds) {
         availableMedia.filter { hiddenAlbumIds.contains(it.albumId) }
     }
-    val storedLockedMedia = remember(hiddenMediaIds, mediaReloadKey) {
-        lockedVaultRepository.storedMediaItems().filter { hiddenMediaIds.contains(it.id) }
+    var storedLockedMedia by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    LaunchedEffect(hiddenMediaIds, vaultRefreshKey) {
+        storedLockedMedia = withContext(Dispatchers.IO) {
+            lockedVaultRepository.storedMediaItems().filter { hiddenMediaIds.contains(it.id) }
+        }
     }
     val privateHiddenMedia = remember(availableMedia, hiddenMediaIds, storedLockedMedia) {
         (availableMedia.filter { hiddenMediaIds.contains(it.id) } + storedLockedMedia)
@@ -515,11 +585,55 @@ fun GalleryApp(
     }
     val visibleAlbumIds = remember(visibleAlbums) { visibleAlbums.map { it.id } }
     val albumNameById = remember(visibleAlbums) { visibleAlbums.associate { it.id to it.name } }
-    val searchedVisibleMedia = remember(visibleMedia, albumNameById, gallerySearchQuery) {
-        searchMedia(visibleMedia, albumNameById, gallerySearchQuery)
+    var gallerySearchIndex by remember { mutableStateOf<GallerySearchIndex?>(null) }
+    var gallerySearchResult by remember {
+        mutableStateOf<Pair<GallerySearchIndex, GallerySearchResult>?>(null)
     }
-    val searchedVisibleAlbums = remember(visibleAlbums, visibleMedia, gallerySearchQuery) {
-        searchAlbums(visibleAlbums, visibleMedia, gallerySearchQuery)
+    val normalizedSearchQuery = remember(gallerySearchQuery) {
+        normalizeGallerySearchQuery(gallerySearchQuery)
+    }
+
+    LaunchedEffect(visibleMedia, visibleAlbums) {
+        gallerySearchIndex = null
+        gallerySearchResult = null
+        val nextIndex = withContext(Dispatchers.Default) {
+            GallerySearchIndex.build(
+                mediaItems = visibleMedia,
+                albums = visibleAlbums
+            )
+        }
+        gallerySearchIndex = nextIndex
+        gallerySearchResult = nextIndex to GallerySearchResult(
+            normalizedQuery = "",
+            mediaItems = visibleMedia,
+            albums = visibleAlbums
+        )
+    }
+
+    LaunchedEffect(gallerySearchIndex, normalizedSearchQuery) {
+        val index = gallerySearchIndex ?: return@LaunchedEffect
+        if (normalizedSearchQuery.isBlank()) {
+            gallerySearchResult = null
+            return@LaunchedEffect
+        }
+        val result = withContext(Dispatchers.Default) {
+            index.search(normalizedSearchQuery)
+        }
+        gallerySearchResult = index to result
+    }
+
+    val currentSearchResult = gallerySearchResult
+        ?.takeIf { (index, _) -> index === gallerySearchIndex }
+        ?.second
+    val searchedVisibleMedia = when {
+        normalizedSearchQuery.isBlank() -> visibleMedia
+        currentSearchResult != null -> currentSearchResult.mediaItems
+        else -> emptyList()
+    }
+    val searchedVisibleAlbums = when {
+        normalizedSearchQuery.isBlank() -> visibleAlbums
+        currentSearchResult != null -> currentSearchResult.albums
+        else -> emptyList()
     }
     val selectedAlbum = remember(visibleAlbums, selectedAlbumId) {
         visibleAlbums.firstOrNull { it.id == selectedAlbumId }
@@ -578,6 +692,27 @@ fun GalleryApp(
         }
     }
 
+    fun currentLocation() = GalleryLocation(destination, selectedTab, selectedAlbumId)
+
+    fun rememberOverlayReturnLocation() {
+        overlayReturnLocation = currentLocation()
+    }
+
+    fun returnFromOverlay(fallbackTab: GalleryTab) {
+        selectedMediaIds = emptySet()
+        val returnLocation = overlayReturnLocation
+        overlayReturnLocation = null
+        if (returnLocation != null) {
+            destination = returnLocation.destination
+            selectedTab = returnLocation.selectedTab
+            selectedAlbumId = returnLocation.selectedAlbumId
+        } else {
+            destination = GalleryDestination.Main
+            selectedTab = fallbackTab
+            selectedAlbumId = null
+        }
+    }
+
     fun openPhotos() {
         selectedMediaIds = emptySet()
         selectedTab = GalleryTab.Photos
@@ -592,14 +727,14 @@ fun GalleryApp(
 
     fun openRecentlyDeleted() {
         selectedMediaIds = emptySet()
-        selectedTab = GalleryTab.Albums
+        rememberOverlayReturnLocation()
         destination = GalleryDestination.RecentlyDeleted
     }
 
 
     fun openCleanup() {
         selectedMediaIds = emptySet()
-        selectedTab = GalleryTab.Menu
+        rememberOverlayReturnLocation()
         destination = GalleryDestination.Cleanup
     }
 
@@ -608,15 +743,14 @@ fun GalleryApp(
         if (trimmedName.isBlank()) return
         pendingAlbumName = trimmedName
         albumCreationSelectedIds = emptySet()
-        selectedTab = GalleryTab.Albums
+        rememberOverlayReturnLocation()
         destination = GalleryDestination.AlbumCreator
     }
 
     fun cancelAlbumCreator() {
         pendingAlbumName = null
         albumCreationSelectedIds = emptySet()
-        selectedTab = GalleryTab.Albums
-        destination = GalleryDestination.Main
+        returnFromOverlay(GalleryTab.Albums)
     }
 
     fun toggleAlbumCreationMedia(mediaItem: MediaItem) {
@@ -629,19 +763,45 @@ fun GalleryApp(
 
     fun closePhotoEditor() {
         editingMediaItem = null
-        selectedTab = GalleryTab.Photos
-        destination = GalleryDestination.Main
+        val returnLocation = editorReturnLocation
+        val viewerSession = editorViewerSession
+        editorReturnLocation = null
+        editorViewerSession = null
+        if (returnLocation != null) {
+            destination = returnLocation.destination
+            selectedTab = returnLocation.selectedTab
+            selectedAlbumId = returnLocation.selectedAlbumId
+        } else {
+            selectedTab = GalleryTab.Photos
+            selectedAlbumId = null
+            destination = GalleryDestination.Main
+        }
+        if (viewerSession != null) {
+            mediaOpenTransition = null
+            mediaCloseTransition = null
+            viewerMediaItem = viewerSession.mediaItem
+            viewerMediaItems = viewerSession.mediaItems
+            viewerSharedElementKey = viewerSession.sharedElementKey
+            viewerSharedElementKeyPrefix = viewerSession.sharedElementKeyPrefix
+            viewerActionMode = viewerSession.actionMode
+            viewerReturnFallbackBounds = viewerSession.returnFallbackBounds
+            viewerSourceMediaId = viewerSession.sourceMediaId
+            viewerSourceMediaIds = viewerSession.sourceMediaIds
+            viewerSourceBounds = viewerSession.sourceBounds
+            viewerSourceGridColumns = viewerSession.sourceGridColumns
+            viewerVisible = true
+        }
     }
 
     fun openHiddenItems() {
         selectedMediaIds = emptySet()
-        selectedTab = GalleryTab.Albums
+        rememberOverlayReturnLocation()
         destination = GalleryDestination.HiddenItems
     }
 
     fun openLockedMedia() {
         selectedMediaIds = emptySet()
-        selectedTab = GalleryTab.Albums
+        rememberOverlayReturnLocation()
         destination = GalleryDestination.LockedMedia
         hiddenAuthMessage = null
     }
@@ -765,6 +925,7 @@ fun GalleryApp(
         if (mediaIds.isEmpty()) return
         selectedMediaIds = emptySet()
         if (!hasHiddenPin) {
+            rememberOverlayReturnLocation()
             pendingLockedMediaIds = pendingLockedMediaIds + mediaIds
             hiddenVaultUnlocked = false
             hiddenAuthMessage = String.format(Locale.getDefault(), "Set a PIN to lock %1$,d selected items.", mediaIds.size)
@@ -782,7 +943,7 @@ fun GalleryApp(
 
         lockedVaultRepository.delete(mediaItem.id)
         hiddenMediaIds = hiddenMediaRepository.setMediaHidden(mediaItem.id, false)
-        mediaReloadKey += 1
+        vaultRefreshKey += 1
     }
     fun updateAlbumHidden(album: Album, hidden: Boolean) {
         if (album.isAllPhotos) return
@@ -913,6 +1074,7 @@ fun GalleryApp(
     ) {
         mediaOpenTransitionKey += 1
         val openKey = mediaOpenTransitionKey
+        mediaTileBounds.clear()
         if (bounds.isUsableTransitionBounds()) {
             viewerReturnFallbackBounds = bounds
             viewerSourceBounds = bounds
@@ -969,6 +1131,8 @@ fun GalleryApp(
         viewerSourceMediaIds = emptyList()
         viewerSourceBounds = Rect.Zero
         viewerSourceGridColumns = 4
+        viewerRevealMediaId = null
+        viewerCloseInProgress = false
         viewerVisible = false
     }
 
@@ -1001,25 +1165,59 @@ fun GalleryApp(
     }
 
     fun closeViewer(startOffset: Offset = Offset.Zero, startScale: Float = 1f, startBackdropAlpha: Float = 1f) {
-        if (mediaCloseTransition != null) return
+        if (mediaCloseTransition != null || viewerCloseInProgress) return
         val currentItem = viewerMediaItem
-        val keyPrefix = viewerSharedElementKeyPrefix
-        if (currentItem != null && keyPrefix != null) {
-            viewerSharedElementKey = "$keyPrefix-media-${currentItem.id}"
+        if (currentItem == null) {
+            clearViewerAfterClose()
+            return
         }
-        viewerVisible = false
 
-        val targetBounds = currentItem?.let(::returnBoundsForMedia) ?: Rect.Zero
-        if (currentItem != null && targetBounds.isUsableTransitionBounds()) {
-            mediaCloseTransitionKey += 1
-            mediaCloseTransition = MediaCloseTransitionSpec(
-                key = mediaCloseTransitionKey,
-                mediaItem = currentItem,
-                tileBounds = targetBounds,
-                startOffset = startOffset,
-                startScale = startScale.coerceIn(0.68f, 1f),
-                startBackdropAlpha = startBackdropAlpha.coerceIn(0f, 1f)
-            )
+        viewerCloseInProgress = true
+        prefetchScope.launch {
+            val supportsGridReveal =
+                (destination == GalleryDestination.Main && selectedTab == GalleryTab.Photos) ||
+                    destination == GalleryDestination.AlbumDetail
+            val knownBounds = mediaTileBounds[currentItem.id] ?: Rect.Zero
+            val needsGridReveal = supportsGridReveal &&
+                !knownBounds.isVisibleWithin(transitionRootBoundsInWindow)
+
+            if (needsGridReveal) {
+                mediaTileBounds.remove(currentItem.id)
+                viewerRevealMediaId = currentItem.id
+                for (attempt in 0 until 18) {
+                    delay(16)
+                    val revealedBounds = mediaTileBounds[currentItem.id] ?: Rect.Zero
+                    if (revealedBounds.isVisibleWithin(transitionRootBoundsInWindow)) break
+                }
+                viewerRevealMediaId = null
+            }
+
+            viewerSharedElementKeyPrefix?.let { keyPrefix ->
+                viewerSharedElementKey = "$keyPrefix-media-${currentItem.id}"
+            }
+            viewerVisible = false
+
+            val targetBounds = if (needsGridReveal) {
+                mediaTileBounds[currentItem.id]
+                    ?.takeIf { it.isVisibleWithin(transitionRootBoundsInWindow) }
+                    ?: Rect.Zero
+            } else {
+                returnBoundsForMedia(currentItem)
+            }
+            if (targetBounds.isUsableTransitionBounds()) {
+                mediaCloseTransitionKey += 1
+                mediaCloseTransition = MediaCloseTransitionSpec(
+                    key = mediaCloseTransitionKey,
+                    mediaItem = currentItem,
+                    tileBounds = targetBounds,
+                    startOffset = startOffset,
+                    startScale = startScale.coerceIn(0.68f, 1f),
+                    startBackdropAlpha = startBackdropAlpha.coerceIn(0f, 1f)
+                )
+                viewerCloseInProgress = false
+            } else {
+                clearViewerAfterClose()
+            }
         }
     }
 
@@ -1052,9 +1250,7 @@ fun GalleryApp(
                 }
             }
             MediaStoreWriteMode.RestoreFromTrash -> {
-                mediaIds.forEach { mediaId ->
-                    recentlyDeletedMedia = recentlyDeletedRepository.restore(mediaId)
-                }
+                recentlyDeletedMedia = recentlyDeletedRepository.restore(mediaIds)
                 if (action.fromViewer) {
                     action.mediaItems.firstOrNull()?.let { mediaItem ->
                         advanceViewerAfterRemoval(mediaItem, action.viewerDirection)
@@ -1062,12 +1258,10 @@ fun GalleryApp(
                 }
             }
             MediaStoreWriteMode.DeleteForever -> {
-                mediaIds.forEach { mediaId ->
-                    val deleteState = recentlyDeletedRepository.deleteForever(mediaId)
-                    recentlyDeletedMedia = deleteState.deletedMedia
-                    permanentlyDeletedMediaIds = deleteState.permanentlyDeletedMediaIds
-                    lockedVaultRepository.delete(mediaId)
-                }
+                val deleteState = recentlyDeletedRepository.deleteForever(mediaIds)
+                recentlyDeletedMedia = deleteState.deletedMedia
+                permanentlyDeletedMediaIds = deleteState.permanentlyDeletedMediaIds
+                mediaIds.forEach(lockedVaultRepository::delete)
                 favoriteMediaIds = favoritesRepository.removeFavorites(mediaIds)
                 selectedMediaIds = selectedMediaIds - mediaIds
                 if (action.fromViewer) {
@@ -1088,7 +1282,7 @@ fun GalleryApp(
                 }
             }
         }
-        mediaReloadKey += 1
+        mediaViewModel.requestFullRefresh()
     }
 
     fun completeMediaStoreFallback(action: PendingMediaStoreWriteAction) {
@@ -1104,7 +1298,7 @@ fun GalleryApp(
             }
             MediaStoreWriteMode.DeleteLockedOriginals -> {
                 mediaStoreWriteRepository.deleteDirectly(action.mediaItems)
-                mediaReloadKey += 1
+                mediaViewModel.requestFullRefresh()
             }
             MediaStoreWriteMode.MoveToAlbum -> completeMediaStoreWrite(action)
         }
@@ -1139,6 +1333,7 @@ fun GalleryApp(
     fun hideMedia(mediaItem: MediaItem, direction: Int) {
         selectedMediaIds = selectedMediaIds - mediaItem.id
         if (!hasHiddenPin) {
+            rememberOverlayReturnLocation()
             pendingLockedMediaIds = pendingLockedMediaIds + mediaItem.id
             hiddenVaultUnlocked = false
             hiddenAuthMessage = "Set a PIN to lock this item."
@@ -1246,9 +1441,23 @@ fun GalleryApp(
 
     fun editPhoto(mediaItem: MediaItem) {
         if (mediaItem.isVideo || mediaItem.contentUri == null) return
+        editorReturnLocation = currentLocation()
+        editorViewerSession = viewerMediaItem?.let { currentViewerItem ->
+            ViewerSessionSnapshot(
+                mediaItem = currentViewerItem,
+                mediaItems = viewerMediaItems,
+                sharedElementKey = viewerSharedElementKey,
+                sharedElementKeyPrefix = viewerSharedElementKeyPrefix,
+                actionMode = viewerActionMode,
+                returnFallbackBounds = viewerReturnFallbackBounds,
+                sourceMediaId = viewerSourceMediaId,
+                sourceMediaIds = viewerSourceMediaIds,
+                sourceBounds = viewerSourceBounds,
+                sourceGridColumns = viewerSourceGridColumns
+            )
+        }
         clearViewerAfterClose()
         editingMediaItem = mediaItem
-        selectedTab = GalleryTab.Photos
         destination = GalleryDestination.PhotoEditor
     }
 
@@ -1295,70 +1504,91 @@ fun GalleryApp(
     val navigationTransitionIdle = albumTransition == null &&
         mediaOpenTransition == null &&
         mediaCloseTransition == null
+    val backAction = resolveGalleryBackAction(
+        destination = destination,
+        selectedTab = selectedTab,
+        viewerVisible = viewerVisible && viewerMediaItem != null,
+        viewerClosing = viewerCloseInProgress,
+        albumTransitionActive = albumTransition != null,
+        albumTransitionCanCancel = albumTransition?.mode == AlbumTransitionMode.Opening,
+        mediaTransitionActive = mediaOpenTransition != null || mediaCloseTransition != null,
+        mediaTransitionCanCancel = mediaOpenTransition != null,
+        hasSelection = selectedMediaIds.isNotEmpty()
+    )
+    val currentBackAction by rememberUpdatedState(backAction)
 
-    BackHandler(
-        enabled = !viewerVisible &&
-            navigationTransitionIdle &&
-            destination == GalleryDestination.Main &&
-            selectedTab != GalleryTab.Photos,
-        onBack = ::openPhotos
-    )
-    BackHandler(
-        enabled = !viewerVisible && navigationTransitionIdle && destination == GalleryDestination.AlbumDetail,
-        onBack = ::closeAlbumDetail
-    )
-    BackHandler(
-        enabled = !viewerVisible && navigationTransitionIdle && destination == GalleryDestination.HiddenItems,
-        onBack = ::openAlbums
-    )
-    BackHandler(
-        enabled = !viewerVisible && navigationTransitionIdle && destination == GalleryDestination.LockedMedia,
-        onBack = ::openAlbums
-    )
-    BackHandler(
-        enabled = !viewerVisible && navigationTransitionIdle && destination == GalleryDestination.RecentlyDeleted,
-        onBack = ::openAlbums
-    )
-    BackHandler(
-        enabled = !viewerVisible && navigationTransitionIdle && destination == GalleryDestination.Cleanup,
-        onBack = { destination = GalleryDestination.Main }
-    )
-    BackHandler(
-        enabled = !viewerVisible && navigationTransitionIdle && destination == GalleryDestination.AlbumCreator,
-        onBack = ::cancelAlbumCreator
-    )
-    BackHandler(
-        enabled = !viewerVisible && navigationTransitionIdle && destination == GalleryDestination.PhotoEditor,
-        onBack = ::closePhotoEditor
-    )
-    BackHandler(
-        enabled = !viewerVisible && navigationTransitionIdle && selectedMediaIds.isNotEmpty(),
-        onBack = ::clearMediaSelection
-    )
-    BackHandler(
-        enabled = mediaOpenTransition != null || mediaCloseTransition != null,
-        onBack = {
-            if (mediaOpenTransition != null) {
-                mediaOpenTransition = null
-                clearViewerAfterClose()
+    fun performGalleryBack(action: GalleryBackAction) {
+        when (action) {
+            GalleryBackAction.System,
+            GalleryBackAction.BlockTransition -> Unit
+            GalleryBackAction.CloseViewer -> {
+                val progress = predictiveBackProgress.value.coerceIn(0f, 1f)
+                val direction = if (predictiveBackSwipeEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
+                closeViewer(
+                    startOffset = Offset(
+                        x = direction * context.resources.displayMetrics.density * 24f * progress,
+                        y = 0f
+                    ),
+                    startScale = 1f - 0.04f * progress,
+                    startBackdropAlpha = 1f - 0.22f * progress
+                )
             }
-        }
-    )
-    BackHandler(
-        enabled = albumTransition != null,
-        onBack = {
-            if (albumTransition?.mode == AlbumTransitionMode.Opening) {
+            GalleryBackAction.CancelAlbumOpen -> {
                 albumTransition = null
                 selectedAlbumId = null
                 selectedTab = GalleryTab.Albums
                 destination = GalleryDestination.Main
             }
+            GalleryBackAction.CancelMediaOpen -> {
+                mediaOpenTransition = null
+                clearViewerAfterClose()
+            }
+            GalleryBackAction.ClearSelection -> clearMediaSelection()
+            GalleryBackAction.OpenPhotos -> openPhotos()
+            GalleryBackAction.CloseAlbumDetail -> closeAlbumDetail()
+            GalleryBackAction.ReturnToAlbums -> returnFromOverlay(GalleryTab.Albums)
+            GalleryBackAction.ReturnToMenu -> returnFromOverlay(GalleryTab.Menu)
+            GalleryBackAction.CancelAlbumCreator -> cancelAlbumCreator()
+            GalleryBackAction.ClosePhotoEditor -> closePhotoEditor()
         }
-    )
-    BackHandler(
-        enabled = viewerVisible && viewerMediaItem != null,
-        onBack = { closeViewer() }
-    )
+    }
+
+    LaunchedEffect(backAction, viewerVisible, viewerCloseInProgress) {
+        val gestureAction = predictiveBackGestureAction
+        if (
+            gestureAction == GalleryBackAction.CloseViewer &&
+            viewerVisible &&
+            viewerCloseInProgress
+        ) {
+            return@LaunchedEffect
+        }
+        if (gestureAction != null && gestureAction != backAction) {
+            predictiveBackProgress.animateTo(0f, tween(90))
+            predictiveBackGestureAction = null
+        }
+    }
+
+    PredictiveBackHandler(enabled = backAction != GalleryBackAction.System) { progressFlow ->
+        val actionAtStart = currentBackAction
+        predictiveBackGestureAction = actionAtStart
+        if (actionAtStart == GalleryBackAction.BlockTransition) {
+            progressFlow.collect()
+            predictiveBackProgress.snapTo(0f)
+            predictiveBackGestureAction = null
+            return@PredictiveBackHandler
+        }
+        try {
+            progressFlow.collect { event ->
+                predictiveBackSwipeEdge = event.swipeEdge
+                predictiveBackProgress.snapTo(event.progress.coerceIn(0f, 1f))
+            }
+            performGalleryBack(actionAtStart)
+        } catch (cancellation: CancellationException) {
+            predictiveBackProgress.animateTo(0f, tween(130))
+            predictiveBackGestureAction = null
+            throw cancellation
+        }
+    }
     val mediaAccessNotice: (@Composable () -> Unit)? = when {
         !mediaAccess.hasAccess -> {
             {
@@ -1385,14 +1615,51 @@ fun GalleryApp(
         else -> null
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
         val density = LocalDensity.current
         val rootWidthPx = with(density) { maxWidth.toPx() }
         val rootHeightPx = with(density) { maxHeight.toPx() }
+        val adaptivePolicy = remember(maxWidth, maxHeight) {
+            galleryAdaptivePolicy(maxWidth.value, maxHeight.value)
+        }
+        val adaptivePhotoColumns = (
+            settings.gridDensity.photoColumns + adaptivePolicy.photoColumnBoost
+        ).coerceIn(3, 10)
+        val adaptiveHeroHeight = when (adaptivePolicy.widthClass) {
+            GalleryWindowWidthClass.Compact -> 176.dp
+            GalleryWindowWidthClass.Medium -> 196.dp
+            GalleryWindowWidthClass.Expanded -> 220.dp
+        }
 
         SharedTransitionLayout(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    val gestureAction = predictiveBackGestureAction
+                    val progress = if (
+                        gestureAction != null &&
+                        gestureAction != GalleryBackAction.CloseViewer &&
+                        gestureAction != GalleryBackAction.BlockTransition
+                    ) {
+                        predictiveBackProgress.value.coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                    val fromRight = predictiveBackSwipeEdge == BackEventCompat.EDGE_RIGHT
+                    val direction = if (fromRight) -1f else 1f
+                    val scale = 1f - 0.04f * progress
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = direction * 24.dp.toPx() * progress
+                    transformOrigin = TransformOrigin(if (fromRight) 1f else 0f, 0.5f)
+                    shadowElevation = 18.dp.toPx() * progress
+                    shape = RoundedCornerShape((28f * progress).dp)
+                    clip = progress > 0f
+                }
                 .onGloballyPositioned { transitionRootBoundsInWindow = it.boundsInWindow() }
         ) {
             val sharedTransitionScope = this
@@ -1409,8 +1676,33 @@ fun GalleryApp(
                     modifier = Modifier.fillMaxSize(),
                     containerColor = MaterialTheme.colorScheme.background,
                     bottomBar = {
-                        if (destination == GalleryDestination.Main && !viewerVisible && navigationTransitionIdle) {
+                        if (
+                            destination == GalleryDestination.Main &&
+                            !viewerVisible &&
+                            navigationTransitionIdle &&
+                            !adaptivePolicy.useNavigationRail
+                        ) {
                             GalleryBottomBar(
+                                selectedTab = selectedTab,
+                                visible = bottomNavigationVisible,
+                                onTabSelected = { tab ->
+                                    selectedMediaIds = emptySet()
+                                    bottomNavigationVisible = true
+                                    selectedTab = tab
+                                    destination = GalleryDestination.Main
+                                }
+                            )
+                        }
+                    }
+                ) { innerPadding ->
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        if (
+                            destination == GalleryDestination.Main &&
+                            !viewerVisible &&
+                            navigationTransitionIdle &&
+                            adaptivePolicy.useNavigationRail
+                        ) {
+                            GalleryNavigationRail(
                                 selectedTab = selectedTab,
                                 onTabSelected = { tab ->
                                     selectedMediaIds = emptySet()
@@ -1419,11 +1711,11 @@ fun GalleryApp(
                                 }
                             )
                         }
-                    }
-                ) { innerPadding ->
-                    Box(
-                        modifier = Modifier.fillMaxSize()
-                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                        ) {
                         when (destination) {
                             GalleryDestination.Main -> {
                                 val tabFlingBehavior = PagerDefaults.flingBehavior(
@@ -1453,7 +1745,9 @@ fun GalleryApp(
                                                 isLoading = isLoadingMedia,
                                                 searchQuery = gallerySearchQuery,
                                                 onSearchQueryChange = { gallerySearchQuery = it },
-                                                gridColumns = settings.gridDensity.photoColumns,
+                                                gridColumns = adaptivePhotoColumns,
+                                                listState = photosListState,
+                                                revealMediaId = viewerRevealMediaId,
                                                 selectedMediaIds = selectedMediaIds,
                                                 onMediaLongClick = ::toggleMediaSelection,
                                                 onMediaSelectionToggle = ::toggleMediaSelection,
@@ -1462,6 +1756,13 @@ fun GalleryApp(
                                                 onDeleteSelected = ::deleteSelectedMedia,
                                                 onShareSelected = ::shareSelectedMedia,
                                                 onHideSelected = ::hideSelectedMedia,
+                                                onRefresh = mediaViewModel::requestQuickRefresh,
+                                                onOpenSettings = { showSettingsDialog = true },
+                                                onMediaBoundsChanged = { mediaItem, bounds ->
+                                                    if (bounds.isUsableTransitionBounds()) {
+                                                        mediaTileBounds[mediaItem.id] = bounds
+                                                    }
+                                                },
                                                 sharedTransitionScope = sharedTransitionScope,
                                                 animatedVisibilityScope = galleryVisibilityScope,
                                                 sharedBoundsTransform = GalleryMediaBoundsTransform,
@@ -1473,7 +1774,7 @@ fun GalleryApp(
                                                         bounds = bounds,
                                                         sharedElementKey = sharedElementKey,
                                                         sharedElementKeyPrefix = sharedElementKeyPrefix,
-                                                        sourceGridColumns = settings.gridDensity.photoColumns
+                                                        sourceGridColumns = adaptivePhotoColumns
                                                     )
                                                 }
                                             )
@@ -1503,10 +1804,14 @@ fun GalleryApp(
                                                 mediaAccessNotice = mediaAccessNotice,
                                                 isLoading = isLoadingMedia,
                                                 searchQuery = gallerySearchQuery,
-                                                onSearchQueryChange = { gallerySearchQuery = it }
+                                                onSearchQueryChange = { gallerySearchQuery = it },
+                                                bigTileColumns = adaptivePolicy.bigAlbumColumns,
+                                                basicTileColumns = adaptivePolicy.basicAlbumColumns,
+                                                heroHeight = adaptiveHeroHeight
                                             )
                                             GalleryTab.Menu -> GalleryMenuScreen(
                                                 contentPadding = innerPadding,
+                                                maxContentWidth = if (adaptivePolicy.useNavigationRail) 720.dp else androidx.compose.ui.unit.Dp.Unspecified,
                                                 onOpenHiddenItems = ::openHiddenItems,
                                                 onOpenLockedMedia = ::openLockedMedia,
                                                 onOpenRecentlyDeleted = ::openRecentlyDeleted,
@@ -1523,6 +1828,9 @@ fun GalleryApp(
                                         album = selectedAlbum,
                                         mediaItems = selectedAlbumMedia,
                                         contentPadding = innerPadding,
+                                        listState = albumDetailListState,
+                                        revealMediaId = viewerRevealMediaId,
+                                        columnBoost = adaptivePolicy.albumDetailColumnBoost,
                                         onBack = ::closeAlbumDetail,
                                         sharedTransitionScope = sharedTransitionScope,
                                         animatedVisibilityScope = galleryVisibilityScope,
@@ -1539,11 +1847,16 @@ fun GalleryApp(
                                         onDeleteSelected = ::deleteSelectedMedia,
                                         onHideSelected = ::hideSelectedMedia,
                                         onHideAlbum = { hideAlbumAndReturn(selectedAlbum) },
+                                        onMediaBoundsChanged = { mediaItem, bounds ->
+                                            if (bounds.isUsableTransitionBounds()) {
+                                                mediaTileBounds[mediaItem.id] = bounds
+                                            }
+                                        },
                                         onMediaClick = { mediaItem, bounds, sharedElementKey, sharedElementKeyPrefix ->
                                             val selectedGridColumns = when (albumDetailGridModes[selectedAlbum.id] ?: defaultAlbumGridMode) {
                                                 AlbumDetailGridMode.Compact -> 4
                                                 AlbumDetailGridMode.Comfortable -> 3
-                                            }
+                                            } + adaptivePolicy.albumDetailColumnBoost
                                             startViewerOpen(
                                                 mediaItem = mediaItem,
                                                 mediaItems = selectedAlbumMedia,
@@ -1561,7 +1874,7 @@ fun GalleryApp(
                                 hiddenStates = hiddenStates,
                                 hiddenAlbumCount = hiddenAlbumCount,
                                 hiddenItemCount = hiddenAlbumItemCount,
-                                onBack = ::openAlbums,
+                                onBack = { returnFromOverlay(GalleryTab.Albums) },
                                 onHiddenChange = { album, hidden ->
                                     updateAlbumHidden(album, hidden)
                                 },
@@ -1573,7 +1886,7 @@ fun GalleryApp(
                                 hasPin = hasHiddenPin,
                                 biometricAvailable = biometricAvailable,
                                 authMessage = hiddenAuthMessage,
-                                onBack = ::openAlbums,
+                                onBack = { returnFromOverlay(GalleryTab.Albums) },
                                 onPinCreated = ::createHiddenPin,
                                 onPinUnlock = ::unlockHiddenWithPin,
                                 onBiometricUnlock = ::requestHiddenBiometricUnlock,
@@ -1588,28 +1901,30 @@ fun GalleryApp(
                                         bounds = bounds,
                                         actionMode = ViewerActionMode.Locked,
                                         transitionMediaItem = mediaItem,
-                                        sourceGridColumns = 4
+                                        sourceGridColumns = adaptivePolicy.utilityGridColumns
                                     )
                                 },
-                                contentPadding = PaddingValues()
+                                contentPadding = PaddingValues(),
+                                gridColumns = adaptivePolicy.utilityGridColumns
                             )
                             GalleryDestination.RecentlyDeleted -> RecentlyDeletedScreen(
                                 deletedItems = recentlyDeletedItems,
-                                onBack = ::openAlbums,
+                                onBack = { returnFromOverlay(GalleryTab.Albums) },
                                 onOpenMedia = { entry, bounds ->
                                     startViewerOpen(
                                         mediaItem = entry.mediaItem,
                                         mediaItems = recentlyDeletedItems.map { it.mediaItem },
                                         bounds = bounds,
                                         actionMode = ViewerActionMode.RecentlyDeleted,
-                                        sourceGridColumns = 4
+                                        sourceGridColumns = adaptivePolicy.utilityGridColumns
                                     )
                                 },
                                 onRestore = ::restoreDeletedMedia,
                                 onRestoreAll = ::restoreAllDeletedMedia,
                                 onDeleteForever = ::deleteDeletedMedia,
                                 onDeleteAllForever = ::deleteAllDeletedMedia,
-                                contentPadding = PaddingValues()
+                                contentPadding = PaddingValues(),
+                                gridColumns = adaptivePolicy.utilityGridColumns
                             )
                             GalleryDestination.AlbumCreator -> {
                                 val albumName = pendingAlbumName
@@ -1636,7 +1951,8 @@ fun GalleryApp(
                                                     )
                                                 )
                                             }
-                                        }
+                                        },
+                                        gridColumns = adaptivePolicy.utilityGridColumns
                                     )
                                 }
                             }
@@ -1645,9 +1961,10 @@ fun GalleryApp(
                                     PhotoEditorScreen(
                                         mediaItem = mediaItem,
                                         repository = photoEditorRepository,
+                                        useCompactLayout = adaptivePolicy.useCompactEditorLayout,
                                         onBack = ::closePhotoEditor,
                                         onSaved = {
-                                            mediaReloadKey += 1
+                                            mediaViewModel.requestFullRefresh()
                                             closePhotoEditor()
                                         }
                                     )
@@ -1655,7 +1972,8 @@ fun GalleryApp(
                             }
                             GalleryDestination.Cleanup -> GalleryCleanupScreen(
                                 mediaItems = visibleMedia,
-                                onBack = { destination = GalleryDestination.Main },
+                                maxContentWidth = if (adaptivePolicy.useNavigationRail) 920.dp else androidx.compose.ui.unit.Dp.Unspecified,
+                                onBack = { returnFromOverlay(GalleryTab.Menu) },
                                 onOpenMedia = { mediaItem, mediaItems, bounds ->
                                     startViewerOpen(
                                         mediaItem = mediaItem,
@@ -1670,6 +1988,7 @@ fun GalleryApp(
                             )
                         }
                     }
+                }
                 }
 
                 PositionAwareAlbumTransitionOverlay(
@@ -1690,7 +2009,8 @@ fun GalleryApp(
                         album = overlayAlbum,
                         mediaItems = if (overlayAlbum.id == selectedAlbumId) selectedAlbumMedia else mediaForAlbumFast(overlayAlbum, visibleMedia, visibleMediaByAlbum, favoriteMedia),
                         contentPadding = PaddingValues(),
-                        gridMode = albumDetailGridModes[overlayAlbum.id] ?: defaultAlbumGridMode
+                        gridMode = albumDetailGridModes[overlayAlbum.id] ?: defaultAlbumGridMode,
+                        columnBoost = adaptivePolicy.albumDetailColumnBoost
                     )
                 }
                 ReferenceMediaOpenOverlay(
@@ -1755,7 +2075,17 @@ fun GalleryApp(
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = this,
                     sharedBoundsTransform = GalleryMediaBoundsTransform,
-                    sharedElementKeyPrefix = viewerSharedElementKeyPrefix
+                    sharedElementKeyPrefix = viewerSharedElementKeyPrefix,
+                    predictiveBackProgressProvider = {
+                        if (predictiveBackGestureAction == GalleryBackAction.CloseViewer) {
+                            predictiveBackProgress.value
+                        } else {
+                            0f
+                        }
+                    },
+                    predictiveBackDirectionProvider = {
+                        if (predictiveBackSwipeEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
+                    }
                 )
             }
 
@@ -1952,22 +2282,33 @@ private fun GalleryGridDensity.defaultAlbumGridMode(): AlbumDetailGridMode {
 @Composable
 private fun GalleryMenuScreen(
     contentPadding: PaddingValues,
+    maxContentWidth: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp.Unspecified,
     onOpenHiddenItems: () -> Unit,
     onOpenLockedMedia: () -> Unit,
     onOpenRecentlyDeleted: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenCleanup: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(
-                start = 26.dp,
-                top = 104.dp,
-                end = 26.dp,
-                bottom = contentPadding.calculateBottomPadding() + 28.dp
-            )
-    ) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val sidePadding = if (
+            maxContentWidth != androidx.compose.ui.unit.Dp.Unspecified && maxWidth > maxContentWidth
+        ) {
+            (maxWidth - maxContentWidth) / 2 + 26.dp
+        } else {
+            26.dp
+        }
+        val topPadding = if (maxWidth > maxHeight) 36.dp else 104.dp
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(
+                    start = sidePadding,
+                    top = topPadding,
+                    end = sidePadding,
+                    bottom = contentPadding.calculateBottomPadding() + 28.dp
+                )
+        ) {
         Text(
             text = "Menu",
             style = MaterialTheme.typography.headlineLarge.copy(
@@ -2052,12 +2393,14 @@ private fun GalleryMenuScreen(
             ),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        }
     }
 }
 
 @Composable
 private fun GalleryCleanupScreen(
     mediaItems: List<MediaItem>,
+    maxContentWidth: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp.Unspecified,
     onBack: () -> Unit,
     onTrashMedia: (List<MediaItem>) -> Unit,
     onOpenMedia: (MediaItem, List<MediaItem>, Rect) -> Unit
@@ -2070,11 +2413,24 @@ private fun GalleryCleanupScreen(
             .take(40)
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 22.dp, top = 40.dp, end = 22.dp, bottom = 40.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val horizontalPadding = if (
+            maxContentWidth != androidx.compose.ui.unit.Dp.Unspecified && maxWidth > maxContentWidth
+        ) {
+            (maxWidth - maxContentWidth) / 2 + 22.dp
+        } else {
+            22.dp
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = horizontalPadding,
+                top = 40.dp,
+                end = horizontalPadding,
+                bottom = 40.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
         item(key = "cleanup_header") {
             Column {
                 TextButton(onClick = onBack) { Text("Back") }
@@ -2126,6 +2482,7 @@ private fun GalleryCleanupScreen(
                     onTrash = { onTrashMedia(listOf(mediaItem)) }
                 )
             }
+        }
         }
     }
 }
@@ -2543,48 +2900,6 @@ private fun mediaForAlbumFast(
         else -> visibleMediaByAlbum[album.id].orEmpty()
     }
 }
-private fun searchMedia(
-    mediaItems: List<MediaItem>,
-    albumNameById: Map<String, String>,
-    query: String
-): List<MediaItem> {
-    val normalizedQuery = query.trim().lowercase()
-    if (normalizedQuery.isBlank()) return mediaItems
-    return mediaItems.filter { mediaItem ->
-        mediaMatchesQuery(mediaItem, albumNameById[mediaItem.albumId], normalizedQuery)
-    }
-}
-
-private fun searchAlbums(
-    albums: List<Album>,
-    mediaItems: List<MediaItem>,
-    query: String
-): List<Album> {
-    val normalizedQuery = query.trim().lowercase()
-    if (normalizedQuery.isBlank()) return albums
-    val mediaByAlbum = mediaItems.groupBy { it.albumId }
-    return albums.filter { album ->
-        album.name.lowercase().contains(normalizedQuery) ||
-            if (album.isAllPhotos) {
-                mediaItems.any { mediaMatchesQuery(it, album.name, normalizedQuery) }
-            } else {
-                mediaByAlbum[album.id].orEmpty().any { mediaMatchesQuery(it, album.name, normalizedQuery) }
-            }
-    }
-}
-
-private fun mediaMatchesQuery(
-    mediaItem: MediaItem,
-    albumName: String?,
-    normalizedQuery: String
-): Boolean {
-    return mediaItem.title.lowercase().contains(normalizedQuery) ||
-        mediaItem.dateLabel.lowercase().contains(normalizedQuery) ||
-        mediaItem.type.name.lowercase().contains(normalizedQuery) ||
-        mediaItem.mimeType?.lowercase()?.contains(normalizedQuery) == true ||
-        albumName?.lowercase()?.contains(normalizedQuery) == true
-}
-
 private fun mediaForAlbum(
     album: Album,
     mediaItems: List<MediaItem>
@@ -2594,16 +2909,6 @@ private fun mediaForAlbum(
     } else {
         mediaItems.filter { it.albumId == album.id }
     }
-}
-
-private fun nextMediaAfterDelete(
-    remainingItems: List<MediaItem>,
-    deletedIndex: Int,
-    direction: Int
-): MediaItem? {
-    if (remainingItems.isEmpty()) return null
-    val preferredIndex = if (direction < 0) deletedIndex - 1 else deletedIndex
-    return remainingItems[preferredIndex.coerceIn(0, remainingItems.lastIndex)]
 }
 
 @Composable
@@ -2641,7 +2946,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                 durationMillis = if (transition.mode == AlbumTransitionMode.Opening) {
                     GalleryMotion.AlbumOpenMillis
                 } else {
-                    GalleryMotion.SharedBoundsMillis
+                    GalleryMotion.AlbumCloseMillis
                 },
                 easing = FastOutSlowInEasing
             )
@@ -2845,6 +3150,15 @@ private fun Rect.isUsableTransitionBounds(): Boolean {
         height >= 4f
 }
 
+private fun Rect.isVisibleWithin(viewport: Rect): Boolean {
+    if (!isUsableTransitionBounds()) return false
+    if (!viewport.isUsableTransitionBounds()) return true
+    return right > viewport.left &&
+        left < viewport.right &&
+        bottom > viewport.top &&
+        top < viewport.bottom
+}
+
 private fun Rect.relativeToRoot(
     rootBoundsInWindow: Rect,
     fallbackRootWidth: Float,
@@ -2916,6 +3230,7 @@ private fun scaledRectAroundCenter(rect: Rect, scale: Float, offset: Offset): Re
 @Composable
 private fun GalleryBottomBar(
     selectedTab: GalleryTab,
+    visible: Boolean,
     onTabSelected: (GalleryTab) -> Unit
 ) {
     val containerShape = RoundedCornerShape(50.dp)
@@ -2924,12 +3239,23 @@ private fun GalleryBottomBar(
     val tabHeight = 56.dp
     val tabGap = 4.dp
     val contentWidth = tabWidth * 3 + tabGap * 2
+    val density = LocalDensity.current
+    val hideDistancePx = with(density) { 112.dp.toPx() }
+    val visibilityProgress by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(210, easing = FastOutSlowInEasing),
+        label = "bottom nav visibility"
+    )
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(bottom = 24.dp),
+            .padding(bottom = 24.dp)
+            .graphicsLayer {
+                alpha = visibilityProgress
+                translationY = hideDistancePx * (1f - visibilityProgress)
+            },
         contentAlignment = Alignment.Center
     ) {
         Surface(
@@ -2998,6 +3324,55 @@ private fun GalleryBottomBar(
                 }
             }
     }
+}
+
+@Composable
+private fun GalleryNavigationRail(
+    selectedTab: GalleryTab,
+    onTabSelected: (GalleryTab) -> Unit
+) {
+    NavigationRail(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(88.dp),
+        containerColor = MaterialTheme.colorScheme.background,
+        header = { Spacer(Modifier.height(44.dp)) }
+    ) {
+        GalleryRailItem(
+            selected = selectedTab == GalleryTab.Photos,
+            icon = Icons.Filled.Image,
+            label = "Photos",
+            onClick = { onTabSelected(GalleryTab.Photos) }
+        )
+        GalleryRailItem(
+            selected = selectedTab == GalleryTab.Albums,
+            icon = Icons.Filled.Collections,
+            label = "Albums",
+            onClick = { onTabSelected(GalleryTab.Albums) }
+        )
+        GalleryRailItem(
+            selected = selectedTab == GalleryTab.Menu,
+            icon = Icons.Filled.Menu,
+            label = "Menu",
+            onClick = { onTabSelected(GalleryTab.Menu) }
+        )
+    }
+}
+
+@Composable
+private fun GalleryRailItem(
+    selected: Boolean,
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    NavigationRailItem(
+        selected = selected,
+        onClick = onClick,
+        icon = { Icon(icon, contentDescription = null) },
+        label = { Text(label, maxLines = 1) },
+        alwaysShowLabel = true
+    )
 }
 
 @Composable

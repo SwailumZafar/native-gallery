@@ -140,6 +140,7 @@ class MediaStoreGalleryRepository(
             add(MediaStore.MediaColumns.DISPLAY_NAME)
             add(MediaStore.MediaColumns.DATE_TAKEN)
             add(MediaStore.MediaColumns.DATE_MODIFIED)
+            add(MediaStore.MediaColumns.DATE_ADDED)
             add(MediaStore.MediaColumns.BUCKET_ID)
             add(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
             add(MediaStore.MediaColumns.MIME_TYPE)
@@ -157,10 +158,11 @@ class MediaStoreGalleryRepository(
         }.toTypedArray()
         val placeholders = mediaTypes.joinToString(separator = ",") { "?" }
         val selection = (listOf("${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($placeholders)") +
-            visibilitySelectionClauses(onlyTrashed)).joinToString(separator = " AND ")
+            MediaStoreVisibilityPolicy.selectionClauses(onlyTrashed)).joinToString(separator = " AND ")
         val selectionArgs = mediaTypes.map { it.toString() }.toTypedArray()
-        val sortOrder = "${MediaStore.MediaColumns.DATE_TAKEN} DESC, ${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
+        val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC, ${MediaStore.MediaColumns.DATE_MODIFIED} DESC, ${MediaStore.MediaColumns.DATE_TAKEN} DESC"
         val rows = mutableListOf<MediaStoreRow>()
+        val dateFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.getDefault())
 
         val cursor = queryMediaCursor(
             resolver = resolver,
@@ -180,6 +182,7 @@ class MediaStoreGalleryRepository(
             val titleColumn = mediaCursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
             val dateTakenColumn = mediaCursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_TAKEN)
             val dateModifiedColumn = mediaCursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+            val dateAddedColumn = mediaCursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
             val bucketIdColumn = mediaCursor.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
             val bucketNameColumn = mediaCursor.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
             val mimeTypeColumn = mediaCursor.getColumnIndex(MediaStore.MediaColumns.MIME_TYPE)
@@ -217,6 +220,7 @@ class MediaStoreGalleryRepository(
                 val title = mediaCursor.getString(titleColumn)?.takeIf { it.isNotBlank() } ?: bucketName
                 val dateTakenMillis = mediaCursor.getLong(dateTakenColumn)
                 val dateModifiedSeconds = mediaCursor.getLong(dateModifiedColumn)
+                val dateAddedSeconds = mediaCursor.getLong(dateAddedColumn)
                 val rawDurationMillis = if (durationColumn >= 0 && !mediaCursor.isNull(durationColumn)) mediaCursor.getLong(durationColumn) else 0L
                 val videoDurationMillis = rawDurationMillis.takeIf { mediaType == MediaType.Video && it > 0L }
                 val mimeType = if (mimeTypeColumn >= 0 && !mediaCursor.isNull(mimeTypeColumn)) {
@@ -250,7 +254,7 @@ class MediaStoreGalleryRepository(
                     albumId = bucketId,
                     type = mediaType,
                     title = title,
-                    dateLabel = dateLabel(dateTakenMillis, dateModifiedSeconds),
+                    dateLabel = dateLabel(dateTakenMillis, dateAddedSeconds, dateModifiedSeconds, dateFormatter),
                     contentUri = contentUri,
                     isVideo = mediaType == MediaType.Video,
                     durationLabel = videoDurationMillis?.let(::formatDuration),
@@ -292,7 +296,11 @@ class MediaStoreGalleryRepository(
                 }
                 putStringArray(
                     ContentResolver.QUERY_ARG_SORT_COLUMNS,
-                    arrayOf(MediaStore.MediaColumns.DATE_TAKEN, MediaStore.MediaColumns.DATE_MODIFIED)
+                    arrayOf(
+                        MediaStore.MediaColumns.DATE_ADDED,
+                        MediaStore.MediaColumns.DATE_MODIFIED,
+                        MediaStore.MediaColumns.DATE_TAKEN
+                    )
                 )
                 putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
                 limit?.let { pageLimit ->
@@ -379,9 +387,15 @@ class MediaStoreGalleryRepository(
         return ContentUris.withAppendedId(collection, id)
     }
 
-    private fun dateLabel(dateTakenMillis: Long, dateModifiedSeconds: Long): String {
+    private fun dateLabel(
+        dateTakenMillis: Long,
+        dateAddedSeconds: Long,
+        dateModifiedSeconds: Long,
+        dateFormatter: DateTimeFormatter
+    ): String {
         val timestampMillis = when {
             dateTakenMillis > 0L -> dateTakenMillis
+            dateAddedSeconds > 0L -> dateAddedSeconds * 1000L
             dateModifiedSeconds > 0L -> dateModifiedSeconds * 1000L
             else -> System.currentTimeMillis()
         }
@@ -391,7 +405,7 @@ class MediaStoreGalleryRepository(
         return if (date == LocalDate.now()) {
             "Today"
         } else {
-            date.format(DateFormatter)
+            date.format(dateFormatter)
         }
     }
 
@@ -407,18 +421,6 @@ class MediaStoreGalleryRepository(
             "%d:%02d:%02d".format(hours, minutes, seconds)
         } else {
             "%02d:%02d".format(minutes, seconds)
-        }
-    }
-
-    private fun visibilitySelectionClauses(onlyTrashed: Boolean): List<String> {
-        return buildList {
-            add("${MediaStore.MediaColumns.SIZE} > 0")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                add("${MediaStore.MediaColumns.IS_PENDING} = 0")
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                add("${MediaStore.MediaColumns.IS_TRASHED} = ${if (onlyTrashed) 1 else 0}")
-            }
         }
     }
 
@@ -439,6 +441,5 @@ class MediaStoreGalleryRepository(
         private val SnapshotLock = Any()
         private val CachedSnapshots = mutableMapOf<Set<MediaKind>, GallerySnapshot>()
 
-        val DateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.getDefault())
     }
 }

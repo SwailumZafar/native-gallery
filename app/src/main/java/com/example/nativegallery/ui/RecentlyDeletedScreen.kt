@@ -53,11 +53,12 @@ fun RecentlyDeletedScreen(
     onRestoreAll: () -> Unit,
     onDeleteForever: (RecentlyDeletedMedia) -> Unit,
     onDeleteAllForever: () -> Unit,
-    contentPadding: PaddingValues
+    contentPadding: PaddingValues,
+    gridColumns: Int = 4
 ) {
     var actionEntry by remember { mutableStateOf<RecentlyDeletedMedia?>(null) }
     LazyVerticalGrid(
-        columns = GridCells.Fixed(4),
+        columns = GridCells.Fixed(gridColumns.coerceAtLeast(2)),
         contentPadding = PaddingValues(
             start = 4.dp,
             top = 48.dp,
@@ -68,6 +69,11 @@ fun RecentlyDeletedScreen(
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         item(key = "recently-deleted-header", span = { GridItemSpan(maxLineSpan) }, contentType = "recently-deleted-header") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+            ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -119,6 +125,7 @@ fun RecentlyDeletedScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(24.dp))
+            }
         }
 
         if (deletedItems.isEmpty()) {

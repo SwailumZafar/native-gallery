@@ -13,6 +13,7 @@ import java.util.concurrent.Executors
 object ThumbnailDiskCache {
     private const val DirectoryName = "gallery_thumbnails_v1"
     private const val MaxBytes = 192L * 1024L * 1024L
+    private const val AccessTimeUpdateIntervalMillis = 6L * 60L * 60L * 1000L
     private val writesSinceTrim = AtomicInteger(0)
     private val lock = Any()
     private val writer = Executors.newSingleThreadExecutor()
@@ -25,7 +26,10 @@ object ThumbnailDiskCache {
             runCatching { file.delete() }
             return null
         }
-        runCatching { file.setLastModified(System.currentTimeMillis()) }
+        val now = System.currentTimeMillis()
+        if (now - file.lastModified() >= AccessTimeUpdateIntervalMillis) {
+            runCatching { file.setLastModified(now) }
+        }
         return bitmap
     }
 

@@ -17,7 +17,10 @@ import android.provider.MediaStore
 import com.example.nativegallery.model.MediaItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.min
 
 enum class PhotoEditFilter {
     Original,
@@ -34,9 +37,60 @@ data class PhotoEditStroke(
     val widthFraction: Float = 0.008f
 )
 
+data class NormalizedCropRect(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float
+) {
+    fun sanitized(minSize: Float = 0.08f): NormalizedCropRect {
+        val safeMinSize = minSize.coerceIn(0.01f, 1f)
+        var safeLeft = min(left, right).coerceIn(0f, 1f)
+        var safeRight = max(left, right).coerceIn(0f, 1f)
+        var safeTop = min(top, bottom).coerceIn(0f, 1f)
+        var safeBottom = max(top, bottom).coerceIn(0f, 1f)
+        if (safeRight - safeLeft < safeMinSize) {
+            safeRight = (safeLeft + safeMinSize).coerceAtMost(1f)
+            safeLeft = (safeRight - safeMinSize).coerceAtLeast(0f)
+        }
+        if (safeBottom - safeTop < safeMinSize) {
+            safeBottom = (safeTop + safeMinSize).coerceAtMost(1f)
+            safeTop = (safeBottom - safeMinSize).coerceAtLeast(0f)
+        }
+        return NormalizedCropRect(safeLeft, safeTop, safeRight, safeBottom)
+    }
+
+    fun isFullFrame(tolerance: Float = 0.002f): Boolean {
+        val safe = sanitized()
+        return safe.left <= tolerance &&
+            safe.top <= tolerance &&
+            safe.right >= 1f - tolerance &&
+            safe.bottom >= 1f - tolerance
+    }
+
+    companion object {
+        val Full = NormalizedCropRect(0f, 0f, 1f, 1f)
+    }
+}
+
+internal fun normalizedCropRectForAspect(
+    sourceAspect: Float,
+    targetAspect: Float
+): NormalizedCropRect {
+    val safeSourceAspect = sourceAspect.coerceAtLeast(0.001f)
+    val safeTargetAspect = targetAspect.coerceAtLeast(0.001f)
+    return if (safeSourceAspect > safeTargetAspect) {
+        val width = (safeTargetAspect / safeSourceAspect).coerceIn(0.08f, 1f)
+        NormalizedCropRect((1f - width) / 2f, 0f, (1f + width) / 2f, 1f)
+    } else {
+        val height = (safeSourceAspect / safeTargetAspect).coerceIn(0.08f, 1f)
+        NormalizedCropRect(0f, (1f - height) / 2f, 1f, (1f + height) / 2f)
+    }
+}
+
 data class PhotoEditRecipe(
     val rotationDegrees: Int = 0,
-    val cropSquare: Boolean = false,
+    val cropRect: NormalizedCropRect? = null,
     val filter: PhotoEditFilter = PhotoEditFilter.Original,
     val strokes: List<PhotoEditStroke> = emptyList()
 )
@@ -50,11 +104,24 @@ class PhotoEditorRepository(context: Context) {
     ): Uri? = withContext(Dispatchers.IO) {
         val sourceUri = mediaItem.contentUri ?: return@withContext null
         val decoded = decodeBitmap(sourceUri) ?: return@withContext null
-        val cropped = if (recipe.cropSquare) centerSquareCrop(decoded) else decoded
-        val rotated = rotateBitmap(cropped, recipe.rotationDegrees)
-        val filtered = applyFilter(rotated, recipe.filter)
-        val finished = applyMarkup(filtered, recipe.strokes)
-        insertEditedBitmap(finished, mediaItem.title)
+        var working = decoded
+
+        fun replaceWorking(next: Bitmap) {
+            if (next !== working && !working.isRecycled) working.recycle()
+            working = next
+        }
+
+        return@withContext try {
+            replaceWorking(rotateBitmap(working, recipe.rotationDegrees))
+            recipe.cropRect?.let { cropRect ->
+                replaceWorking(cropBitmap(working, cropRect))
+            }
+            replaceWorking(applyFilter(working, recipe.filter))
+            replaceWorking(applyMarkup(working, recipe.strokes))
+            insertEditedBitmap(working, mediaItem.title)
+        } finally {
+            if (!working.isRecycled) working.recycle()
+        }
     }
 
     private fun decodeBitmap(uri: Uri): Bitmap? {
@@ -80,22 +147,27 @@ class PhotoEditorRepository(context: Context) {
                     bitmap
                 } else {
                     val scale = MaxEditSide.toFloat() / largestSide
-                    Bitmap.createScaledBitmap(
+                    val scaled = Bitmap.createScaledBitmap(
                         bitmap,
                         (bitmap.width * scale).toInt().coerceAtLeast(1),
                         (bitmap.height * scale).toInt().coerceAtLeast(1),
                         true
                     )
+                    if (scaled !== bitmap) bitmap.recycle()
+                    scaled
                 }
             }
         }.getOrNull()
     }
 
-    private fun centerSquareCrop(bitmap: Bitmap): Bitmap {
-        val side = minOf(bitmap.width, bitmap.height)
-        val left = (bitmap.width - side) / 2
-        val top = (bitmap.height - side) / 2
-        return Bitmap.createBitmap(bitmap, left, top, side, side)
+    private fun cropBitmap(bitmap: Bitmap, cropRect: NormalizedCropRect): Bitmap {
+        val safe = cropRect.sanitized()
+        if (safe.isFullFrame()) return bitmap
+        val left = floor(safe.left * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+        val top = floor(safe.top * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+        val right = ceil(safe.right * bitmap.width).toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = ceil(safe.bottom * bitmap.height).toInt().coerceIn(top + 1, bitmap.height)
+        return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
     }
 
     private fun rotateBitmap(bitmap: Bitmap, degrees: Int): Bitmap {

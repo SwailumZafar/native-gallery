@@ -1,8 +1,57 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-07-14
+Last updated: 2026-07-15
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
+
+## Standing Working Agreement
+
+The user should only need to describe the visible feature, animation, or bug they want handled. They do not need to repeat production-review findings or explain behavior that can be understood from the source, this handoff, approved design references, and the current app.
+
+For every normal implementation task:
+
+1. Read this handoff and inspect the affected code before editing.
+2. Complete the requested change while preserving behavior outside its scope.
+3. Also complete one small, closely related production-hardening item from the queue below.
+4. Do not combine the requested work with a large rewrite or unrelated high-risk migration.
+5. Run proportionate verification, normally lint, relevant tests, and a debug build.
+6. Report the requested change and additional hardening change separately, including what to check on the device.
+7. Update this handoff when an item is completed, reprioritized, or a durable issue is discovered.
+
+Infer routine implementation details from the repository. Ask the user only when different product or design choices would materially change the app and the intended choice cannot be discovered locally.
+
+## Production Hardening Queue
+
+Choose the item closest to the requested work instead of following this list mechanically. Keep each pass small enough to test alongside the requested change.
+
+- [x] Resolve remaining actionable lint issues and validate the current release build. Completed 2026-07-15; final Play identity/signing remain a product-owner task.
+- [x] Add focused tests around changed areas, especially delete, restore, lock, permissions, sorting, and MediaStore visibility. Completed 2026-07-15 with 28 passing tests.
+  - 2026-07-15 slice: added six passing tests for crop normalization/aspect presets, photo-list return indexing, and post-delete viewer selection.
+  - 2026-07-15 slice: added two passing Recently Deleted state tests for batch restore and permanent-delete behavior.
+  - 2026-07-15 slice: added four passing search-index tests covering ordering, metadata, album propagation, and empty results.
+  - 2026-07-15 slice: added eight tests covering legacy/API 33/API 34 permission policy, limited access, pending/trashed/path visibility, lock filtering, PIN lockout transitions, and album sorting.
+- [ ] Gradually move screen state and business logic out of `GalleryApp.kt` into ViewModels and testable state holders.
+  - 2026-07-15 slice: extracted viewer delete selection and Photos lazy-list indexing into `GalleryLogic.kt`.
+  - 2026-07-15 slice: extracted normalized media/album search documents and matching into `GallerySearchIndex.kt`.
+  - 2026-07-15 slice: added `GalleryMediaViewModel`, lifecycle-aware `StateFlow` collection, and ViewModel-owned initial/quick/full/observer MediaStore refresh state. Navigation and feature-specific UI state remain intentionally incremental.
+- [ ] Continue reducing unnecessary MediaStore reloads and background I/O.
+  - 2026-07-15 slice: restore/delete-forever batches now persist Recently Deleted state once per action instead of once per media item.
+  - 2026-07-15 slice: observer bursts now coalesce to one newest-page query and one full reconciliation; repeated quick refreshes cancel before queueing duplicate work.
+- [x] Move large-library search indexing and expensive interaction lookup off the main UI path. Completed 2026-07-15.
+  - 2026-07-15 slice: search indexing and query execution now run on `Dispatchers.Default`; remaining expensive interaction lookups stay queued.
+  - 2026-07-15 slice: encrypted-vault inventory reads now run on `Dispatchers.IO` instead of during composition.
+- [x] Improve thumbnail coordination, cache bookkeeping, and legacy video-thumbnail handling. Completed 2026-07-15 with bounded per-key lock/index cleanup, throttled disk access writes, sampled legacy image decode, and legacy video frame extraction.
+- [x] Migrate video playback to Jetpack Media3 when video work is in scope. Completed 2026-07-15 with API-35-compatible Media3 1.8.1 and the existing custom controls preserved.
+- [ ] Harden Locked Folder PIN derivation, key access, encrypted videos, and original-media deletion guarantees.
+- [ ] Complete predictive back and adaptive tablet, foldable, and landscape layouts as those surfaces are touched.
+  - 2026-07-15 slice: added progress-aware predictive back for viewer and secondary destinations, native back-to-home from Photos, nested crop cancellation, and a tested centralized back router.
+  - 2026-07-15 slice: added current-window adaptive classes, a navigation rail from 600 dp, denser media and album grids, compact landscape editor/menu behavior, and four policy tests. Separating-hinge-aware dual-pane placement remains.
+- [ ] Add Macrobenchmark coverage and a Baseline Profile after navigation and media flows stabilize.
+- [ ] Verify release shrinking, bundle size, and final Play configuration near feature freeze.
+  - 2026-07-15 slice: R8 minification and resource shrinking pass; unsigned release APK is 3,447,046 bytes. Signing, final application ID, version policy, and AAB validation remain.
+- [x] Harden editor bitmap transform disposal and normalized crop export. Completed 2026-07-15.
+
+Check off completed items with a dated note. If only one slice is complete, keep the item unchecked and record that slice beneath it.
 
 ## Quick Status
 
@@ -23,7 +72,7 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Latest feature commit: Smooth album open handoff
+Latest feature commit: Harden gallery media and viewer behavior
 Repository visibility: private
 ```
 
@@ -44,10 +93,11 @@ F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
 Last verified APK:
 
 ```text
-Last write time: 2026-06-28 12:25 AM
-Size: 19,346,151 bytes
-Build result: passed via :app:assembleDebug after the smooth album open handoff fix
-Install result: installed successfully with adb install -r
+Last write time: 2026-07-15 4:21 AM
+Size: 30,621,223 bytes
+SHA-256: BE2A717E6FF6BD9A5C468D735C452227295370180CFC53E16BAB79D6B1EDC9AD
+Build result: passed via 28 tests, lint with no issues, and debug assembly after viewer gesture, ViewModel, thumbnail, and Media3 hardening
+Install result: not installed because no ADB device was connected
 ```
 
 Preferred user-facing install command:
@@ -58,7 +108,254 @@ Preferred user-facing install command:
 
 Available helper scripts remain in scripts, but user-facing handoffs should give the direct ADB command above.
 
-Latest build produced the debug APK above and was installed on the connected phone.
+Latest build produced the debug APK above. No phone was connected for installation or physical smoke testing.
+
+## 2026-07-15 Viewer Gestures and First-Six Hardening Pass
+
+Completed 2026-07-15:
+
+- Viewer chrome no longer reappears when swiping to another photo after the user taps to hide it; only another deliberate tap reveals it.
+- Zooming a photo hides chrome and blocks pager, information, and vertical dismiss/details gestures until the image returns to normal scale.
+- Added one-finger panning for zoomed photos so enlarged sections can be inspected without triggering viewer navigation.
+- Moved MediaStore loading and refresh coordination into `GalleryMediaViewModel`, using lifecycle-aware `StateFlow` collection and coalesced newest-page/full reconciliation.
+- Moved encrypted-vault inventory I/O off the main thread and added pure permission, visibility, PIN/lock, and sorting policies with eight new tests.
+- Fixed thumbnail lock-map and memory-size-index retention, reduced disk-cache timestamp writes, and added sampled images/real video frames on Android 8.
+- Replaced the custom platform `MediaPlayer`/`TextureView` lifecycle with Media3 ExoPlayer and a texture-backed `PlayerView`; preserved poster fade, scrubbing, play/pause, mute, seek, fit/fill, brightness, and volume controls.
+
+Verification:
+
+```text
+:app:compileDebugKotlin -> BUILD SUCCESSFUL
+:app:testDebugUnitTest -> BUILD SUCCESSFUL (28 tests, 0 failures)
+:app:lintDebug -> BUILD SUCCESSFUL (No issues found)
+:app:assembleDebug -> BUILD SUCCESSFUL
+git diff --check -> clean except existing CRLF conversion notices
+```
+
+Physical-device checks still required:
+
+- Hide viewer chrome, swipe through several photos, and confirm it stays hidden until tapped.
+- Pinch/double-tap to zoom, pan with one finger, and confirm pager/downward/details gestures remain inactive until 1x.
+- Open representative local videos and confirm first-frame poster handoff, playback, scrubbing, audio, and fit/fill on the target OEM device.
+
+How to install this build:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
+```
+
+How to check this pass in the app:
+
+1. Open any photo, tap once so the top information and bottom actions disappear, then swipe through at least five photos. The chrome must remain hidden through every swipe and only return after another tap.
+2. Open a photo and pinch outward or double-tap to zoom. Drag with one finger to inspect the top, bottom, left, and right portions. While zoomed, horizontal paging, downward close, upward details, and tap-to-show chrome must not activate.
+3. Return the photo to 1x by pinching inward or double-tapping. Normal photo paging and vertical viewer gestures should work again, while chrome remains hidden until explicitly tapped.
+4. Open several videos. Confirm the poster changes cleanly to moving video, play/pause works, the timeline scrubs, rewind/forward moves ten seconds, mute and volume work, and fit/fill changes framing without stretching.
+5. Capture a new photo or screenshot while the app is open or backgrounded, then return to Photos. It should appear near the top without killing the app; the newest-page refresh should arrive first and the full library should reconcile afterward without a duplicate row.
+6. Reopen Photos and Albums several times and scroll through previously viewed media. Cached thumbnails should appear quickly without repeated blank flashes. Android 8 devices should show extracted video frames instead of attempting full image decode on video URIs.
+7. On Android 14+, grant selected-photo access instead of full access and confirm only the selected media appears. Grant full image/video access afterward and confirm the full library refreshes.
+8. In an album, switch between Newest, Oldest, and Name sorting. Lock an item and confirm it leaves the public grid; unlock it and confirm it returns.
+
+Expected effect of the internal hardening:
+
+- `GalleryMediaViewModel` keeps media loading alive across recomposition and prevents overlapping observer/resume/write refresh chains.
+- Coalesced refreshes reduce MediaStore I/O, CPU use, battery work, and grid reshuffling when Android emits several notifications for one file.
+- Thumbnail lock/index cleanup prevents process-lifetime bookkeeping growth and duplicate decode work during fast scrolling.
+- The eight added policy tests are not visible UI features; they protect permissions, limited access, MediaStore visibility, PIN lockout, lock filtering, and sorting against regressions.
+
+## Latest Background Search Index Pass
+
+Completed 2026-07-15:
+
+- Removed the media filtering, `groupBy`, and nested album/media search scans that previously ran synchronously from Compose state calculation on every query change.
+- Added `GallerySearchIndex.kt`, which normalizes titles, dates, media types, MIME types, and album names once whenever the visible library changes.
+- Index construction and query execution run on `Dispatchers.Default`, keeping large-library typing work away from scrolling, transitions, and other main-thread UI work.
+- Empty search queries still return the original media and album lists directly; no index delay or copied UI list is introduced for the normal gallery view.
+- Search preserves existing media and album order, remains case-insensitive, and keeps the previous behavior where a matching child item includes both its album and All photos.
+- While a new query is being calculated, the previous result remains visible instead of flashing an empty grid.
+- The viewer's small album-name lookup remains memoized on the UI side because it is metadata retrieval, not a library scan.
+- Added four pure tests covering blank-query ordering, metadata/album-name matching, All photos and child-album propagation, and unmatched queries. The complete suite now contains 20 passing tests.
+
+Physical-device checks:
+
+- On a large library, type quickly into Photos search and confirm keystrokes, cursor movement, and scrolling remain responsive.
+- Search by a file title, date label, `video`, MIME fragment, and album name; clear the query and confirm the full grid returns immediately.
+- Repeat in Albums and verify matching media includes the owning album and All photos without reordering results.
+
+Verification:
+
+```text
+:app:testDebugUnitTest -> BUILD SUCCESSFUL (20 tests)
+:app:lintDebug -> BUILD SUCCESSFUL / No issues found
+:app:assembleDebug -> BUILD SUCCESSFUL
+git diff --check -> clean except existing CRLF conversion warnings
+```
+
+## Latest Recently Deleted Batch Hardening
+
+Completed 2026-07-15:
+
+- Kept the existing Android MediaStore confirmation and visible Recently Deleted workflow unchanged.
+- Replaced per-item repository updates after Restore and Delete forever with one batch state mutation and one persisted write per action.
+- Restore all now removes only the confirmed media IDs while preserving every untouched Recently Deleted entry.
+- Delete all forever removes the confirmed IDs from Recently Deleted and unions them into permanent-delete history without losing existing history.
+- Viewer single-item restore/delete uses the same batch-safe path, while its existing next-item selection behavior remains unchanged.
+- Added pure state tests for mixed restore selections and permanent-delete history preservation. The complete suite now contains 18 passing tests.
+
+Why it matters:
+
+- A large Recently Deleted bin no longer causes repeated preference reads/writes for every photo after the user confirms an action.
+- The state transition is deterministic and testable without Android UI or storage, reducing the risk of partially updated app bookkeeping.
+
+Physical-device checks:
+
+- Put several items in Recently Deleted, restore one, and confirm the others remain.
+- Use Restore all and verify the bin clears only after Android confirms the action.
+- Delete one forever, then delete the remaining items together; all confirmed items should disappear without the viewer landing on a removed item.
+
+Verification:
+
+```text
+:app:testDebugUnitTest -> BUILD SUCCESSFUL (18 tests)
+:app:lintDebug -> BUILD SUCCESSFUL / No issues found
+:app:assembleDebug -> BUILD SUCCESSFUL
+git diff --check -> clean except existing CRLF conversion warnings
+```
+
+## Latest Album Motion Refinement
+
+Completed 2026-07-15:
+
+- Kept the approved album-opening geometry and easing, reducing its duration only slightly from 380 ms to 350 ms.
+- Reduced album closing from the shared 420 ms duration to a dedicated 380 ms token, preserving the existing relaxed pacing while removing excess wait.
+- The experimental separate first-picture return was rejected during device review and has been fully removed.
+- Album closing again uses the previous full album-surface transition and geometry; only the requested slightly faster duration remains.
+- No first-picture targeting state, overlay, or tests remain in the project, so later work should not reintroduce that effect without a new explicit request.
+
+Physical-device checks:
+
+- Open and close All photos and a regular album several times; the motion should feel only slightly faster than before.
+- Confirm the close looks like the familiar album-surface return and that no separate picture flies into the tile.
+
+Verification:
+
+```text
+:app:testDebugUnitTest -> BUILD SUCCESSFUL (20 tests in the current combined build)
+:app:lintDebug -> BUILD SUCCESSFUL / No issues found
+:app:assembleDebug -> BUILD SUCCESSFUL
+git diff --check -> clean except existing CRLF conversion warnings
+```
+
+## Latest Adaptive Layout Pass
+
+Completed 2026-07-15:
+
+- Added a pure, testable current-window policy using the standard compact, medium, and expanded width breakpoints. It responds to rotation, split screen, freeform resizing, and fold/unfold size changes without caching a device category.
+- Portrait phones keep the existing bottom navigation and current grid density. Compact landscape gains one extra media column without changing navigation placement.
+- Windows at least 600 dp wide use an 88 dp navigation rail instead of the bottom bar, leaving more vertical room on landscape phones, tablets, and unfolded foldables.
+- Photos, Album Detail, Big/Basic album layouts, Locked Media, Recently Deleted, and album creation scale their column counts with usable width. Loading skeletons now match the active Photos column count.
+- Album hero height scales by window class, and viewer return calculations use the same adaptive source column count as the visible grid.
+- Short landscape editor windows move Save into the header and tighten preview padding so editing tools retain usable image space.
+- Menu and Cleanup content is width-bounded on large windows; Menu is vertically scrollable and uses reduced top spacing in landscape to prevent clipped tools.
+- Added four adaptive-policy tests for portrait phone, compact landscape, medium, and expanded windows. The suite now contains 14 passing tests total.
+
+Physical-device and emulator checks:
+
+- Confirm an ordinary portrait phone still uses the existing bottom navigation and original photo density.
+- Rotate to landscape and verify the rail appears at 600 dp or wider, with no Menu/editor content clipped vertically.
+- Rotate while Photos, Album Detail, Recently Deleted, and the editor are open; the current destination and selected media should remain intact.
+- Resize through split-screen widths and unfold/refold a foldable emulator; columns and navigation should change without a blank frame or crash.
+- On a separating-hinge device, verify content remains usable. Hinge-aware dual-pane placement is intentionally still pending.
+
+Verification:
+
+```text
+:app:testDebugUnitTest -> BUILD SUCCESSFUL (14 tests)
+:app:lintDebug -> BUILD SUCCESSFUL / No issues found
+:app:assembleDebug -> BUILD SUCCESSFUL
+git diff --check -> clean except existing CRLF conversion warnings
+```
+
+## Latest Predictive Back Pass
+
+Completed 2026-07-15:
+
+- Replaced eleven order-dependent `BackHandler`s with one centralized, testable back-action router.
+- The Photos root no longer intercepts Back, allowing Android 15+ to render the native back-to-home preview.
+- Viewer Back gestures now apply edge-aware scale, translation, rounded clipping, and shadow from live gesture progress, then feed the same scale/offset into the existing tile-return close animation.
+- Album Detail, Hidden Items, Locked Media, Recently Deleted, Cleanup, album creation, the editor, selection mode, and non-Photos tabs use a subtle edge-origin predictive transform while preserving their previous destinations.
+- Closing/opening media and album transitions block duplicate Back gestures; opening transitions remain cancelable as before.
+- Crop mode owns Back before the editor, so the first Back cancels cropping and the next returns to the viewer/source screen.
+- Added four back-router tests covering root system behavior, precedence, transition blocking, and destination ownership. The suite now contains 10 passing tests total.
+- Predictive-back manifest opt-in was not added because it is redundant for the current target SDK and produced a lint warning; the supported Activity Compose API enables the behavior.
+
+Physical-device checks:
+
+- On Android 15+, slowly swipe Back from both left and right edges in the viewer; cancel halfway, then repeat and commit.
+- Repeat in Album Detail, Recently Deleted, Cleanup, and the photo editor.
+- Enter Crop, swipe Back once to cancel Crop, then swipe again to leave the editor.
+- From Albums or Menu, Back should return to Photos; from Photos, Back should show Android's native home preview.
+- Try Back during a photo/album opening or closing animation; it must not double-close, flash, or land on the wrong screen.
+
+## Latest Production Hardening Batch
+
+Completed 2026-07-15:
+
+- Enabled R8 minification and Android resource shrinking for release builds; release lint remains fatal.
+- Produced and verified `app-release-unsigned.apk` at 3,447,046 bytes (SHA-256 `87A058EB8C71D8EF776E3B050C5E41E535BF2AD6D79ECCDF3C4577FE880C8750`).
+- Updated Activity Compose from 1.9.3 to the API-35-compatible 1.10.1 line. Activity 1.11+ is intentionally deferred until the project moves to the API 36 compile toolchain.
+- Replaced deprecated Gradle `kotlinOptions` configuration with Kotlin compiler options.
+- Moved the adaptive launcher icon out of the obsolete `v26` folder and removed five genuinely unused sample bitmaps.
+- Extracted photo-list return indexing and post-delete viewer selection from UI-heavy files into `GalleryLogic.kt`.
+- Added six initial JUnit tests covering crop normalization, minimum bounds, landscape/portrait aspect presets, date-section list indexing, and viewer selection after delete; the predictive-back pass raises the total to 10.
+- Fresh Android lint now reports `No issues found`.
+
+Still intentionally pending:
+
+- Final Play application ID, signing key/configuration, version-code policy, and signed AAB validation need owner-provided release identity.
+- Tests for MediaStore writes, permissions, lock/vault behavior, restore/delete flows, and sorting remain in the queue.
+- ViewModel migration remains incremental; this pass only extracted behavior that could move without changing runtime state ownership.
+
+## Latest Viewer Return, Menus, and Crop Pass
+
+Completed 2026-07-15:
+
+- Removed the right-side fast-scroll control from both the Albums list and Album Detail; Photos keeps it.
+- Restored the All photos large tile to the earlier shared-bounds expand/contract animation and source-tile hiding behavior.
+- Reworked overflow buttons with a full 48 dp target, subtle icon rotation/scale feedback, and a cleaner popup surface with a shorter fade/scale settle.
+- Made the Photos overflow button functional with Refresh, Select all, and Settings actions.
+- Visible Photos and Album Detail tiles now continuously report real window bounds. When the viewer has moved to an off-screen item, closing first positions the covered grid on that item and then animates into its actual tile instead of a guessed off-screen rectangle.
+- Replaced the editor's square-crop toggle with a crop frame supporting free movement, draggable corners, Original/1:1/4:3/16:9 presets, Apply/Cancel, and normalized save output.
+- Markup coordinates now follow the selected crop frame, and editor transforms recycle superseded bitmaps to lower peak memory during 4096 px edits.
+
+Verification:
+
+- `:app:assembleDebug`: passed.
+- `:app:lintDebug`: passed.
+- `:app:testDebugUnitTest`: passed with `NO-SOURCE`; focused automated tests remain in the hardening queue.
+- `git diff --check`: clean except existing line-ending conversion warnings.
+- Physical-device animation, crop gestures/output, and 120 Hz behavior still need smoke testing.
+
+## Latest Interaction Polish Pass
+
+Completed 2026-07-14:
+
+- Viewer filmstrip now opens near the selected media and follows every page change instead of remaining at the first thumbnails.
+- The single All photos hero tile now uses a uniform forward-depth expansion and return motion; other album-tile transitions retain their existing behavior.
+- Album overflow, layout, and album-detail menus use a restrained scale, fade, and vertical reveal.
+- New MediaStore items are ordered by date added, receive quick pending-item retries, reconcile fully afterward, and refresh again when the app resumes.
+- Recently Deleted header content is contained in one column so its title, actions, and description do not overlap.
+- Editor close restores the originating viewer and current photo. Hidden, Locked, Recently Deleted, Cleanup, and album creation return to their actual origin instead of forcing a tab.
+- Main Photos and Albums navigation hides while scrolling down and returns after a small upward scroll.
+- Photos, Albums, and album details include a slim draggable/tappable fast-scroll indicator on the right.
+- Added a generated deep-green and mint multicolor adaptive launcher icon plus a monochrome themed-icon layer.
+- Added Android 12 data-extraction exclusions, explicit launcher metadata, and locale-safe per-query date formatting.
+
+Verification:
+
+- `:app:assembleDebug`: passed.
+- `:app:lintDebug`: passed with only the known dependency-update warning, five pre-existing unused sample drawables, and the required adaptive-icon `v26` folder warning.
+- `:app:testDebugUnitTest`: `NO-SOURCE`; automated tests remain a production-hardening item.
+- Physical-device behavior still needs checking because no ADB device was connected.
 
 ## Current Implementation
 

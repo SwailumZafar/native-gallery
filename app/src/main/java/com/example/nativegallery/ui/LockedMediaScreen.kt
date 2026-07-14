@@ -67,7 +67,8 @@ fun LockedMediaScreen(
     onBiometricUnlock: () -> Unit,
     onUnhideMedia: (MediaItem) -> Unit,
     onOpenMedia: (MediaItem, Rect) -> Unit,
-    contentPadding: PaddingValues
+    contentPadding: PaddingValues,
+    gridColumns: Int = 4
 ) {
     val context = LocalContext.current
     var biometricPromptLaunched by remember { mutableStateOf(false) }
@@ -140,12 +141,13 @@ fun LockedMediaScreen(
                 }
             } else {
                 items(
-                    items = lockedMediaItems.chunked(4),
+                    items = lockedMediaItems.chunked(gridColumns.coerceAtLeast(2)),
                     key = { rowItems -> "locked-grid-row-${rowItems.first().id}" },
                     contentType = { "locked-grid-row" }
                 ) { rowItems ->
                     LockedMediaGridRow(
                         mediaItems = rowItems,
+                        columns = gridColumns.coerceAtLeast(2),
                         onUnhideMedia = onUnhideMedia,
                         onOpenMedia = onOpenMedia
                     )

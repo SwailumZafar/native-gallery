@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -22,7 +24,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -35,12 +38,19 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
+        }
     }
 
     buildFeatures {
         compose = true
+    }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
     }
 }
 
@@ -49,13 +59,26 @@ dependencies {
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
-    implementation("androidx.activity:activity-compose:1.9.3")
+    // Activity 1.11+ is compiled against API 36; keep the latest API-35-compatible stable line.
+    //noinspection GradleDependency
+    implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    // Keep Lifecycle lint checks compatible with the project's AGP 8.7 / Compose 2024 toolchain.
+    //noinspection GradleDependency
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    //noinspection GradleDependency
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    // Media3 1.9+ requires compileSdk 36; 1.8.1 is the current API-35-compatible stable line.
+    //noinspection GradleDependency
+    implementation("androidx.media3:media3-exoplayer:1.8.1")
+    //noinspection GradleDependency
+    implementation("androidx.media3:media3-ui:1.8.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation("junit:junit:4.13.2")
 }

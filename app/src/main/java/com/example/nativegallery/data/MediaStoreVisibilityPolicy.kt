@@ -4,14 +4,17 @@ import android.os.Build
 import android.provider.MediaStore
 
 object MediaStoreVisibilityPolicy {
-    fun selectionClauses(): List<String> {
+    fun selectionClauses(
+        onlyTrashed: Boolean = false,
+        sdkInt: Int = Build.VERSION.SDK_INT
+    ): List<String> {
         return buildList {
             add("${MediaStore.MediaColumns.SIZE} > 0")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (sdkInt >= Build.VERSION_CODES.Q) {
                 add("${MediaStore.MediaColumns.IS_PENDING} = 0")
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                add("${MediaStore.MediaColumns.IS_TRASHED} = 0")
+            if (sdkInt >= Build.VERSION_CODES.R) {
+                add("${MediaStore.MediaColumns.IS_TRASHED} = ${if (onlyTrashed) 1 else 0}")
             }
         }
     }

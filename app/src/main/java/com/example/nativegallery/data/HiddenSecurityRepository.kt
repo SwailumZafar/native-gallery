@@ -49,29 +49,21 @@ class HiddenSecurityRepository(context: Context) {
 
     fun recordFailedPinAttempt(nowMillis: Long = System.currentTimeMillis()): PinFailureState {
         val currentLockout = pinLockoutUntilMillis()
-        if (currentLockout > nowMillis) {
-            return PinFailureState(
-                failedAttempts = preferences.getInt(PIN_FAILED_ATTEMPTS_KEY, 0),
-                lockoutUntilMillis = currentLockout
-            )
-        }
-
-        val failedAttempts = preferences.getInt(PIN_FAILED_ATTEMPTS_KEY, 0) + 1
-        val lockoutUntilMillis = if (failedAttempts >= MaxFailedPinAttempts) {
-            nowMillis + PinLockoutMillis
-        } else {
-            0L
-        }
+        val failureState = nextPinFailureState(
+            currentFailedAttempts = preferences.getInt(PIN_FAILED_ATTEMPTS_KEY, 0),
+            currentLockoutUntilMillis = currentLockout,
+            nowMillis = nowMillis
+        )
 
         preferences.edit()
-            .putInt(PIN_FAILED_ATTEMPTS_KEY, if (lockoutUntilMillis > 0L) 0 else failedAttempts)
-            .putLong(PIN_LOCKOUT_UNTIL_KEY, lockoutUntilMillis)
+            .putInt(
+                PIN_FAILED_ATTEMPTS_KEY,
+                if (failureState.lockoutUntilMillis > nowMillis) 0 else failureState.failedAttempts
+            )
+            .putLong(PIN_LOCKOUT_UNTIL_KEY, failureState.lockoutUntilMillis)
             .apply()
 
-        return PinFailureState(
-            failedAttempts = failedAttempts,
-            lockoutUntilMillis = lockoutUntilMillis
-        )
+        return failureState
     }
 
     fun clearFailedPinAttempts() {
@@ -116,6 +108,25 @@ class HiddenSecurityRepository(context: Context) {
 
         fun isValidPin(pin: String): Boolean {
             return pin.length in 4..12 && pin.all { it.isDigit() }
+        }
+
+        fun nextPinFailureState(
+            currentFailedAttempts: Int,
+            currentLockoutUntilMillis: Long,
+            nowMillis: Long
+        ): PinFailureState {
+            if (currentLockoutUntilMillis > nowMillis) {
+                return PinFailureState(currentFailedAttempts, currentLockoutUntilMillis)
+            }
+            val failedAttempts = currentFailedAttempts.coerceAtLeast(0) + 1
+            return PinFailureState(
+                failedAttempts = failedAttempts,
+                lockoutUntilMillis = if (failedAttempts >= MaxFailedPinAttempts) {
+                    nowMillis + PinLockoutMillis
+                } else {
+                    0L
+                }
+            )
         }
     }
 }
