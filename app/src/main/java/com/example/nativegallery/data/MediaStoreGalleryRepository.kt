@@ -24,6 +24,13 @@ class MediaStoreGalleryRepository(
 ) {
     private val appContext = context.applicationContext
 
+    fun cachedGallery(mediaKinds: Set<MediaKind>): GallerySnapshot? {
+        val cacheKey = mediaKinds.toSet()
+        return synchronized(SnapshotLock) {
+            CachedSnapshots[cacheKey]
+        }
+    }
+
     fun loadGallery(mediaKinds: Set<MediaKind>): GallerySnapshot {
         return GalleryPerformanceMonitor.trace("MediaStore full gallery load") {
             if (mediaKinds.isEmpty()) {
@@ -31,10 +38,14 @@ class MediaStoreGalleryRepository(
             }
 
             val rows = queryMedia(mediaKinds)
-            GallerySnapshot(
+            val snapshot = GallerySnapshot(
                 mediaItems = rows.map { it.mediaItem },
                 albums = buildAlbums(rows)
             )
+            synchronized(SnapshotLock) {
+                CachedSnapshots[mediaKinds.toSet()] = snapshot
+            }
+            snapshot
         }
     }
 
@@ -73,6 +84,34 @@ class MediaStoreGalleryRepository(
                 albums = buildAlbums(rows)
             )
         }
+    }
+
+    fun mergeLatestPage(
+        mediaKinds: Set<MediaKind>,
+        baseSnapshot: GallerySnapshot?,
+        latestPage: GallerySnapshot
+    ): GallerySnapshot {
+        val mergedSnapshot = if (baseSnapshot == null) {
+            latestPage
+        } else {
+            val latestIds = latestPage.mediaItems.asSequence().map { it.id }.toHashSet()
+            val mergedMedia = buildList {
+                addAll(latestPage.mediaItems)
+                addAll(baseSnapshot.mediaItems.filterNot { it.id in latestIds })
+            }
+            val albumNames = (baseSnapshot.albums + latestPage.albums)
+                .asSequence()
+                .filterNot { it.isAllPhotos }
+                .associate { it.id to it.name }
+            GallerySnapshot(
+                mediaItems = mergedMedia,
+                albums = buildAlbumsFromMedia(mergedMedia, albumNames)
+            )
+        }
+        synchronized(SnapshotLock) {
+            CachedSnapshots[mediaKinds.toSet()] = mergedSnapshot
+        }
+        return mergedSnapshot
     }
 
     private fun queryMedia(
@@ -301,6 +340,36 @@ class MediaStoreGalleryRepository(
         return listOf(allPhotos) + regularAlbums
     }
 
+    private fun buildAlbumsFromMedia(
+        mediaItems: List<MediaItem>,
+        albumNames: Map<String, String>
+    ): List<Album> {
+        if (mediaItems.isEmpty()) return emptyList()
+
+        val allCover = mediaItems.first()
+        val allPhotos = Album(
+            id = "all",
+            name = "All photos",
+            itemCount = mediaItems.size,
+            coverMediaIds = mediaItems.take(4).map { it.id },
+            coverUri = allCover.contentUri,
+            isAllPhotos = true
+        )
+        val regularAlbums = mediaItems
+            .groupBy { it.albumId }
+            .map { (albumId, albumMedia) ->
+                val cover = albumMedia.first()
+                Album(
+                    id = albumId,
+                    name = albumNames[albumId] ?: "Other",
+                    itemCount = albumMedia.size,
+                    coverMediaIds = albumMedia.take(4).map { it.id },
+                    coverUri = cover.contentUri
+                )
+            }
+        return listOf(allPhotos) + regularAlbums
+    }
+
     private fun contentUriFor(mediaType: MediaType, id: Long): Uri {
         val collection = if (mediaType == MediaType.Video) {
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI
@@ -365,7 +434,10 @@ class MediaStoreGalleryRepository(
     }
 
     companion object {
-        const val InitialGalleryPageSize = 360
+        const val InitialGalleryPageSize = 120
+
+        private val SnapshotLock = Any()
+        private val CachedSnapshots = mutableMapOf<Set<MediaKind>, GallerySnapshot>()
 
         val DateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.getDefault())
     }

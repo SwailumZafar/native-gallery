@@ -9,9 +9,13 @@ import android.content.ClipData
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.database.ContentObserver
 import android.hardware.biometrics.BiometricPrompt
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.net.Uri
+import android.provider.MediaStore
 import android.provider.Settings
 import android.os.CancellationSignal
 import android.view.WindowManager
@@ -26,6 +30,7 @@ import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Spring
@@ -46,8 +51,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredHeight
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -105,6 +108,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -133,7 +138,6 @@ import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaAccessNotice
 import com.example.nativegallery.ui.components.MediaThumbnail
-import com.example.nativegallery.ui.components.rememberGalleryFlingBehavior
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import com.example.nativegallery.ui.components.bouncyClickable
 import kotlinx.coroutines.Dispatchers
@@ -267,6 +271,7 @@ fun GalleryApp(
     var albumLayoutMode by rememberSaveable { mutableStateOf(AlbumLayoutMode.BigTiles) }
     var gallerySearchQuery by rememberSaveable { mutableStateOf("") }
     var mediaReloadKey by remember { mutableIntStateOf(0) }
+    var observedMediaChangeKey by remember { mutableIntStateOf(0) }
     var mediaStoreDeletedItems by remember { mutableStateOf<List<RecentlyDeletedMedia>>(emptyList()) }
     var pendingMediaStoreWriteAction by remember { mutableStateOf<PendingMediaStoreWriteAction?>(null) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
@@ -275,7 +280,14 @@ fun GalleryApp(
     var albumCreationSelectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var editingMediaItem by remember { mutableStateOf<MediaItem?>(null) }
     var mediaAccess by remember { mutableStateOf(MediaPermissions.currentAccess(context)) }
-    var mediaStoreSnapshot by remember { mutableStateOf<GallerySnapshot?>(null) }
+    var mediaStoreSnapshot by remember(mediaAccess.mediaKinds) {
+        mutableStateOf(
+            mediaAccess.takeIf { it.hasAccess }?.let { mediaStoreRepository.cachedGallery(it.mediaKinds) }
+        )
+    }
+    var initialMediaSyncComplete by remember(mediaAccess.mediaKinds) {
+        mutableStateOf(!mediaAccess.hasAccess)
+    }
     var viewerMediaItem by remember { mutableStateOf<MediaItem?>(null) }
     var viewerMediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var viewerVisible by remember { mutableStateOf(false) }
@@ -293,6 +305,7 @@ fun GalleryApp(
     var mediaOpenTransitionKey by remember { mutableIntStateOf(0) }
     var mediaCloseTransition by remember { mutableStateOf<MediaCloseTransitionSpec?>(null) }
     var mediaCloseTransitionKey by remember { mutableIntStateOf(0) }
+    var transitionRootBoundsInWindow by remember { mutableStateOf(Rect.Zero) }
     val mainPagerState = rememberPagerState(
         initialPage = selectedTab.pageIndex(),
         pageCount = { 3 }
@@ -311,13 +324,19 @@ fun GalleryApp(
 
     LaunchedEffect(mediaAccess, mediaReloadKey) {
         if (mediaAccess.hasAccess) {
-            mediaStoreSnapshot = null
-            mediaStoreSnapshot = withContext(Dispatchers.IO) {
+            val snapshotBeforeRefresh = mediaStoreSnapshot
+            val latestPage = withContext(Dispatchers.IO) {
                 mediaStoreRepository.loadGalleryPage(
                     mediaKinds = mediaAccess.mediaKinds,
                     limit = MediaStoreGalleryRepository.InitialGalleryPageSize
                 )
             }
+            mediaStoreSnapshot = mediaStoreRepository.mergeLatestPage(
+                mediaKinds = mediaAccess.mediaKinds,
+                baseSnapshot = snapshotBeforeRefresh,
+                latestPage = latestPage
+            )
+            initialMediaSyncComplete = true
             mediaStoreSnapshot = withContext(Dispatchers.IO) {
                 mediaStoreRepository.loadGallery(mediaAccess.mediaKinds)
             }
@@ -327,6 +346,40 @@ fun GalleryApp(
         } else {
             mediaStoreSnapshot = null
             mediaStoreDeletedItems = emptyList()
+            initialMediaSyncComplete = true
+        }
+    }
+
+    LaunchedEffect(observedMediaChangeKey) {
+        if (observedMediaChangeKey > 0) {
+            delay(180L)
+            mediaReloadKey += 1
+        }
+    }
+
+    DisposableEffect(mediaAccess.hasAccess, context) {
+        if (!mediaAccess.hasAccess) {
+            onDispose { }
+        } else {
+            val resolver = context.applicationContext.contentResolver
+            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            } else {
+                MediaStore.Files.getContentUri("external")
+            }
+            val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) {
+                    observedMediaChangeKey += 1
+                }
+
+                override fun onChange(selfChange: Boolean, uri: Uri?) {
+                    observedMediaChangeKey += 1
+                }
+            }
+            resolver.registerContentObserver(collection, true, observer)
+            onDispose {
+                resolver.unregisterContentObserver(observer)
+            }
         }
     }
 
@@ -365,7 +418,7 @@ fun GalleryApp(
         }
     }
     val fakeSnapshot = remember { FakeGalleryRepository.snapshot() }
-    val isLoadingMedia = mediaAccess.hasAccess && mediaStoreSnapshot == null
+    val isLoadingMedia = mediaAccess.hasAccess && (!initialMediaSyncComplete || mediaStoreSnapshot == null)
     val activeSnapshot = when {
         isLoadingMedia -> GallerySnapshot(emptyList(), emptyList())
         mediaAccess.hasAccess -> mediaStoreSnapshot ?: GallerySnapshot(emptyList(), emptyList())
@@ -425,6 +478,20 @@ fun GalleryApp(
     val visibleMedia = remember(availableMedia, hiddenAlbumIds, hiddenMediaIds) {
         GalleryPrivacyFilter.visibleMedia(availableMedia, hiddenAlbumIds, hiddenMediaIds)
     }
+    val galleryFrontWarmupKey = remember(visibleMedia) {
+        visibleMedia.take(48).joinToString(separator = "|") { it.id }
+    }
+    LaunchedEffect(galleryFrontWarmupKey) {
+        if (visibleMedia.isNotEmpty()) {
+            prefetchMediaThumbnails(
+                context = context.applicationContext,
+                mediaItems = visibleMedia,
+                thumbnailSizes = listOf(384),
+                maxItems = 48,
+                pinInMemory = true
+            )
+        }
+    }
     val visibleMediaByAlbum = remember(visibleMedia) { visibleMedia.groupBy { it.albumId } }
     val favoriteMedia = remember(visibleMedia, favoriteMediaIds) {
         visibleMedia.filter { favoriteMediaIds.contains(it.id) }
@@ -475,13 +542,12 @@ fun GalleryApp(
     }
 
     val albumPreviewWarmupKey = remember(visibleAlbums) {
-        visibleAlbums.take(6).joinToString(separator = "|") { "${it.id}:${it.itemCount}" }
+        visibleAlbums.take(12).joinToString(separator = "|") { "${it.id}:${it.itemCount}" }
     }
 
     LaunchedEffect(destination, selectedTab, albumPreviewWarmupKey, visibleMedia.size, favoriteMediaIds) {
         if (destination == GalleryDestination.Main && selectedTab == GalleryTab.Albums && visibleMedia.isNotEmpty()) {
-            delay(180)
-            visibleAlbums.take(6).forEach { album ->
+            visibleAlbums.take(12).forEach { album ->
                 prefetchMediaThumbnails(
                     context = context.applicationContext,
                     mediaItems = mediaForAlbumFast(album, visibleMedia, visibleMediaByAlbum, favoriteMedia),
@@ -752,18 +818,17 @@ fun GalleryApp(
         selectedTab = GalleryTab.Albums
         selectedMediaIds = emptySet()
 
-        prefetchScope.launch {
-            prefetchMediaThumbnails(
-                context = context.applicationContext,
-                mediaItems = openingMedia,
-                thumbnailSizes = listOf(384),
-                maxItems = 20
-            )
-        }
-
-        val hasTileTransition = tileBounds != null && tileBounds != Rect.Zero
+        val hasTileTransition = tileBounds?.isUsableTransitionBounds() == true
         if (hasTileTransition) {
             albumTileBounds[album.id] = tileBounds
+            prefetchScope.launch {
+                prefetchMediaThumbnails(
+                    context = context.applicationContext,
+                    mediaItems = openingMedia,
+                    thumbnailSizes = listOf(160),
+                    maxItems = 12
+                )
+            }
             albumTransitionKey += 1
             albumTransition = AlbumTransitionSpec(
                 key = albumTransitionKey,
@@ -781,7 +846,7 @@ fun GalleryApp(
         val closingAlbum = selectedAlbum
         val closingBounds = selectedAlbumId?.let { albumTileBounds[it] }
         selectedMediaIds = emptySet()
-        if (closingAlbum != null && closingBounds != null && closingBounds != Rect.Zero) {
+        if (closingAlbum != null && closingBounds?.isUsableTransitionBounds() == true) {
             albumTransitionKey += 1
             albumTransition = AlbumTransitionSpec(
                 key = albumTransitionKey,
@@ -848,7 +913,7 @@ fun GalleryApp(
     ) {
         mediaOpenTransitionKey += 1
         val openKey = mediaOpenTransitionKey
-        if (bounds != Rect.Zero) {
+        if (bounds.isUsableTransitionBounds()) {
             viewerReturnFallbackBounds = bounds
             viewerSourceBounds = bounds
         }
@@ -856,7 +921,7 @@ fun GalleryApp(
         viewerSourceMediaIds = mediaItems.map { it.id }
         viewerSourceGridColumns = sourceGridColumns.coerceAtLeast(1)
 
-        if (bounds != Rect.Zero) {
+        if (bounds.isUsableTransitionBounds()) {
             mediaTileBounds[mediaItem.id] = bounds
             mediaOpenTransition = MediaOpenTransitionSpec(
                 key = openKey,
@@ -945,7 +1010,7 @@ fun GalleryApp(
         viewerVisible = false
 
         val targetBounds = currentItem?.let(::returnBoundsForMedia) ?: Rect.Zero
-        if (currentItem != null && targetBounds != Rect.Zero) {
+        if (currentItem != null && targetBounds.isUsableTransitionBounds()) {
             mediaCloseTransitionKey += 1
             mediaCloseTransition = MediaCloseTransitionSpec(
                 key = mediaCloseTransitionKey,
@@ -1325,7 +1390,11 @@ fun GalleryApp(
         val rootWidthPx = with(density) { maxWidth.toPx() }
         val rootHeightPx = with(density) { maxHeight.toPx() }
 
-        SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
+        SharedTransitionLayout(
+            modifier = Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { transitionRootBoundsInWindow = it.boundsInWindow() }
+        ) {
             val sharedTransitionScope = this
 
             AnimatedVisibility(
@@ -1367,7 +1436,7 @@ fun GalleryApp(
                                 HorizontalPager(
                                     state = mainPagerState,
                                     modifier = Modifier.fillMaxSize(),
-                                    beyondViewportPageCount = 0,
+                                    beyondViewportPageCount = 2,
                                     userScrollEnabled = navigationTransitionIdle,
                                     flingBehavior = tabFlingBehavior,
                                     key = { page -> pageToGalleryTab(page).name }
@@ -1422,13 +1491,15 @@ fun GalleryApp(
                                                 lockedItemCount = lockedItemCount,
                                                 onAlbumClick = { album, bounds -> startAlbumOpen(album, bounds) },
                                                 onAlbumBoundsChanged = { album, bounds ->
-                                                    if (bounds != Rect.Zero) {
+                                                    if (bounds.isUsableTransitionBounds()) {
                                                         albumTileBounds[album.id] = bounds
                                                     }
                                                 },
                                                 contentPadding = innerPadding,
                                                 listState = albumsListState,
-                                                activeTransitionAlbumId = albumTransition?.album?.id,
+                                                activeTransitionAlbumId = albumTransition
+                                                    ?.takeIf { it.mode == AlbumTransitionMode.Opening }
+                                                    ?.album?.id,
                                                 mediaAccessNotice = mediaAccessNotice,
                                                 isLoading = isLoadingMedia,
                                                 searchQuery = gallerySearchQuery,
@@ -1601,19 +1672,11 @@ fun GalleryApp(
                     }
                 }
 
-                AlbumTouchOriginTransitionOverlay(
+                PositionAwareAlbumTransitionOverlay(
                     transition = albumTransition,
                     rootWidthPx = rootWidthPx,
                     rootHeightPx = rootHeightPx,
-                    onCommitDestination = { committedTransition ->
-                        if (
-                            albumTransition?.key == committedTransition.key &&
-                            committedTransition.mode == AlbumTransitionMode.Opening &&
-                            destination != GalleryDestination.AlbumDetail
-                        ) {
-                            destination = GalleryDestination.AlbumDetail
-                        }
-                    },
+                    rootBoundsInWindow = transitionRootBoundsInWindow,
                     onFinished = { finishedTransition ->
                         if (albumTransition?.key == finishedTransition.key) {
                             if (finishedTransition.mode == AlbumTransitionMode.Opening) {
@@ -1622,19 +1685,19 @@ fun GalleryApp(
                             albumTransition = null
                         }
                     }
-                ) { overlayAlbum, overlayProgress ->
+                ) { overlayAlbum, _ ->
                     AlbumDetailTransitionPreview(
                         album = overlayAlbum,
                         mediaItems = if (overlayAlbum.id == selectedAlbumId) selectedAlbumMedia else mediaForAlbumFast(overlayAlbum, visibleMedia, visibleMediaByAlbum, favoriteMedia),
                         contentPadding = PaddingValues(),
-                        gridMode = albumDetailGridModes[overlayAlbum.id] ?: defaultAlbumGridMode,
-                        transitionProgress = overlayProgress
+                        gridMode = albumDetailGridModes[overlayAlbum.id] ?: defaultAlbumGridMode
                     )
                 }
-                MediaOpenTransitionOverlay(
+                ReferenceMediaOpenOverlay(
                     transition = mediaOpenTransition,
                     rootWidthPx = rootWidthPx,
                     rootHeightPx = rootHeightPx,
+                    rootBoundsInWindow = transitionRootBoundsInWindow,
                     onFinished = { finishedTransition ->
                         if (mediaOpenTransition?.key == finishedTransition.key) {
                             finishViewerOpen(
@@ -1648,10 +1711,11 @@ fun GalleryApp(
                         }
                     }
                 )
-                MediaCloseTransitionOverlay(
+                ReferenceMediaCloseOverlay(
                     transition = mediaCloseTransition,
                     rootWidthPx = rootWidthPx,
                     rootHeightPx = rootHeightPx,
+                    rootBoundsInWindow = transitionRootBoundsInWindow,
                     onFinished = { finishedTransition ->
                         if (mediaCloseTransition?.key == finishedTransition.key) {
                             clearViewerAfterClose()
@@ -2007,7 +2071,6 @@ private fun GalleryCleanupScreen(
     }
 
     LazyColumn(
-        flingBehavior = rememberGalleryFlingBehavior(),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 22.dp, top = 40.dp, end = 22.dp, bottom = 40.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -2544,62 +2607,63 @@ private fun nextMediaAfterDelete(
 }
 
 @Composable
-private fun AlbumTouchOriginTransitionOverlay(
+private fun PositionAwareAlbumTransitionOverlay(
     transition: AlbumTransitionSpec?,
     rootWidthPx: Float,
     rootHeightPx: Float,
-    onCommitDestination: (AlbumTransitionSpec) -> Unit,
+    rootBoundsInWindow: Rect,
     onFinished: (AlbumTransitionSpec) -> Unit,
     content: @Composable (Album, Float) -> Unit
 ) {
     if (transition == null || rootWidthPx <= 0f || rootHeightPx <= 0f) return
 
-    val density = LocalDensity.current
+    val sourceBounds = transition.tileBounds.relativeToRoot(
+        rootBoundsInWindow = rootBoundsInWindow,
+        fallbackRootWidth = rootWidthPx,
+        fallbackRootHeight = rootHeightPx
+    )
+    if (!sourceBounds.isUsableTransitionBounds()) {
+        LaunchedEffect(transition.key) {
+            onFinished(transition)
+        }
+        return
+    }
+
     val progress = remember(transition.key) {
         Animatable(if (transition.mode == AlbumTransitionMode.Closing) 1f else 0f)
     }
 
     LaunchedEffect(transition.key) {
-        var committedDestination = false
         val targetValue = if (transition.mode == AlbumTransitionMode.Closing) 0f else 1f
         progress.animateTo(
             targetValue = targetValue,
-            animationSpec = spring(
-                dampingRatio = if (transition.mode == AlbumTransitionMode.Opening) {
-                    GalleryMotion.ContainerOpenDamping
+            animationSpec = tween(
+                durationMillis = if (transition.mode == AlbumTransitionMode.Opening) {
+                    GalleryMotion.AlbumOpenMillis
                 } else {
-                    GalleryMotion.ContainerCloseDamping
+                    GalleryMotion.SharedBoundsMillis
                 },
-                stiffness = if (transition.mode == AlbumTransitionMode.Opening) {
-                    GalleryMotion.ContainerOpenStiffness
-                } else {
-                    GalleryMotion.ContainerCloseStiffness
-                }
+                easing = FastOutSlowInEasing
             )
-        ) {
-            if (transition.mode == AlbumTransitionMode.Opening && value >= 0.88f && !committedDestination) {
-                committedDestination = true
-                onCommitDestination(transition)
-            }
-        }
-        if (transition.mode == AlbumTransitionMode.Opening && !committedDestination) {
-            onCommitDestination(transition)
-        }
+        )
         onFinished(transition)
     }
 
-    val easedProgress = progress.value.coerceIn(0f, 1f)
-    val startWidth = (transition.tileBounds.right - transition.tileBounds.left).coerceAtLeast(1f)
-    val startHeight = (transition.tileBounds.bottom - transition.tileBounds.top).coerceAtLeast(1f)
-    val width = lerp(startWidth, rootWidthPx, easedProgress)
-    val height = lerp(startHeight, rootHeightPx, easedProgress)
-    val translationX = lerp(transition.tileBounds.left, 0f, easedProgress)
-    val translationY = lerp(transition.tileBounds.top, 0f, easedProgress)
-    val visualStartRadius = (minOf(startWidth, startHeight) * 0.18f).coerceIn(24f, 42f)
-    val visualRadius = lerp(visualStartRadius, 0f, GalleryMotion.easeOutCubic(easedProgress))
-    val radius = with(density) { visualRadius.toDp() }
-    val scrimAlpha = GalleryMotion.easeOutCubic(easedProgress) * 0.38f
-    val shadowPulse = (scrimAlpha / 0.38f).coerceIn(0f, 1f) * (1f - easedProgress)
+    val expansion = progress.value.coerceIn(0f, 1f)
+    val startScaleX = (sourceBounds.width / rootWidthPx).coerceIn(0.01f, 1f)
+    val startScaleY = (sourceBounds.height / rootHeightPx).coerceIn(0.01f, 1f)
+    val pivotX = sourceBounds.center.x.coerceIn(0f, rootWidthPx)
+    val pivotY = sourceBounds.center.y.coerceIn(0f, rootHeightPx)
+    val pivotFractionX = (pivotX / rootWidthPx).coerceIn(0f, 1f)
+    val pivotFractionY = (pivotY / rootHeightPx).coerceIn(0f, 1f)
+    val startTranslationX = sourceBounds.left - (pivotX - pivotX * startScaleX)
+    val startTranslationY = sourceBounds.top - (pivotY - pivotY * startScaleY)
+    val scaleX = lerp(startScaleX, 1f, expansion)
+    val scaleY = lerp(startScaleY, 1f, expansion)
+    val translationX = lerp(startTranslationX, 0f, expansion)
+    val translationY = lerp(startTranslationY, 0f, expansion)
+    val cornerRadius = lerp(22f, 0f, expansion).dp
+    val scrimAlpha = GalleryMotion.smoothstep(0f, 0.72f, expansion) * 0.18f
 
     Box(
         modifier = Modifier
@@ -2608,203 +2672,201 @@ private fun AlbumTouchOriginTransitionOverlay(
     ) {
         Box(
             modifier = Modifier
-                .width(with(density) { width.toDp() })
-                .height(with(density) { height.toDp() })
+                .fillMaxSize()
                 .graphicsLayer {
-                    transformOrigin = TransformOrigin(0f, 0f)
+                    transformOrigin = TransformOrigin(pivotFractionX, pivotFractionY)
+                    this.scaleX = scaleX
+                    this.scaleY = scaleY
                     this.translationX = translationX
                     this.translationY = translationY
-                    shadowElevation = 24f * shadowPulse
+                    shadowElevation = 18f * (1f - expansion)
                     clip = true
-                    shape = RoundedCornerShape(radius)
+                    shape = RoundedCornerShape(cornerRadius)
                 }
-                .background(MaterialTheme.colorScheme.background)
         ) {
-            Box(
-                modifier = Modifier
-                    .requiredWidth(with(density) { rootWidthPx.toDp() })
-                    .requiredHeight(with(density) { rootHeightPx.toDp() })
-                    .graphicsLayer {
-                        this.translationX = -translationX
-                        this.translationY = -translationY
-                    }
-            ) {
-                content(transition.album, easedProgress)
-            }
+            content(transition.album, expansion)
         }
     }
 }
 
+private val ReferenceViewerOpenEasing = CubicBezierEasing(0.16f, 0.82f, 0.22f, 1f)
+private val ReferenceViewerCloseEasing = CubicBezierEasing(0.30f, 0f, 0.58f, 1f)
+
 @Composable
-private fun MediaOpenTransitionOverlay(
+private fun ReferenceMediaOpenOverlay(
     transition: MediaOpenTransitionSpec?,
     rootWidthPx: Float,
     rootHeightPx: Float,
+    rootBoundsInWindow: Rect,
     onFinished: (MediaOpenTransitionSpec) -> Unit
 ) {
     if (transition == null || rootWidthPx <= 0f || rootHeightPx <= 0f) return
 
-    val density = LocalDensity.current
+    val tileBounds = transition.tileBounds.relativeToRoot(
+        rootBoundsInWindow = rootBoundsInWindow,
+        fallbackRootWidth = rootWidthPx,
+        fallbackRootHeight = rootHeightPx
+    )
+    if (!tileBounds.isUsableTransitionBounds()) {
+        LaunchedEffect(transition.key) {
+            onFinished(transition)
+        }
+        return
+    }
     val progress = remember(transition.key) { Animatable(0f) }
 
     LaunchedEffect(transition.key) {
         progress.animateTo(
             targetValue = 1f,
-            animationSpec = spring(
-                dampingRatio = GalleryMotion.MediaOpenDamping,
-                stiffness = GalleryMotion.MediaOpenStiffness
+            animationSpec = tween(
+                durationMillis = GalleryMotion.ViewerHeroOpenMillis,
+                easing = ReferenceViewerOpenEasing
             )
         )
         onFinished(transition)
     }
 
-    // Keep the original relaxed viewer pacing. The geometry below fixes the old squeeze
-    // without front-loading the transition.
-    val visualProgress = progress.value.coerceIn(0f, 1f)
-    val startBounds = transition.tileBounds
-    val endBounds = fittedMediaRect(rootWidthPx, rootHeightPx, transition.mediaItem)
-    val clipBounds = lerpRect(startBounds, endBounds, visualProgress)
-    val coverScale = max(
-        startBounds.width / endBounds.width.coerceAtLeast(1f),
-        startBounds.height / endBounds.height.coerceAtLeast(1f)
-    ).coerceAtLeast(0.01f)
-    val imageScale = lerp(coverScale, 1f, visualProgress)
-    val imageCenter = Offset(
-        x = lerp(startBounds.center.x, endBounds.center.x, visualProgress),
-        y = lerp(startBounds.center.y, endBounds.center.y, visualProgress)
+    val expansion = progress.value.coerceIn(0f, 1f)
+    ReferenceMediaHeroFrame(
+        mediaItem = transition.transitionMediaItem,
+        startBounds = tileBounds,
+        endBounds = fittedMediaRect(rootWidthPx, rootHeightPx, transition.mediaItem),
+        progress = expansion,
+        backdropAlpha = GalleryMotion.smoothstep(0f, 0.82f, expansion)
     )
-    val startRadiusPx = with(density) { 10.dp.toPx() }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = visualProgress))
-    ) {
-        AspectPreservingMediaHero(
-            mediaItem = transition.transitionMediaItem,
-            isVideo = transition.mediaItem.isVideo,
-            baseBounds = endBounds,
-            clipBounds = clipBounds,
-            imageCenter = imageCenter,
-            imageScale = imageScale,
-            cornerRadiusPx = lerp(startRadiusPx, 0f, visualProgress)
-        )
-    }
 }
 
 @Composable
-private fun MediaCloseTransitionOverlay(
+private fun ReferenceMediaCloseOverlay(
     transition: MediaCloseTransitionSpec?,
     rootWidthPx: Float,
     rootHeightPx: Float,
+    rootBoundsInWindow: Rect,
     onFinished: (MediaCloseTransitionSpec) -> Unit
 ) {
     if (transition == null || rootWidthPx <= 0f || rootHeightPx <= 0f) return
 
-    val density = LocalDensity.current
+    val tileBounds = transition.tileBounds.relativeToRoot(
+        rootBoundsInWindow = rootBoundsInWindow,
+        fallbackRootWidth = rootWidthPx,
+        fallbackRootHeight = rootHeightPx
+    )
+    if (!tileBounds.isUsableTransitionBounds()) {
+        LaunchedEffect(transition.key) {
+            onFinished(transition)
+        }
+        return
+    }
     val progress = remember(transition.key) { Animatable(0f) }
 
     LaunchedEffect(transition.key) {
         progress.animateTo(
             targetValue = 1f,
-            animationSpec = spring(
-                dampingRatio = GalleryMotion.MediaOpenDamping,
-                stiffness = GalleryMotion.MediaOpenStiffness
+            animationSpec = tween(
+                durationMillis = GalleryMotion.ViewerHeroCloseMillis,
+                easing = ReferenceViewerCloseEasing
             )
         )
         onFinished(transition)
     }
 
-    val visualProgress = progress.value.coerceIn(0f, 1f)
-    val targetBounds = transition.tileBounds
+    val collapse = progress.value.coerceIn(0f, 1f)
     val startBounds = scaledRectAroundCenter(
         rect = fittedMediaRect(rootWidthPx, rootHeightPx, transition.mediaItem),
         scale = transition.startScale.coerceIn(0.68f, 1f),
         offset = transition.startOffset
     )
-    val clipBounds = lerpRect(startBounds, targetBounds, visualProgress)
-    val coverScale = max(
-        targetBounds.width / startBounds.width.coerceAtLeast(1f),
-        targetBounds.height / startBounds.height.coerceAtLeast(1f)
-    ).coerceAtLeast(0.01f)
-    val imageScale = lerp(1f, coverScale, visualProgress)
-    val imageCenter = Offset(
-        x = lerp(startBounds.center.x, targetBounds.center.x, visualProgress),
-        y = lerp(startBounds.center.y, targetBounds.center.y, visualProgress)
+    ReferenceMediaHeroFrame(
+        mediaItem = transition.mediaItem,
+        startBounds = startBounds,
+        endBounds = tileBounds,
+        progress = collapse,
+        backdropAlpha = transition.startBackdropAlpha *
+            (1f - GalleryMotion.smoothstep(0.12f, 0.92f, collapse))
     )
-    val endRadiusPx = with(density) { 10.dp.toPx() }
+}
+
+@Composable
+private fun ReferenceMediaHeroFrame(
+    mediaItem: MediaItem,
+    startBounds: Rect,
+    endBounds: Rect,
+    progress: Float,
+    backdropAlpha: Float
+) {
+    val density = LocalDensity.current
+    val fraction = progress.coerceIn(0f, 1f)
+    val heroBounds = lerpRect(startBounds, endBounds, fraction)
+    val heroWidth = heroBounds.width.coerceAtLeast(1f)
+    val heroHeight = heroBounds.height.coerceAtLeast(1f)
+    val cornerRadius = with(density) {
+        (3.dp.toPx() * (1f - GalleryMotion.smoothstep(0f, 0.65f, fraction))).toDp()
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Color.Black.copy(
-                    alpha = lerp(transition.startBackdropAlpha, 0f, visualProgress)
-                )
-            )
+            .background(Color.Black.copy(alpha = backdropAlpha.coerceIn(0f, 1f)))
     ) {
-        AspectPreservingMediaHero(
-            mediaItem = transition.mediaItem,
-            isVideo = transition.mediaItem.isVideo,
-            baseBounds = startBounds,
-            clipBounds = clipBounds,
-            imageCenter = imageCenter,
-            imageScale = imageScale,
-            cornerRadiusPx = lerp(0f, endRadiusPx, visualProgress)
-        )
+        Box(
+            modifier = Modifier
+                .width(with(density) { heroWidth.toDp() })
+                .height(with(density) { heroHeight.toDp() })
+                .graphicsLayer {
+                    transformOrigin = TransformOrigin(0f, 0f)
+                    translationX = heroBounds.left
+                    translationY = heroBounds.top
+                    clip = true
+                    shape = RoundedCornerShape(cornerRadius)
+                }
+                .background(Color.Black)
+        ) {
+            GalleryImage(
+                imageRes = mediaItem.imageRes,
+                imageUri = mediaItem.contentUri,
+                contentDescription = mediaItem.title,
+                modifier = Modifier.fillMaxSize(),
+                cornerRadius = 0.dp,
+                contentScale = ContentScale.Crop,
+                thumbnailSize = 512,
+                loadQuality = ImageLoadQuality.Thumbnail,
+                backgroundColor = Color.Black
+            )
+        }
     }
 }
 
-@Composable
-private fun AspectPreservingMediaHero(
-    mediaItem: MediaItem,
-    isVideo: Boolean,
-    baseBounds: Rect,
-    clipBounds: Rect,
-    imageCenter: Offset,
-    imageScale: Float,
-    cornerRadiusPx: Float
-) {
-    val density = LocalDensity.current
-    val safeBaseWidth = baseBounds.width.coerceAtLeast(1f)
-    val safeBaseHeight = baseBounds.height.coerceAtLeast(1f)
-    val safeClipWidth = clipBounds.width.coerceAtLeast(1f)
-    val safeClipHeight = clipBounds.height.coerceAtLeast(1f)
+private fun Rect.isUsableTransitionBounds(): Boolean {
+    return left.isFinite() &&
+        top.isFinite() &&
+        right.isFinite() &&
+        bottom.isFinite() &&
+        width >= 4f &&
+        height >= 4f
+}
 
-    Box(
-        modifier = Modifier
-            .width(with(density) { safeClipWidth.toDp() })
-            .height(with(density) { safeClipHeight.toDp() })
-            .graphicsLayer {
-                transformOrigin = TransformOrigin(0f, 0f)
-                translationX = clipBounds.left
-                translationY = clipBounds.top
-                clip = true
-                shape = RoundedCornerShape(with(density) { cornerRadiusPx.coerceAtLeast(0f).toDp() })
-            }
-            .background(if (isVideo) Color.Black else Color.Transparent)
-    ) {
-        GalleryImage(
-            imageRes = mediaItem.imageRes,
-            imageUri = mediaItem.contentUri,
-            contentDescription = mediaItem.title,
-            modifier = Modifier
-                .requiredWidth(with(density) { safeBaseWidth.toDp() })
-                .requiredHeight(with(density) { safeBaseHeight.toDp() })
-                .graphicsLayer {
-                    transformOrigin = TransformOrigin(0.5f, 0.5f)
-                    scaleX = imageScale
-                    scaleY = imageScale
-                    translationX = imageCenter.x - clipBounds.left - safeBaseWidth / 2f
-                    translationY = imageCenter.y - clipBounds.top - safeBaseHeight / 2f
-                },
-            cornerRadius = 0.dp,
-            contentScale = ContentScale.Fit,
-            thumbnailSize = 1440,
-            loadQuality = if (isVideo) ImageLoadQuality.Thumbnail else ImageLoadQuality.HighQuality,
-            backgroundColor = if (isVideo) Color.Black else Color.Transparent
-        )
-    }
+private fun Rect.relativeToRoot(
+    rootBoundsInWindow: Rect,
+    fallbackRootWidth: Float,
+    fallbackRootHeight: Float
+): Rect {
+    if (!isUsableTransitionBounds()) return Rect.Zero
+
+    val rootWidth = fallbackRootWidth.coerceAtLeast(1f)
+    val rootHeight = fallbackRootHeight.coerceAtLeast(1f)
+    val rootBoundsAreUsable = rootBoundsInWindow.isUsableTransitionBounds()
+    val originX = if (rootBoundsAreUsable) rootBoundsInWindow.left else 0f
+    val originY = if (rootBoundsAreUsable) rootBoundsInWindow.top else 0f
+    val width = width.coerceIn(1f, rootWidth)
+    val height = height.coerceIn(1f, rootHeight)
+    val left = (this.left - originX).coerceIn(0f, (rootWidth - width).coerceAtLeast(0f))
+    val top = (this.top - originY).coerceIn(0f, (rootHeight - height).coerceAtLeast(0f))
+    return Rect(
+        left = left,
+        top = top,
+        right = left + width,
+        bottom = top + height
+    )
 }
 
 private fun lerpRect(start: Rect, stop: Rect, fraction: Float): Rect {

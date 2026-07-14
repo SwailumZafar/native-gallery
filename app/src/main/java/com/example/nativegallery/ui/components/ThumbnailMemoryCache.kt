@@ -9,6 +9,9 @@ object ThumbnailMemoryCache {
     private val MaxCacheKilobytes = ((Runtime.getRuntime().maxMemory() / 1024L) / 6L)
         .coerceIn(48L * 1024L, 128L * 1024L)
         .toInt()
+    private val MaxPinnedKilobytes = ((Runtime.getRuntime().maxMemory() / 1024L) / 16L)
+        .coerceIn(16L * 1024L, 48L * 1024L)
+        .toInt()
 
     private val indexLock = Any()
     private val sizesByUri = mutableMapOf<String, MutableSet<Int>>()
@@ -18,16 +21,17 @@ object ThumbnailMemoryCache {
             return (value.byteCount / 1024).coerceAtLeast(1)
         }
 
-        override fun entryRemoved(evicted: Boolean, key: String, oldValue: Bitmap, newValue: Bitmap?) {
-            if (newValue == null) {
-                removeIndexedSize(key)
-            }
+    }
+
+    private val pinnedCache = object : LruCache<String, Bitmap>(MaxPinnedKilobytes) {
+        override fun sizeOf(key: String, value: Bitmap): Int {
+            return (value.byteCount / 1024).coerceAtLeast(1)
         }
     }
 
     fun key(uri: Uri, size: Int): String = "$uri@$size"
 
-    fun get(key: String): Bitmap? = cache.get(key)
+    fun get(key: String): Bitmap? = pinnedCache.get(key) ?: cache.get(key)
 
     fun getNearest(uri: Uri, requestedSize: Int): Bitmap? {
         get(key(uri, requestedSize))?.let { return it }
@@ -58,20 +62,17 @@ object ThumbnailMemoryCache {
         }
     }
 
+    fun pin(key: String, bitmap: Bitmap) {
+        if (pinnedCache.get(key) == null) {
+            pinnedCache.put(key, bitmap)
+            indexKey(key)
+        }
+    }
+
     private fun indexKey(key: String) {
         val parsedKey = parseKey(key) ?: return
         synchronized(indexLock) {
             sizesByUri.getOrPut(parsedKey.first) { mutableSetOf() }.add(parsedKey.second)
-        }
-    }
-
-    private fun removeIndexedSize(key: String) {
-        val parsedKey = parseKey(key) ?: return
-        synchronized(indexLock) {
-            sizesByUri[parsedKey.first]?.let { sizes ->
-                sizes.remove(parsedKey.second)
-                if (sizes.isEmpty()) sizesByUri.remove(parsedKey.first)
-            }
         }
     }
 

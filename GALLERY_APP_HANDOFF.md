@@ -1594,3 +1594,60 @@ SHA-256: 5543A95CBD096703020C576AC41F1F18C210B27E13D1EBE955E37D8852D8D361
 Device note:
 
 - The build is verified locally; the viewer pacing, 120 Hz feel, MediaStore move confirmation, and editor save output still need a physical-device smoke test.
+
+## 2026-07-14 Immediate Media Refresh and Reference Viewer Pass
+
+This pass resolves the repeated newly-captured-media insertion delay, restores Android's native scrolling physics, and rebuilds the photo/video viewer motion from the latest reference recording.
+
+What changed:
+
+- Removed the custom velocity-scaled gallery fling behavior from Photos, Albums, Album Detail, Recently Deleted, Cleanup, and the album picker. These screens use Compose/Android's default native scrolling behavior again.
+- Normalized album typography: Basic and Big tile names use a consistent 14 sp treatment, counts remain smaller, and Big tile labels are aligned to the lower-left with tighter insets.
+- Album and media tiles now report `boundsInWindow`; transition bounds are validated and converted into the shared root coordinate space before animation.
+- Rebuilt album opening/closing around the exact tapped tile center. The full Album Detail surface scales from that touch origin, with the real header/grid preview already mounted and no top-left fallback.
+- Added a process-memory MediaStore snapshot and a 120-item newest-media query. The newest page is merged and published before the full-library scan completes.
+- Added a debounced MediaStore `ContentObserver` so newly captured, edited, restored, moved, or deleted media refreshes without a manual reload.
+- Initial gallery presentation is held until the newest-page sync completes, preventing an old cached grid from appearing first and then shifting when recent rows arrive.
+- Removed the blocking initial thumbnail-prefetch wait. First-screen thumbnails warm asynchronously, and the first 48 are pinned in a bounded memory cache for stable repeated opens.
+- Increased album-cover warmup coverage while using smaller 160 px transition previews so album motion does not compete with large bitmap uploads.
+- Completely removed the previous viewer hero implementation that laid out an oversized fitted image inside a small animated clip.
+- Added a reference-based viewer hero: one aspect-preserving `ContentScale.Crop` surface expands from the exact tapped thumbnail bounds to the fitted media bounds, while the grid darkens behind it.
+- Viewer opening uses a responsive 360 ms cubic settle; closing uses a 300 ms reverse after viewer controls fade. The image is never stretched or squeezed, and the source tile remains the spatial origin.
+
+Connected-device findings on RMX3852 / device `30e49129`:
+
+- Before the fix, the newest-page query took about 190-384 ms and the UI then waited another 325-337 ms for 24 thumbnail preloads before publishing the rows.
+- After the fix, the 120-item newest page measured 80-151 ms and was published immediately; the full 18k-item library scan continued in the background.
+- Installed and launched the final debug APK successfully with `adb install -r`.
+- Temporary transition-capture files created during testing were removed by exact filename and verified absent; original device media was not modified.
+
+Verification:
+
+```text
+:app:assembleDebug -> BUILD SUCCESSFUL
+:app:lintDebug -> BUILD SUCCESSFUL
+:app:testDebugUnitTest -> BUILD SUCCESSFUL / NO-SOURCE
+git diff --check -> clean except existing CRLF conversion warnings
+adb install -r app-debug.apk -> Success
+```
+
+Latest verified APK:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Size: 19,945,824 bytes
+SHA-256: B35FE962B04BFC967DA7B2C0E20F4E1AB88361A73F53FB47A7C4AEEFC226DB7F
+```
+
+Main files involved:
+
+```text
+app/src/main/java/com/example/nativegallery/data/MediaStoreGalleryRepository.kt
+app/src/main/java/com/example/nativegallery/ui/GalleryApp.kt
+app/src/main/java/com/example/nativegallery/ui/AlbumsScreen.kt
+app/src/main/java/com/example/nativegallery/ui/PhotosScreen.kt
+app/src/main/java/com/example/nativegallery/ui/components/GalleryComponents.kt
+app/src/main/java/com/example/nativegallery/ui/components/GalleryMotion.kt
+app/src/main/java/com/example/nativegallery/ui/components/ThumbnailMemoryCache.kt
+GALLERY_APP_HANDOFF.md
+```

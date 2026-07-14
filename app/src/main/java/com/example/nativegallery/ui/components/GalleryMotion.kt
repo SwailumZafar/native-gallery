@@ -5,9 +5,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.FlingBehavior
-import androidx.compose.foundation.gestures.ScrollScope
-import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.Composable
@@ -19,6 +16,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 object GalleryMotion {
     const val SharedBoundsMillis = 420
     const val AlbumOpenMillis = 380
+    const val ViewerHeroOpenMillis = 360
+    const val ViewerHeroCloseMillis = 300
 
     const val ContainerOpenDamping = 0.86f
     const val ContainerOpenStiffness = 360f
@@ -52,7 +51,6 @@ object GalleryMotion {
     const val BottomNavPressDamping = 0.67f
     const val TilePressedScale = 0.975f
     const val PressDamping = 0.86f
-    const val GalleryFlingVelocityScale = 0.62f
 
     fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
         val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
@@ -62,30 +60,6 @@ object GalleryMotion {
     fun easeOutCubic(x: Float): Float {
         val t = x.coerceIn(0f, 1f)
         return 1f - (1f - t) * (1f - t) * (1f - t)
-    }
-}
-
-private class GalleryFlingBehavior(
-    private val delegate: FlingBehavior,
-    private val velocityScale: Float
-) : FlingBehavior {
-    override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
-        return with(delegate) {
-            performFling(initialVelocity * velocityScale)
-        }
-    }
-}
-
-@Composable
-fun rememberGalleryFlingBehavior(
-    velocityScale: Float = GalleryMotion.GalleryFlingVelocityScale
-): FlingBehavior {
-    val delegate = ScrollableDefaults.flingBehavior()
-    return remember(delegate, velocityScale) {
-        GalleryFlingBehavior(
-            delegate = delegate,
-            velocityScale = velocityScale.coerceIn(0.35f, 1f)
-        )
     }
 }
 

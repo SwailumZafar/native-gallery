@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.MediaThumbnail
-import com.example.nativegallery.ui.components.rememberGalleryFlingBehavior
 
 @Composable
 fun AlbumMediaPickerScreen(
@@ -48,7 +47,6 @@ fun AlbumMediaPickerScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(4),
-            flingBehavior = rememberGalleryFlingBehavior(),
             contentPadding = PaddingValues(start = 4.dp, top = 132.dp, end = 4.dp, bottom = 112.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)

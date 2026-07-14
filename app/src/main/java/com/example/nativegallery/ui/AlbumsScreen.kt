@@ -64,10 +64,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.Album
@@ -77,7 +76,6 @@ import com.example.nativegallery.ui.components.HeaderActionButton
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.bouncyClickable
-import com.example.nativegallery.ui.components.rememberGalleryFlingBehavior
 import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
 import com.example.nativegallery.ui.components.SearchPill
@@ -135,7 +133,6 @@ fun AlbumsScreen(
 
     LazyColumn(
         state = listState,
-        flingBehavior = rememberGalleryFlingBehavior(),
         contentPadding = PaddingValues(
             start = 18.dp,
             top = 58.dp,
@@ -669,18 +666,19 @@ private fun BasicAlbumRow(
                     modifier = Modifier
                         .width(cellWidth)
                         .graphicsLayer { alpha = if (album.id == activeTransitionAlbumId) 0f else 1f }
-                        .onGloballyPositioned { coordinates ->
-                            val bounds = coordinates.boundsInRoot()
-                            albumBounds.value = bounds
-                            onAlbumBoundsChanged(album, bounds)
-                        }
                         .bouncyClickable { onAlbumClick(album, albumBounds.value) }
                 ) {
                     ResourceImage(
                         imageRes = album.coverRes,
                         imageUri = album.coverUri,
                         contentDescription = album.name,
-                        modifier = Modifier.size(cellWidth),
+                        modifier = Modifier
+                            .size(cellWidth)
+                            .onGloballyPositioned { coordinates ->
+                                val bounds = coordinates.boundsInWindow()
+                                albumBounds.value = bounds
+                                onAlbumBoundsChanged(album, bounds)
+                            },
                         cornerRadius = 18.dp,
                         thumbnailSize = 384
                     )
@@ -688,14 +686,13 @@ private fun BasicAlbumRow(
                     Text(
                         text = album.name,
                         style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 13.5.sp,
-                            lineHeight = 17.sp,
+                            fontSize = 14.sp,
+                            lineHeight = 18.sp,
                             fontWeight = FontWeight.SemiBold
                         ),
                         modifier = Modifier.fillMaxWidth(),
                         color = MaterialTheme.colorScheme.onBackground,
-                        maxLines = 1,
-                        textAlign = TextAlign.End
+                        maxLines = 1
                     )
                     Text(
                         text = album.itemCount.toString(),
@@ -705,8 +702,7 @@ private fun BasicAlbumRow(
                             fontWeight = FontWeight.Medium
                         ),
                         modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.End
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -761,7 +757,6 @@ fun AlbumDetailScreen(
             modifier = Modifier.graphicsLayer {
                 alpha = GalleryMotion.smoothstep(0.48f, 0.78f, revealProgress)
             },
-            flingBehavior = rememberGalleryFlingBehavior(),
             contentPadding = PaddingValues(
                 start = 10.dp,
                 top = gridTopPadding,
@@ -853,8 +848,7 @@ fun AlbumDetailTransitionPreview(
     album: Album,
     mediaItems: List<MediaItem>,
     contentPadding: PaddingValues,
-    gridMode: AlbumDetailGridMode,
-    transitionProgress: Float = 1f
+    gridMode: AlbumDetailGridMode
 ) {
     val columns = when (gridMode) {
         AlbumDetailGridMode.Compact -> 4
@@ -862,9 +856,6 @@ fun AlbumDetailTransitionPreview(
     }
     val spacing = if (columns == 3) 5.dp else 3.dp
     val previewItems = remember(mediaItems, columns) { mediaItems.take(columns * 6) }
-    val boundedProgress = transitionProgress.coerceIn(0f, 1f)
-    val gridAlpha = GalleryMotion.smoothstep(0.48f, 0.78f, boundedProgress)
-    val headerAlpha = GalleryMotion.smoothstep(0.40f, 0.70f, boundedProgress)
 
     Box(
         modifier = Modifier
@@ -874,7 +865,6 @@ fun AlbumDetailTransitionPreview(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .graphicsLayer { alpha = gridAlpha }
                 .padding(
                     start = 10.dp,
                     top = 150.dp,
@@ -896,7 +886,7 @@ fun AlbumDetailTransitionPreview(
                                         contentDescription = mediaItem.title,
                                         modifier = Modifier.size(cellSize),
                                         cornerRadius = 0.dp,
-                                    thumbnailSize = 384
+                                        thumbnailSize = 160
                                     )
                                 } else {
                                     Spacer(Modifier.size(cellSize))
@@ -911,8 +901,7 @@ fun AlbumDetailTransitionPreview(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .align(Alignment.TopCenter)
-                .graphicsLayer { alpha = headerAlpha },
+                .align(Alignment.TopCenter),
             color = MaterialTheme.colorScheme.background,
             shadowElevation = 3.dp
         ) {
@@ -1408,7 +1397,7 @@ private fun AlbumImageCard(
     Box(
         modifier = modifier
             .onGloballyPositioned { coordinates ->
-                val bounds = coordinates.boundsInRoot()
+                val bounds = coordinates.boundsInWindow()
                 albumBounds.value = bounds
                 onAlbumBoundsChanged(album, bounds)
             }
@@ -1437,16 +1426,16 @@ private fun AlbumImageCard(
         )
         Column(
             modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp),
-            horizontalAlignment = Alignment.End
+                .align(Alignment.BottomStart)
+                .padding(start = 12.dp, end = 12.dp, bottom = 11.dp),
+            horizontalAlignment = Alignment.Start
         ) {
             Text(
                 text = album.name,
                 color = Color.White,
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    fontSize = 16.sp,
-                    lineHeight = 20.sp,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    lineHeight = 18.sp,
                     fontWeight = FontWeight.SemiBold
                 ),
                 maxLines = 1

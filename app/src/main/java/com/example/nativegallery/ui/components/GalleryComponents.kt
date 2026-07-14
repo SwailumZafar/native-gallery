@@ -66,7 +66,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onPlaced
@@ -281,7 +281,7 @@ fun MediaThumbnail(
         modifier
     } else {
         modifier.onGloballyPositioned { coordinates ->
-            onBoundsChanged(coordinates.boundsInRoot())
+            onBoundsChanged(coordinates.boundsInWindow())
         }
     }
     val coordinatesRef = remember { LayoutCoordinatesRef() }
@@ -299,7 +299,7 @@ fun MediaThumbnail(
             onClick = {
                 val bounds = coordinatesRef.value
                     ?.takeIf { it.isAttached }
-                    ?.boundsInRoot()
+                    ?.boundsInWindow()
                     ?: Rect.Zero
                 onClickWithBounds?.invoke(bounds) ?: onClick?.invoke()
             }
@@ -567,7 +567,8 @@ suspend fun prefetchMediaThumbnails(
     context: Context,
     mediaItems: List<MediaItem>,
     thumbnailSizes: List<Int> = listOf(384, 512),
-    maxItems: Int = 96
+    maxItems: Int = 96,
+    pinInMemory: Boolean = false
 ) {
     if (mediaItems.isEmpty()) return
     val appContext = context.applicationContext
@@ -593,12 +594,15 @@ suspend fun prefetchMediaThumbnails(
                 async {
                     thumbnailPrefetchSemaphore.withPermit {
                         currentCoroutineContext().ensureActive()
-                        loadCachedBitmap(
+                        val bitmap = loadCachedBitmap(
                             context = appContext,
                             imageUri = uri,
                             thumbnailSize = size,
                             loadQuality = if (size >= 1024) ImageLoadQuality.HighQuality else ImageLoadQuality.Thumbnail
                         )
+                        if (pinInMemory && bitmap != null) {
+                            ThumbnailMemoryCache.pin(ThumbnailMemoryCache.key(uri, size), bitmap)
+                        }
                     }
                 }
             }.awaitAll()

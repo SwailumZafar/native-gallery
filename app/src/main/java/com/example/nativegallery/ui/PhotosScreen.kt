@@ -14,7 +14,7 @@ import kotlinx.coroutines.delay
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.geometry.Offset
@@ -77,7 +77,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryMotion
-import com.example.nativegallery.ui.components.rememberGalleryFlingBehavior
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
@@ -142,7 +141,7 @@ fun PhotosScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned { rootBounds.value = it.boundsInRoot() }
+            .onGloballyPositioned { rootBounds.value = it.boundsInWindow() }
             .pointerInput(isSelectionMode, mediaItems) {
                 var dragMode: DragSelectMode? = null
                 var baseSelectedIds = emptySet<String>()
@@ -187,7 +186,6 @@ fun PhotosScreen(
         LazyColumn(
             modifier = Modifier,
             state = listState,
-            flingBehavior = rememberGalleryFlingBehavior(),
             contentPadding = PaddingValues(
                 start = 0.dp,
                 top = 0.dp,

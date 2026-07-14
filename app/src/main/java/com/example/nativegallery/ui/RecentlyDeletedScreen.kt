@@ -40,7 +40,6 @@ import androidx.compose.ui.unit.sp
 import com.example.nativegallery.data.RecentlyDeletedRepository
 import com.example.nativegallery.model.RecentlyDeletedMedia
 import com.example.nativegallery.ui.components.MediaThumbnail
-import com.example.nativegallery.ui.components.rememberGalleryFlingBehavior
 import java.util.concurrent.TimeUnit
 private class RecentlyDeletedBoundsRef(var value: Rect = Rect.Zero)
 
@@ -59,7 +58,6 @@ fun RecentlyDeletedScreen(
     var actionEntry by remember { mutableStateOf<RecentlyDeletedMedia?>(null) }
     LazyVerticalGrid(
         columns = GridCells.Fixed(4),
-        flingBehavior = rememberGalleryFlingBehavior(),
         contentPadding = PaddingValues(
             start = 4.dp,
             top = 48.dp,
