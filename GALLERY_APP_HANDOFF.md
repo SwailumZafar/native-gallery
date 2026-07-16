@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-07-15
+Last updated: 2026-07-17
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -17,6 +17,7 @@ For every normal implementation task:
 5. Run proportionate verification, normally lint, relevant tests, and a debug build.
 6. Report the requested change and additional hardening change separately, including what to check on the device.
 7. Update this handoff when an item is completed, reprioritized, or a durable issue is discovered.
+8. When the user asks to commit completed work, also push the commit to the current GitHub tracking branch unless they explicitly request a local-only commit.
 
 Infer routine implementation details from the repository. Ask the user only when different product or design choices would materially change the app and the intended choice cannot be discovered locally.
 
@@ -72,18 +73,40 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Latest feature commit: Harden gallery media and viewer behavior
+Latest feature commit: a70ae8c Harden gallery media and viewer behavior
+GitHub sync: local main and origin/main match at a70ae8c
 Repository visibility: private
 ```
 
 Recent saved work:
 
 ```text
-1197e25 Add hidden album management
-5050ece Port React preview gallery interactions
-51bd38b Revert "Apply OEM-style motion experiment"
-a65caf0 Fix recently deleted permanent removal
+a70ae8c Harden gallery media and viewer behavior
+7863924 Fix media refresh and viewer transitions
+0189c3b Complete gallery editing albums and performance polish
+24a9fce Match native album open animation
 ```
+
+Repository project-file status:
+
+```text
+Tracked and pushed: .gitignore, gradle.properties, build.gradle.kts,
+app/build.gradle.kts, settings.gradle.kts, scripts/install-debug-apk.ps1,
+and scripts/rebuild-install-debug.ps1.
+
+These files belong in Git because they define the build or provide maintained
+project workflows. Machine-local/generated files such as local.properties,
+.gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
+temporary video frames, and Codex working data must remain uncommitted.
+```
+
+## 2026-07-17 GitHub Sync and Repository Hygiene
+
+- Confirmed that 13 feature and hardening commits had been recorded locally but had not previously been pushed to GitHub.
+- Fetched `origin/main`, verified there was no remote divergence, and pushed the complete fast-forward range `f37b1ae..a70ae8c` to `main`.
+- Verified local `HEAD` and `origin/main` both resolve to `a70ae8c59c010599d865f749d2677c35fc66fcec`.
+- Confirmed the Gradle configuration, `.gitignore`, and both maintained PowerShell install scripts are tracked and present on GitHub.
+- Unrelated deleted design-reference images and untracked local design/test artifacts were intentionally kept out of the application commit.
 
 Current APK:
 ```text
