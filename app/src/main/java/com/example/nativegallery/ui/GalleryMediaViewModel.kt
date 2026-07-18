@@ -1,10 +1,12 @@
 package com.example.nativegallery.ui
 
+import android.os.SystemClock
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.nativegallery.data.GallerySnapshot
+import com.example.nativegallery.data.GallerySnapshotRefreshPolicy
 import com.example.nativegallery.data.MediaAccessState
 import com.example.nativegallery.data.MediaStoreGalleryRepository
 import com.example.nativegallery.model.RecentlyDeletedMedia
@@ -35,6 +37,11 @@ internal class GalleryMediaViewModel(
     private val refreshMutex = Mutex()
     private var scheduledRefresh: Job? = null
     private var quickRefresh: Job? = null
+    private var trashedRefresh: Job? = null
+    private var lastFullRefreshElapsedMillis = -1L
+    private var recentlyDeletedVisible = false
+    private var appWriteInFlight = false
+    private var suppressObserverFullRefreshUntilMillis = -1L
 
     private val _uiState = MutableStateFlow(
         GalleryMediaUiState(
@@ -55,6 +62,8 @@ internal class GalleryMediaViewModel(
         if (access == _uiState.value.mediaAccess) return
         scheduledRefresh?.cancel()
         quickRefresh?.cancel()
+        trashedRefresh?.cancel()
+        lastFullRefreshElapsedMillis = -1L
         _uiState.value = GalleryMediaUiState(
             mediaAccess = access,
             snapshot = access.takeIf { it.hasAccess }
@@ -67,7 +76,7 @@ internal class GalleryMediaViewModel(
 
     fun requestQuickRefresh() {
         val access = _uiState.value.mediaAccess
-        if (!access.hasAccess) return
+        if (!access.hasAccess || scheduledRefresh?.isActive == true) return
         quickRefresh?.cancel()
         quickRefresh = viewModelScope.launch {
             refreshMutex.withLock { refreshLatestPage(access) }
@@ -77,6 +86,7 @@ internal class GalleryMediaViewModel(
     fun requestFullRefresh() {
         scheduledRefresh?.cancel()
         quickRefresh?.cancel()
+        trashedRefresh?.cancel()
         val access = _uiState.value.mediaAccess
         if (!access.hasAccess) {
             _uiState.update {
@@ -92,10 +102,49 @@ internal class GalleryMediaViewModel(
         }
     }
 
+    fun onAppResumed() {
+        val access = _uiState.value.mediaAccess
+        if (!access.hasAccess) return
+        if (
+            scheduledRefresh?.isActive == true ||
+            quickRefresh?.isActive == true ||
+            trashedRefresh?.isActive == true
+        ) return
+
+        scheduledRefresh = viewModelScope.launch {
+            refreshMutex.withLock {
+                val latestPageChanged = refreshLatestPage(access)
+                if (
+                    isCurrentAccess(access) &&
+                    GallerySnapshotRefreshPolicy.shouldRunResumeFullRefresh(
+                        latestPageChanged = latestPageChanged,
+                        lastFullRefreshMillis = lastFullRefreshElapsedMillis,
+                        nowMillis = SystemClock.elapsedRealtime()
+                    )
+                ) {
+                    refreshFullLibrary(access)
+                } else if (recentlyDeletedVisible) {
+                    refreshTrashedMedia(access)
+                }
+            }
+        }
+    }
+
     fun onMediaStoreChanged() {
         if (!_uiState.value.mediaAccess.hasAccess) return
+        val suppressFullRefresh = GallerySnapshotRefreshPolicy.shouldSuppressObserverFullRefresh(
+            appWriteInFlight = appWriteInFlight,
+            suppressionUntilMillis = suppressObserverFullRefreshUntilMillis,
+            nowMillis = SystemClock.elapsedRealtime()
+        )
+        if (suppressFullRefresh) {
+            requestQuickRefresh()
+            return
+        }
+
         scheduledRefresh?.cancel()
         quickRefresh?.cancel()
+        trashedRefresh?.cancel()
         scheduledRefresh = viewModelScope.launch {
             delay(120L)
             val access = _uiState.value.mediaAccess
@@ -105,40 +154,96 @@ internal class GalleryMediaViewModel(
         }
     }
 
-    private suspend fun refreshLatestPage(access: MediaAccessState) {
-        if (!isCurrentAccess(access)) return
+    fun beginAppMediaStoreWrite() {
+        appWriteInFlight = true
+    }
+
+    fun finishAppMediaStoreWrite() {
+        appWriteInFlight = false
+        suppressObserverFullRefreshUntilMillis = SystemClock.elapsedRealtime() +
+            GallerySnapshotRefreshPolicy.AppWriteObserverGraceMillis
+    }
+
+    fun setRecentlyDeletedVisible(visible: Boolean) {
+        if (recentlyDeletedVisible == visible) return
+        recentlyDeletedVisible = visible
+        if (visible) {
+            requestTrashedRefresh()
+        } else {
+            trashedRefresh?.cancel()
+        }
+    }
+
+    private suspend fun refreshLatestPage(access: MediaAccessState): Boolean {
+        if (!isCurrentAccess(access)) return false
         val latestPage = withContext(Dispatchers.IO) {
             repository.loadGalleryPage(
                 mediaKinds = access.mediaKinds,
                 limit = MediaStoreGalleryRepository.InitialGalleryPageSize
             )
         }
-        if (!isCurrentAccess(access)) return
-        _uiState.update { current ->
-            current.copy(
-                snapshot = repository.mergeLatestPage(
-                    mediaKinds = access.mediaKinds,
-                    baseSnapshot = current.snapshot,
-                    latestPage = latestPage
-                ),
-                initialSyncComplete = true
+        if (!isCurrentAccess(access)) return false
+
+        val baseSnapshot = _uiState.value.snapshot
+        val mergedSnapshot = withContext(Dispatchers.Default) {
+            repository.mergeLatestPage(
+                mediaKinds = access.mediaKinds,
+                baseSnapshot = baseSnapshot,
+                latestPage = latestPage
             )
         }
+        val changed = mergedSnapshot !== baseSnapshot
+        _uiState.update { current ->
+            if (!changed && current.initialSyncComplete) {
+                current
+            } else {
+                current.copy(
+                    snapshot = mergedSnapshot,
+                    initialSyncComplete = true
+                )
+            }
+        }
+        return changed
     }
 
     private suspend fun refreshFullLibrary(access: MediaAccessState) {
         if (!isCurrentAccess(access)) return
-        val (snapshot, trashedMedia) = withContext(Dispatchers.IO) {
-            repository.loadGallery(access.mediaKinds) to
-                repository.loadTrashedMedia(access.mediaKinds)
+        val snapshot = withContext(Dispatchers.IO) {
+            repository.loadGallery(access.mediaKinds)
         }
         if (!isCurrentAccess(access)) return
-        _uiState.update {
-            it.copy(
+        lastFullRefreshElapsedMillis = SystemClock.elapsedRealtime()
+        _uiState.update { current ->
+            val next = current.copy(
                 snapshot = snapshot,
-                trashedMedia = trashedMedia,
                 initialSyncComplete = true
             )
+            if (next == current) current else next
+        }
+        if (recentlyDeletedVisible) refreshTrashedMedia(access)
+    }
+
+    private fun requestTrashedRefresh() {
+        val access = _uiState.value.mediaAccess
+        if (!access.hasAccess || scheduledRefresh?.isActive == true) return
+        trashedRefresh?.cancel()
+        trashedRefresh = viewModelScope.launch {
+            refreshMutex.withLock { refreshTrashedMedia(access) }
+        }
+    }
+
+    private suspend fun refreshTrashedMedia(access: MediaAccessState) {
+        if (!recentlyDeletedVisible || !isCurrentAccess(access)) return
+        val trashedMedia = withContext(Dispatchers.IO) {
+            repository.loadTrashedMedia(access.mediaKinds)
+        }
+        if (!recentlyDeletedVisible || !isCurrentAccess(access)) return
+        _uiState.update { current ->
+            if (current.trashedMedia == trashedMedia) {
+                current
+            } else {
+                current.copy(trashedMedia = trashedMedia)
+            }
         }
     }
 

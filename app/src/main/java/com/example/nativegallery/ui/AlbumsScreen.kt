@@ -8,6 +8,7 @@ import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -39,9 +40,10 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,10 +55,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +70,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -76,6 +81,7 @@ import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.HeaderActionButton
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.PremiumDropdownMenu
+import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
 import com.example.nativegallery.ui.components.PremiumOverflowButton
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.bouncyClickable
@@ -96,6 +102,11 @@ enum class AlbumDetailSortMode {
 }
 
 private class AlbumBoundsRef(var value: Rect = Rect.Zero)
+
+private enum class AlbumDragSelectMode {
+    Add,
+    Remove
+}
 
 @Composable
 fun AlbumsScreen(
@@ -173,7 +184,7 @@ fun AlbumsScreen(
                         expanded = overflowExpanded,
                         onDismissRequest = { overflowExpanded = false }
                     ) {
-                        DropdownMenuItem(
+                        PremiumDropdownMenuItem(
                             text = { Text("Sort albums") },
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null) },
                             trailingIcon = {
@@ -184,7 +195,7 @@ fun AlbumsScreen(
                                 overflowExpanded = false
                             }
                         )
-                        DropdownMenuItem(
+                        PremiumDropdownMenuItem(
                             text = { Text("Settings") },
                             leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                             onClick = {
@@ -526,7 +537,7 @@ private fun LayoutSelector(
             offset = DpOffset(0.dp, 8.dp),
             modifier = Modifier.width(220.dp)
         ) {
-            DropdownMenuItem(
+            PremiumDropdownMenuItem(
                 text = {
                     Column {
                         Text("Big tiles", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
@@ -544,7 +555,7 @@ private fun LayoutSelector(
                     onExpandedChange(false)
                 }
             )
-            DropdownMenuItem(
+            PremiumDropdownMenuItem(
                 text = {
                     Column {
                         Text("Basic", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
@@ -754,6 +765,7 @@ fun AlbumDetailScreen(
     onSelectionClear: () -> Unit = {},
     onSelectAllVisible: () -> Unit = {},
     onDeleteSelected: () -> Unit = {},
+    onShareSelected: () -> Unit = {},
     onHideSelected: () -> Unit = {},
     onHideAlbum: (() -> Unit)? = null,
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit = { _, _ -> },
@@ -768,6 +780,22 @@ fun AlbumDetailScreen(
         AlbumDetailGridMode.Comfortable -> 3
     } + columnBoost.coerceAtLeast(0)
     val revealOffsetPx = with(LocalDensity.current) { 172.dp.roundToPx() }
+    val tileBounds = remember(album.id) { mutableMapOf<String, Rect>() }
+    val rootBounds = remember(album.id) { AlbumBoundsRef() }
+    val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
+    val isSelectionMode = selectedMediaIds.isNotEmpty()
+
+    fun rootPoint(localPoint: Offset): Offset = Offset(
+        rootBounds.value.left + localPoint.x,
+        rootBounds.value.top + localPoint.y
+    )
+
+    fun hitMedia(localPoint: Offset): MediaItem? {
+        val point = rootPoint(localPoint)
+        return sortedMediaItems.firstOrNull { mediaItem ->
+            tileBounds[mediaItem.id]?.contains(point) == true
+        }
+    }
 
     LaunchedEffect(revealMediaId, sortedMediaItems, columns) {
         val mediaId = revealMediaId ?: return@LaunchedEffect
@@ -779,16 +807,62 @@ fun AlbumDetailScreen(
     val revealProgress = albumEnterProgress.coerceIn(0f, 1f)
     val gridTopPadding = 150.dp
     val interactiveGridReady = revealProgress >= 0.95f
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { rootBounds.value = it.boundsInWindow() }
+            .pointerInput(isSelectionMode, sortedMediaItems) {
+                var dragMode: AlbumDragSelectMode? = null
+                var baseSelectedIds = emptySet<String>()
+                val visitedMediaIds = mutableSetOf<String>()
+
+                fun applyDragSelectionAt(localPoint: Offset) {
+                    val hit = hitMedia(localPoint) ?: return
+                    val mode = dragMode ?: return
+                    if (!visitedMediaIds.add(hit.id)) return
+
+                    when (mode) {
+                        AlbumDragSelectMode.Add -> if (!baseSelectedIds.contains(hit.id)) onMediaSelectionToggle(hit)
+                        AlbumDragSelectMode.Remove -> if (baseSelectedIds.contains(hit.id)) onMediaSelectionToggle(hit)
+                    }
+                }
+
+                if (isSelectionMode) {
+                    detectDragGestures(
+                        onDragStart = { startOffset ->
+                            baseSelectedIds = latestSelectedMediaIds
+                            visitedMediaIds.clear()
+                            val hit = hitMedia(startOffset)
+                            dragMode = hit?.let {
+                                if (baseSelectedIds.contains(it.id)) AlbumDragSelectMode.Remove else AlbumDragSelectMode.Add
+                            }
+                            applyDragSelectionAt(startOffset)
+                        },
+                        onDrag = { change, _ ->
+                            applyDragSelectionAt(change.position)
+                            change.consume()
+                        },
+                        onDragEnd = {
+                            dragMode = null
+                            visitedMediaIds.clear()
+                        },
+                        onDragCancel = {
+                            dragMode = null
+                            visitedMediaIds.clear()
+                        }
+                    )
+                }
+            }
+    ) {
         LazyColumn(
             state = listState,
             modifier = Modifier.graphicsLayer {
                 alpha = GalleryMotion.smoothstep(0.48f, 0.78f, revealProgress)
             },
             contentPadding = PaddingValues(
-                start = 10.dp,
+                start = 8.dp,
                 top = gridTopPadding,
-                end = 10.dp,
+                end = 8.dp,
                 bottom = contentPadding.calculateBottomPadding() + if (selectedMediaIds.isNotEmpty()) 142.dp else 34.dp
             )
         ) {
@@ -815,7 +889,10 @@ fun AlbumDetailScreen(
                     sharedElementPrefix = "album-${album.id}",
                     activeSharedElementKey = activeSharedElementKey,
                     selectedMediaIds = selectedMediaIds,
-                    onMediaBoundsChanged = onMediaBoundsChanged,
+                    onMediaBoundsChanged = { mediaItem, bounds ->
+                        tileBounds[mediaItem.id] = bounds
+                        onMediaBoundsChanged(mediaItem, bounds)
+                    },
                     onMediaLongClick = onMediaLongClick,
                     onMediaSelectionToggle = onMediaSelectionToggle,
                     onMediaClick = onMediaClick
@@ -843,6 +920,7 @@ fun AlbumDetailScreen(
                 onSelectionClear = onSelectionClear,
                 onSelectAllVisible = onSelectAllVisible,
                 onDeleteSelected = onDeleteSelected,
+                onShareSelected = onShareSelected,
                 onHideSelected = onHideSelected,
                 onHideAlbum = onHideAlbum,
                 onBack = onBack,
@@ -864,6 +942,7 @@ fun AlbumDetailScreen(
                     totalVisibleCount = sortedMediaItems.size,
                     onClear = onSelectionClear,
                     onSelectAll = onSelectAllVisible,
+                    onShare = onShareSelected,
                     onDelete = onDeleteSelected,
                     onHide = onHideSelected
                 )
@@ -897,7 +976,7 @@ fun AlbumDetailTransitionPreview(
         AlbumDetailGridMode.Compact -> 4
         AlbumDetailGridMode.Comfortable -> 3
     } + columnBoost.coerceAtLeast(0)
-    val spacing = if (columns == 3) 5.dp else 3.dp
+    val spacing = 1.dp
     val previewItems = remember(mediaItems, columns) { mediaItems.take(columns * 6) }
 
     Box(
@@ -909,9 +988,9 @@ fun AlbumDetailTransitionPreview(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
-                    start = 10.dp,
+                    start = 8.dp,
                     top = 150.dp,
-                    end = 10.dp,
+                    end = 8.dp,
                     bottom = contentPadding.calculateBottomPadding() + 34.dp
                 )
         ) {
@@ -929,7 +1008,7 @@ fun AlbumDetailTransitionPreview(
                                         contentDescription = mediaItem.title,
                                         modifier = Modifier.size(cellSize),
                                         cornerRadius = 0.dp,
-                                        thumbnailSize = 160
+                                        thumbnailSize = 384
                                     )
                                 } else {
                                     Spacer(Modifier.size(cellSize))
@@ -948,37 +1027,48 @@ fun AlbumDetailTransitionPreview(
             color = MaterialTheme.colorScheme.background,
             shadowElevation = 3.dp
         ) {
-            Row(
-                modifier = Modifier.padding(start = 10.dp, top = 42.dp, end = 10.dp, bottom = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 10.dp, top = 42.dp, end = 10.dp, bottom = 14.dp)
             ) {
-                Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
-                }
-                Column(
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 4.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = album.name,
-                        maxLines = 1,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Text(
-                        text = "%1$,d items".format(mediaItems.size),
-                        maxLines = 1,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                        }
+                        Text(
+                            text = album.name,
+                            modifier = Modifier.padding(start = 14.dp),
+                            maxLines = 1,
+                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp, lineHeight = 28.sp),
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
+                    Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = null)
+                    }
                 }
-                Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                    Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null)
-                }
-                Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = null)
-                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "%1$,d items, %2\$s, %3\$s".format(
+                        mediaItems.size,
+                        AlbumDetailSortMode.Newest.label(),
+                        gridMode.label()
+                    ),
+                    modifier = Modifier.padding(horizontal = 10.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -996,6 +1086,7 @@ private fun AlbumDetailHeader(
     onSelectionClear: () -> Unit,
     onSelectAllVisible: () -> Unit,
     onDeleteSelected: () -> Unit,
+    onShareSelected: () -> Unit,
     onHideSelected: () -> Unit,
     onHideAlbum: (() -> Unit)?,
     onBack: () -> Unit,
@@ -1041,7 +1132,16 @@ private fun AlbumDetailHeader(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false }
                 ) {
-                    DropdownMenuItem(
+                    PremiumDropdownMenuItem(
+                        text = { Text("Select all") },
+                        leadingIcon = { Icon(Icons.Filled.SelectAll, contentDescription = null) },
+                        enabled = totalVisibleCount > 0 && selectedCount < totalVisibleCount,
+                        onClick = {
+                            menuExpanded = false
+                            onSelectAllVisible()
+                        }
+                    )
+                    PremiumDropdownMenuItem(
                         text = { Text("Newest first") },
                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null) },
                         trailingIcon = {
@@ -1052,7 +1152,7 @@ private fun AlbumDetailHeader(
                             menuExpanded = false
                         }
                     )
-                    DropdownMenuItem(
+                    PremiumDropdownMenuItem(
                         text = { Text("Oldest first") },
                         trailingIcon = {
                             if (sortMode == AlbumDetailSortMode.Oldest) Icon(Icons.Filled.Check, contentDescription = null)
@@ -1062,7 +1162,7 @@ private fun AlbumDetailHeader(
                             menuExpanded = false
                         }
                     )
-                    DropdownMenuItem(
+                    PremiumDropdownMenuItem(
                         text = { Text("Name") },
                         trailingIcon = {
                             if (sortMode == AlbumDetailSortMode.Name) Icon(Icons.Filled.Check, contentDescription = null)
@@ -1072,7 +1172,7 @@ private fun AlbumDetailHeader(
                             menuExpanded = false
                         }
                     )
-                    DropdownMenuItem(
+                    PremiumDropdownMenuItem(
                         text = { Text("Compact grid") },
                         leadingIcon = { Icon(Icons.Filled.GridView, contentDescription = null) },
                         trailingIcon = {
@@ -1083,7 +1183,7 @@ private fun AlbumDetailHeader(
                             menuExpanded = false
                         }
                     )
-                    DropdownMenuItem(
+                    PremiumDropdownMenuItem(
                         text = { Text("Comfortable grid") },
                         leadingIcon = { Icon(Icons.Filled.Apps, contentDescription = null) },
                         trailingIcon = {
@@ -1095,7 +1195,7 @@ private fun AlbumDetailHeader(
                         }
                     )
                     if (onHideAlbum != null && !album.isAllPhotos) {
-                        DropdownMenuItem(
+                        PremiumDropdownMenuItem(
                             text = { Text("Hide album") },
                             leadingIcon = { Icon(Icons.Filled.Security, contentDescription = null) },
                             onClick = {
@@ -1128,53 +1228,79 @@ private fun AlbumSelectionToolbar(
     totalVisibleCount: Int,
     onClear: () -> Unit,
     onSelectAll: () -> Unit,
+    onShare: () -> Unit,
     onDelete: () -> Unit,
     onHide: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
         shape = RoundedCornerShape(28.dp),
-        shadowElevation = 0.dp
+        shadowElevation = 12.dp
     ) {
-        Row(
-            modifier = Modifier.padding(start = 8.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onClear) {
-                Icon(
-                    imageVector = Icons.Filled.Close,
-                    contentDescription = "Clear selection",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-            Text(
-                text = "%1$,d selected".format(selectedCount),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.primary
-            )
-            TextButton(
-                enabled = selectedCount < totalVisibleCount,
-                onClick = onSelectAll
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Select all")
-            }
-            IconButton(onClick = onHide) {
-                Icon(
-                    imageVector = Icons.Filled.Lock,
-                    contentDescription = "Hide selected",
-                    tint = MaterialTheme.colorScheme.primary
+                IconButton(onClick = onClear) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Clear selection",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Text(
+                    text = "%1$,d selected".format(selectedCount),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface
                 )
+                IconButton(
+                    enabled = selectedCount < totalVisibleCount,
+                    onClick = onSelectAll
+                ) {
+                    Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
+                }
             }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "Delete selected",
-                    tint = MaterialTheme.colorScheme.primary
+            Row(modifier = Modifier.fillMaxWidth()) {
+                AlbumSelectionAction(
+                    label = "Share",
+                    icon = Icons.Filled.Share,
+                    onClick = onShare,
+                    modifier = Modifier.weight(1f)
+                )
+                AlbumSelectionAction(
+                    label = "Lock",
+                    icon = Icons.Filled.Lock,
+                    onClick = onHide,
+                    modifier = Modifier.weight(1f)
+                )
+                AlbumSelectionAction(
+                    label = "Delete",
+                    icon = Icons.Filled.Delete,
+                    onClick = onDelete,
+                    modifier = Modifier.weight(1f)
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun AlbumSelectionAction(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    TextButton(
+        modifier = modifier,
+        onClick = onClick
+    ) {
+        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.size(6.dp))
+        Text(label)
     }
 }
 private fun LazyListScope.albumDetailRows(
@@ -1191,7 +1317,7 @@ private fun LazyListScope.albumDetailRows(
     onMediaSelectionToggle: (MediaItem) -> Unit,
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
-    val spacing = if (columns == 3) 5.dp else 3.dp
+    val spacing = 1.dp
     val rowCount = (mediaItems.size + columns - 1) / columns
     items(
         count = rowCount,
@@ -1244,6 +1370,7 @@ private fun AlbumDetailRow(
                 MediaThumbnail(
                     mediaItem = mediaItem,
                     modifier = Modifier.size(cellSize),
+                    cornerRadius = 0.dp,
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = animatedVisibilityScope,
                     sharedElementKey = sharedElementKey,
@@ -1275,7 +1402,7 @@ private fun LazyListScope.albumDetailPreviewRows(
     mediaItems: List<MediaItem>,
     columns: Int
 ) {
-    val spacing = if (columns == 3) 5.dp else 3.dp
+    val spacing = 1.dp
     val rowCount = (mediaItems.size + columns - 1) / columns
     items(
         count = rowCount,
@@ -1315,7 +1442,7 @@ private fun AlbumDetailPreviewRow(
     }
 }
 private fun LazyListScope.albumDetailOpeningRows(columns: Int) {
-    val spacing = if (columns == 3) 5.dp else 3.dp
+    val spacing = 1.dp
     items(
         items = List(4) { it },
         key = { rowIndex -> "album-detail-opening-row-$columns-$rowIndex" },
@@ -1346,7 +1473,7 @@ private fun AlbumDetailOpeningRow(
 }
 
 private fun LazyListScope.albumDetailSkeletonRows(columns: Int) {
-    val spacing = if (columns == 3) 5.dp else 3.dp
+    val spacing = 1.dp
     items(
         items = List(5) { it },
         key = { rowIndex -> "album-detail-loading-row-$columns-$rowIndex" },

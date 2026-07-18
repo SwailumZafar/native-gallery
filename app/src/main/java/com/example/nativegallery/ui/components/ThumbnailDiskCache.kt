@@ -34,16 +34,34 @@ object ThumbnailDiskCache {
     }
 
     fun put(context: Context, cacheKey: String, bitmap: Bitmap) {
+        enqueueWrite(context, cacheKey, bitmap, overwrite = false)
+    }
+
+    fun replace(context: Context, cacheKey: String, bitmap: Bitmap) {
+        enqueueWrite(context, cacheKey, bitmap, overwrite = true)
+    }
+
+    private fun enqueueWrite(
+        context: Context,
+        cacheKey: String,
+        bitmap: Bitmap,
+        overwrite: Boolean
+    ) {
         val appContext = context.applicationContext
         writer.execute {
-            putBlocking(appContext, cacheKey, bitmap)
+            putBlocking(appContext, cacheKey, bitmap, overwrite)
         }
     }
 
-    private fun putBlocking(context: Context, cacheKey: String, bitmap: Bitmap) {
+    private fun putBlocking(
+        context: Context,
+        cacheKey: String,
+        bitmap: Bitmap,
+        overwrite: Boolean
+    ) {
         synchronized(lock) {
             val target = cacheFile(context, cacheKey)
-            if (target.isFile) return
+            if (target.isFile && !overwrite) return
             val directory = target.parentFile ?: return
             if (!directory.exists() && !directory.mkdirs()) return
             val temporary = File(directory, "${target.name}.tmp")

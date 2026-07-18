@@ -8,6 +8,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.provider.Settings
 import android.view.LayoutInflater
+import android.view.TextureView
 import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
@@ -45,9 +46,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -128,7 +127,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.nativegallery.R
@@ -138,11 +139,14 @@ import com.example.nativegallery.ui.components.GalleryImage
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.cacheVideoFrameThumbnail
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -182,6 +186,7 @@ fun PhotoViewerOverlay(
     albumNameForMedia: (MediaItem) -> String? = { null },
     autoplayVideos: Boolean = true,
     startVideosMuted: Boolean = false,
+    preferredPhotoDecodeSize: Int? = null,
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
@@ -221,8 +226,8 @@ fun PhotoViewerOverlay(
     var activePhotoZoomed by remember { mutableStateOf(false) }
     val dismissThresholdPx = with(density) { 104.dp.toPx() }
     val detailsThresholdPx = with(density) { 76.dp.toPx() }
-    val videoSideControlZonePx = with(density) { 88.dp.toPx() }
-    val activePhotoDecodeSize = remember(
+    val videoSideControlZonePx = with(density) { 60.dp.toPx() }
+    val calculatedPhotoDecodeSize = remember(
         configuration.screenWidthDp,
         configuration.screenHeightDp,
         density.density
@@ -231,6 +236,7 @@ fun PhotoViewerOverlay(
             .roundToInt()
             .coerceIn(1440, 3072)
     }
+    val activePhotoDecodeSize = preferredPhotoDecodeSize ?: calculatedPhotoDecodeSize
 
     LaunchedEffect(visible, selectedIndex, viewerItems.size) {
         if (visible && !pagerState.isScrollInProgress && pagerState.currentPage != selectedIndex) {
@@ -295,14 +301,24 @@ fun PhotoViewerOverlay(
         }
     }
 
-    LaunchedEffect(currentPageForState, viewerItemIds) {
+    LaunchedEffect(currentPageForState, viewerItemIds, activePhotoDecodeSize) {
         val nearbyItems = (currentPageForState - 1..currentPageForState + 1)
             .mapNotNull { index -> viewerItems.getOrNull(index) }
         prefetchMediaThumbnails(
             context = context.applicationContext,
-            mediaItems = nearbyItems,
-            thumbnailSizes = listOf(1440, 512),
-            maxItems = 3
+            mediaItems = nearbyItems.filterNot { it.isVideo },
+            thumbnailSizes = listOf(activePhotoDecodeSize),
+            maxItems = 3,
+            pinInMemory = true
+        )
+        val filmstripItems = viewerFilmstripWindow(viewerItems.size, currentPageForState)
+            .mapNotNull(viewerItems::getOrNull)
+        prefetchMediaThumbnails(
+            context = context.applicationContext,
+            mediaItems = filmstripItems,
+            thumbnailSizes = listOf(384),
+            maxItems = filmstripItems.size,
+            pinInMemory = true
         )
     }
 
@@ -568,14 +584,8 @@ fun PhotoViewerOverlay(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(3f),
-            enter = fadeIn(animationSpec = tween(100)) + slideInVertically(
-                initialOffsetY = { it / 3 },
-                animationSpec = tween(GalleryMotion.ViewerActionEnterMillis, easing = ViewerEnterEasing)
-            ),
-            exit = fadeOut(animationSpec = tween(90)) + slideOutVertically(
-                targetOffsetY = { it / 4 },
-                animationSpec = tween(GalleryMotion.ViewerActionExitMillis, easing = ViewerExitEasing)
-            )
+            enter = fadeIn(animationSpec = tween(100)),
+            exit = fadeOut(animationSpec = tween(90))
         ) {
             Column(
                 modifier = Modifier
@@ -667,32 +677,18 @@ private fun ViewerFilmstrip(
     selectedIndex: Int,
     onItemClick: (Int) -> Unit
 ) {
-    val density = LocalDensity.current
-    val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = (selectedIndex - 3).coerceAtLeast(0)
-    )
-    LaunchedEffect(selectedIndex, mediaItems.size) {
-        if (mediaItems.isEmpty()) return@LaunchedEffect
-        val viewportWidth = listState.layoutInfo.viewportSize.width
-        val itemWidth = with(density) { 38.dp.roundToPx() }
-        val centerOffset = -((viewportWidth - itemWidth) / 2).coerceAtLeast(0)
-        listState.animateScrollToItem(
-            index = selectedIndex.coerceIn(0, mediaItems.lastIndex),
-            scrollOffset = centerOffset
-        )
+    val visibleIndices = remember(mediaItems.size, selectedIndex) {
+        viewerFilmstripWindow(mediaItems.size, selectedIndex)
     }
-    LazyRow(
-        state = listState,
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(50.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        itemsIndexed(
-            items = mediaItems,
-            key = { _, item -> item.id }
-        ) { index, item ->
+        visibleIndices.forEach { index ->
+            val item = mediaItems[index]
             val selectedModifier = if (index == selectedIndex) {
                 Modifier.border(2.dp, Color(0xFF26A8FF), RoundedCornerShape(8.dp))
             } else {
@@ -708,6 +704,19 @@ private fun ViewerFilmstrip(
             )
         }
     }
+}
+
+internal fun viewerFilmstripWindow(
+    itemCount: Int,
+    selectedIndex: Int,
+    maximumItems: Int = 7
+): IntRange {
+    if (itemCount <= 0 || maximumItems <= 0) return 1..0
+    val visibleCount = minOf(itemCount, maximumItems)
+    val safeSelectedIndex = selectedIndex.coerceIn(0, itemCount - 1)
+    val startIndex = (safeSelectedIndex - visibleCount / 2)
+        .coerceIn(0, itemCount - visibleCount)
+    return startIndex until (startIndex + visibleCount)
 }
 
 @Composable
@@ -1191,9 +1200,11 @@ private fun ZoomableViewerMedia(
             ),
             cornerRadius = 0.dp,
             contentScale = ContentScale.Fit,
-            thumbnailSize = if (isActive) activePhotoDecodeSize else 1440,
-            loadQuality = if (isActive) ImageLoadQuality.HighQuality else ImageLoadQuality.Thumbnail,
-            backgroundColor = ViewerPhotoStageBackground
+            thumbnailSize = activePhotoDecodeSize,
+            loadQuality = ImageLoadQuality.HighQuality,
+            backgroundColor = ViewerPhotoStageBackground,
+            allowApproximateCache = false,
+            fallbackImageUri = mediaItem.previewUri
         )
     }
 }
@@ -1209,9 +1220,11 @@ private fun ViewerVideoPoster(mediaItem: MediaItem) {
             .background(Color.Black),
         cornerRadius = 0.dp,
         contentScale = ContentScale.Fit,
-        thumbnailSize = 1440,
+        thumbnailSize = 512,
         loadQuality = ImageLoadQuality.Thumbnail,
-        backgroundColor = Color.Black
+        backgroundColor = Color.Black,
+        fallbackImageUri = mediaItem.previewUri,
+        isVideo = true
     )
 }
 
@@ -1241,21 +1254,52 @@ private fun ViewerVideoPlayer(
     var videoFillFrame by remember(uri) { mutableStateOf(false) }
     var hasPlaybackError by remember(uri) { mutableStateOf(false) }
     var hasRenderedFirstFrame by remember(uri) { mutableStateOf(false) }
-    var durationMs by remember(uri) { mutableIntStateOf(0) }
+    var playerView by remember(uri) { mutableStateOf<PlayerView?>(null) }
+    var cachedPlayerFrame by remember(uri) { mutableStateOf(false) }
+    var durationMs by remember(uri) {
+        mutableIntStateOf(mediaItem.durationMillis?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt() ?: 0)
+    }
     var positionMs by remember(uri) { mutableIntStateOf(0) }
     var isScrubbing by remember(uri) { mutableStateOf(false) }
+    var pendingSeekPositionMs by remember(uri) { mutableStateOf<Int?>(null) }
+    var pendingSeekRetryCount by remember(uri) { mutableIntStateOf(0) }
     val rootView = LocalView.current
     val density = LocalDensity.current
-    val sideGestureZonePx = with(density) { 96.dp.toPx() }
+    val sideGestureZonePx = with(density) { 60.dp.toPx() }
     val videoBrightness = brightnessState.floatValue
     val playbackVolume = playbackVolumeState.floatValue
     val isMuted = playbackVolume <= 0.01f
-    val player = remember(context, uri) {
-        ExoPlayer.Builder(context.applicationContext).build().apply {
-            setMediaItem(androidx.media3.common.MediaItem.fromUri(uri))
-            volume = playbackVolume
-            playWhenReady = isActive && autoplay
-            prepare()
+    val isMatroskaVideo = remember(uri, mediaItem.mimeType, mediaItem.title) {
+        mediaItem.mimeType?.contains("matroska", ignoreCase = true) == true ||
+            mediaItem.title.endsWith(".mkv", ignoreCase = true)
+    }
+    val player = remember(context, uri, isMatroskaVideo) {
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                5_000,
+                15_000,
+                750,
+                1_500
+            )
+            .setBackBuffer(0, false)
+            .build()
+        ExoPlayer.Builder(context.applicationContext)
+            .setLoadControl(loadControl)
+            .build()
+            .apply {
+                if (isMatroskaVideo) {
+                    setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                }
+                val playerMediaItem = androidx.media3.common.MediaItem.Builder()
+                    .setUri(uri)
+                    .apply {
+                        mediaItem.mimeType?.takeIf { it.isNotBlank() }?.let(::setMimeType)
+                    }
+                    .build()
+                setMediaItem(playerMediaItem)
+                volume = playbackVolume
+                playWhenReady = isActive && autoplay
+                prepare()
         }
     }
 
@@ -1295,8 +1339,10 @@ private fun ViewerVideoPlayer(
         } else {
             targetMs.coerceAtLeast(0)
         }
-        player.seekTo(boundedTarget.toLong())
+        pendingSeekPositionMs = boundedTarget
+        pendingSeekRetryCount = 0
         positionMs = boundedTarget
+        player.seekTo(boundedTarget.toLong())
     }
 
     fun seekBy(deltaMs: Int) {
@@ -1313,11 +1359,17 @@ private fun ViewerVideoPlayer(
                         .takeIf { it > 0L }
                         ?.coerceAtMost(Int.MAX_VALUE.toLong())
                         ?.toInt()
+                        ?: mediaItem.durationMillis
+                            ?.takeIf { it > 0L }
+                            ?.coerceAtMost(Int.MAX_VALUE.toLong())
+                            ?.toInt()
                         ?: durationMs
                 } else if (playbackState == Player.STATE_ENDED) {
                     player.pause()
                     player.seekTo(0L)
                     positionMs = 0
+                    pendingSeekPositionMs = null
+                    pendingSeekRetryCount = 0
                 }
             }
 
@@ -1329,16 +1381,64 @@ private fun ViewerVideoPlayer(
                 hasRenderedFirstFrame = true
             }
 
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int
+            ) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                    val reportedPositionMs = newPosition.positionMs
+                        .coerceIn(0L, Int.MAX_VALUE.toLong())
+                        .toInt()
+                    val requestedPositionMs = pendingSeekPositionMs
+                    if (
+                        requestedPositionMs == null ||
+                        isVideoSeekAcknowledged(requestedPositionMs, reportedPositionMs, durationMs)
+                    ) {
+                        positionMs = reportedPositionMs
+                        pendingSeekPositionMs = null
+                        pendingSeekRetryCount = 0
+                    } else {
+                        positionMs = requestedPositionMs
+                        if (pendingSeekRetryCount < 1) {
+                            pendingSeekRetryCount += 1
+                            player.seekTo(requestedPositionMs.toLong())
+                        }
+                    }
+                }
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 hasPlaybackError = true
                 isPrepared = false
                 isPlaying = false
+                pendingSeekPositionMs = null
+                pendingSeekRetryCount = 0
             }
         }
         player.addListener(listener)
         onDispose {
+            playerView?.player = null
+            playerView = null
             player.removeListener(listener)
+            player.stop()
+            player.clearVideoSurface()
             player.release()
+        }
+    }
+
+    LaunchedEffect(hasRenderedFirstFrame, playerView, uri, cachedPlayerFrame) {
+        if (!hasRenderedFirstFrame || cachedPlayerFrame) return@LaunchedEffect
+        val textureView = playerView?.videoSurfaceView as? TextureView ?: return@LaunchedEffect
+        delay(120)
+        val frame = runCatching { textureView.bitmap }.getOrNull() ?: return@LaunchedEffect
+        try {
+            withContext(Dispatchers.Default) {
+                cacheVideoFrameThumbnail(context, uri, frame)
+            }
+            cachedPlayerFrame = true
+        } finally {
+            frame.recycle()
         }
     }
 
@@ -1376,9 +1476,20 @@ private fun ViewerVideoPlayer(
                 ?.toInt()
                 ?: durationMs
             if (!isScrubbing) {
-                positionMs = player.currentPosition
+                val pendingSeek = pendingSeekPositionMs
+                val reportedPosition = player.currentPosition
                     .coerceIn(0L, Int.MAX_VALUE.toLong())
                     .toInt()
+                if (
+                    pendingSeek != null &&
+                    isVideoSeekAcknowledged(pendingSeek, reportedPosition, durationMs)
+                ) {
+                    pendingSeekPositionMs = null
+                    pendingSeekRetryCount = 0
+                    positionMs = reportedPosition
+                } else {
+                    positionMs = pendingSeek ?: reportedPosition
+                }
             }
             delay(250)
         }
@@ -1410,9 +1521,11 @@ private fun ViewerVideoPlayer(
                 .graphicsLayer { alpha = if (hasRenderedFirstFrame) 0f else 1f },
             cornerRadius = 0.dp,
             contentScale = ContentScale.Fit,
-            thumbnailSize = 1440,
+            thumbnailSize = 512,
             loadQuality = ImageLoadQuality.Thumbnail,
-            backgroundColor = Color.Black
+            backgroundColor = Color.Black,
+            fallbackImageUri = mediaItem.previewUri,
+            isVideo = true
         )
 
         AndroidView(
@@ -1455,10 +1568,11 @@ private fun ViewerVideoPlayer(
                             return@awaitEachGesture
                         }
 
-                        showSideControl(sideControl)
                         var activePointerId = down.id
                         var lastY = down.position.y
-                        var passedTouchSlop = false
+                        var sideGestureActivated = false
+                        var moved = false
+                        var released = false
                         val touchSlop = viewConfiguration.touchSlop
 
                         while (true) {
@@ -1467,17 +1581,30 @@ private fun ViewerVideoPlayer(
                                 ?: event.changes.firstOrNull { it.pressed }
                                 ?: break
                             activePointerId = change.id
-                            if (!change.pressed) break
-
-                            val totalY = change.position.y - down.position.y
-                            val deltaY = change.position.y - lastY
-                            lastY = change.position.y
-                            if (!passedTouchSlop) {
-                                if (abs(totalY) < touchSlop) continue
-                                passedTouchSlop = true
+                            if (!change.pressed) {
+                                released = true
+                                break
                             }
 
-                            val valueDelta = (-deltaY / size.height.coerceAtLeast(1).toFloat()) * 1.25f
+                            val totalDrag = change.position - down.position
+                            val deltaY = change.position.y - lastY
+                            if (positionDistance(change.position, down.position) > touchSlop) {
+                                moved = true
+                            }
+                            if (!sideGestureActivated) {
+                                val horizontalClaim = abs(totalDrag.x) > touchSlop * 1.5f &&
+                                    abs(totalDrag.x) > abs(totalDrag.y) * 1.15f
+                                if (horizontalClaim) break
+                                if (!shouldActivateVideoSideGesture(totalDrag, touchSlop)) continue
+                                sideGestureActivated = true
+                                lastY = change.position.y
+                                showSideControl(sideControl)
+                                change.consume()
+                                continue
+                            }
+
+                            lastY = change.position.y
+                            val valueDelta = (-deltaY / size.height.coerceAtLeast(1).toFloat()) * 1.05f
                             when (sideControl) {
                                 VideoSideControl.Brightness -> updateVideoBrightness(brightnessState.floatValue + valueDelta)
                                 VideoSideControl.Volume -> updatePlaybackVolume(playbackVolumeState.floatValue + valueDelta)
@@ -1485,7 +1612,11 @@ private fun ViewerVideoPlayer(
                             showSideControl(sideControl)
                             change.consume()
                         }
-                        showSideControl(sideControl)
+                        if (sideGestureActivated) {
+                            showSideControl(sideControl)
+                        } else if (released && !moved) {
+                            onToggleControls()
+                        }
                     }
                 },
             factory = { viewContext ->
@@ -1496,14 +1627,22 @@ private fun ViewerVideoPlayer(
                 ) as PlayerView).apply {
                     useController = false
                     this.player = player
+                    playerView = this
                 }
             },
             update = { view ->
                 view.player = player
+                playerView = view
                 view.resizeMode = if (videoFillFrame) {
                     AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 } else {
                     AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+            },
+            onRelease = { view ->
+                view.player = null
+                if (playerView === view) {
+                    playerView = null
                 }
             }
         )
@@ -1910,6 +2049,21 @@ private fun Offset.coercePan(maxX: Float, maxY: Float): Offset {
         x = x.coerceIn(-maxX.coerceAtLeast(0f), maxX.coerceAtLeast(0f)),
         y = y.coerceIn(-maxY.coerceAtLeast(0f), maxY.coerceAtLeast(0f))
     )
+}
+
+internal fun shouldActivateVideoSideGesture(totalDrag: Offset, touchSlop: Float): Boolean {
+    val minimumVerticalTravel = touchSlop.coerceAtLeast(1f) * 2.25f
+    return abs(totalDrag.y) >= minimumVerticalTravel &&
+        abs(totalDrag.y) > abs(totalDrag.x) * 1.35f
+}
+
+internal fun isVideoSeekAcknowledged(
+    requestedPositionMs: Int,
+    reportedPositionMs: Int,
+    durationMs: Int
+): Boolean {
+    val toleranceMs = (durationMs / 50).coerceIn(1_500, 6_000)
+    return abs(requestedPositionMs - reportedPositionMs) <= toleranceMs
 }
 
 private fun positionDistance(position: Offset, centroid: Offset): Float {

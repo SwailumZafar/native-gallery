@@ -3,6 +3,7 @@ package com.example.nativegallery.data
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.model.MediaType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -45,6 +46,24 @@ class GalleryPrivacyAndPinTest {
         assertEquals(31_000L, stillLocked.lockoutUntilMillis)
     }
 
+    @Test
+    fun pbkdf2PinDerivationIsDeterministicAndSalted() {
+        val salt = ByteArray(16) { it.toByte() }
+        val same = HiddenSecurityRepository.derivePinHash("1234", salt, iterations = 1_000)
+        val repeated = HiddenSecurityRepository.derivePinHash("1234", salt, iterations = 1_000)
+        val otherPin = HiddenSecurityRepository.derivePinHash("4321", salt, iterations = 1_000)
+        val otherSalt = HiddenSecurityRepository.derivePinHash(
+            "1234",
+            ByteArray(16) { 7 },
+            iterations = 1_000
+        )
+
+        assertEquals(32, same.size)
+        assertArrayEquals(same, repeated)
+        assertFalse(same.contentEquals(otherPin))
+        assertFalse(same.contentEquals(otherSalt))
+        assertTrue(HiddenSecurityRepository.Pbkdf2Iterations >= 200_000)
+    }
     private fun media(id: String) = MediaItem(
         id = id,
         albumId = "camera",

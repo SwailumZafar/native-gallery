@@ -2,6 +2,9 @@
 
 package com.example.nativegallery.ui
 
+import androidx.activity.compose.BackHandler
+
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -9,8 +12,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,7 +27,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -38,11 +46,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -50,9 +62,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.MediaThumbnail
-import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 
 private class LockedMediaBoundsRef(var value: Rect = Rect.Zero)
+
+private enum class LockedMediaDragSelectMode {
+    Add,
+    Remove
+}
 
 @Composable
 fun LockedMediaScreen(
@@ -61,102 +77,201 @@ fun LockedMediaScreen(
     hasPin: Boolean,
     biometricAvailable: Boolean,
     authMessage: String?,
+    authInProgress: Boolean,
     onBack: () -> Unit,
     onPinCreated: (String, String) -> Unit,
     onPinUnlock: (String) -> Unit,
     onBiometricUnlock: () -> Unit,
-    onUnhideMedia: (MediaItem) -> Unit,
+    onUnhideSelected: (List<MediaItem>) -> Unit,
+    onDeleteSelected: (List<MediaItem>) -> Unit,
     onOpenMedia: (MediaItem, Rect) -> Unit,
     contentPadding: PaddingValues,
     gridColumns: Int = 4
 ) {
-    val context = LocalContext.current
-    var biometricPromptLaunched by remember { mutableStateOf(false) }
+    var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val tileBounds = remember { mutableMapOf<String, Rect>() }
+    val rootBounds = remember { LockedMediaBoundsRef() }
+    val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
+    val isSelectionMode = selectedMediaIds.isNotEmpty()
+    val mediaIds = remember(lockedMediaItems) { lockedMediaItems.map { it.id }.toSet() }
+    val gridRows = remember(lockedMediaItems, gridColumns) {
+        lockedMediaItems.chunked(gridColumns.coerceAtLeast(2))
+    }
 
-    LaunchedEffect(isUnlocked, hasPin, biometricAvailable) {
-        if (!isUnlocked && hasPin && biometricAvailable && !biometricPromptLaunched) {
-            biometricPromptLaunched = true
+    BackHandler(enabled = isSelectionMode) {
+        selectedMediaIds = emptySet()
+    }
+
+    LaunchedEffect(Unit) {
+        if (shouldAutoLaunchLockedMediaBiometric(isUnlocked, hasPin, biometricAvailable)) {
             onBiometricUnlock()
         }
-        if (isUnlocked) {
-            biometricPromptLaunched = false
-        }
+    }
+    LaunchedEffect(mediaIds) {
+        selectedMediaIds = selectedMediaIds.intersect(mediaIds)
+        tileBounds.keys.retainAll(mediaIds)
     }
 
-    LaunchedEffect(isUnlocked, lockedMediaItems.map { it.id }) {
-        if (isUnlocked && lockedMediaItems.isNotEmpty()) {
-            // Prefetch only after authentication, and only into the app's in-memory thumbnail cache.
-            prefetchMediaThumbnails(
-                context = context.applicationContext,
-                mediaItems = lockedMediaItems,
-                thumbnailSizes = listOf(384, 512),
-                maxItems = 120
-            )
-        }
-    }
-
-    LazyColumn(
-        contentPadding = PaddingValues(
-            start = 18.dp,
-            top = 48.dp,
-            end = 18.dp,
-            bottom = contentPadding.calculateBottomPadding() + 34.dp
-        )
-    ) {
-        item(key = "locked-header", contentType = "locked-header") {
-            LockedMediaHeader(
-                lockedItemCount = lockedMediaItems.size,
-                isUnlocked = isUnlocked,
-                onBack = onBack
-            )
-            Spacer(Modifier.height(30.dp))
-        }
-
-        if (!isUnlocked) {
-            item(key = "locked-auth", contentType = "locked-auth") {
-                LockedMediaAuthCard(
-                    hasPin = hasPin,
-                    biometricAvailable = biometricAvailable,
-                    authMessage = authMessage,
-                    onPinCreated = onPinCreated,
-                    onPinUnlock = onPinUnlock,
-                    onBiometricUnlock = onBiometricUnlock
-                )
-            }
+    fun toggleSelection(mediaItem: MediaItem) {
+        selectedMediaIds = if (mediaItem.id in selectedMediaIds) {
+            selectedMediaIds - mediaItem.id
         } else {
-            item(key = "locked-summary", contentType = "locked-summary") {
-                LockedMediaSummary(lockedItemCount = lockedMediaItems.size)
-                Spacer(Modifier.height(24.dp))
-                Text(
-                    text = "Private photos and videos",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = MaterialTheme.colorScheme.onBackground
+            selectedMediaIds + mediaItem.id
+        }
+    }
+
+    fun hitMedia(localPoint: Offset): MediaItem? {
+        val point = Offset(
+            rootBounds.value.left + localPoint.x,
+            rootBounds.value.top + localPoint.y
+        )
+        return lockedMediaItems.firstOrNull { mediaItem ->
+            tileBounds[mediaItem.id]?.contains(point) == true
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { rootBounds.value = it.boundsInWindow() }
+            .pointerInput(isSelectionMode, lockedMediaItems) {
+                var dragMode: LockedMediaDragSelectMode? = null
+                var baseSelectedIds = emptySet<String>()
+                val visitedMediaIds = mutableSetOf<String>()
+
+                fun applyDragSelectionAt(localPoint: Offset) {
+                    val hit = hitMedia(localPoint) ?: return
+                    val mode = dragMode ?: return
+                    if (!visitedMediaIds.add(hit.id)) return
+                    when (mode) {
+                        LockedMediaDragSelectMode.Add -> if (hit.id !in baseSelectedIds) toggleSelection(hit)
+                        LockedMediaDragSelectMode.Remove -> if (hit.id in baseSelectedIds) toggleSelection(hit)
+                    }
+                }
+
+                if (isSelectionMode) {
+                    detectDragGestures(
+                        onDragStart = { startOffset ->
+                            baseSelectedIds = latestSelectedMediaIds
+                            visitedMediaIds.clear()
+                            val hit = hitMedia(startOffset)
+                            dragMode = hit?.let {
+                                if (it.id in baseSelectedIds) LockedMediaDragSelectMode.Remove else LockedMediaDragSelectMode.Add
+                            }
+                            applyDragSelectionAt(startOffset)
+                        },
+                        onDrag = { change, _ ->
+                            applyDragSelectionAt(change.position)
+                            change.consume()
+                        },
+                        onDragEnd = {
+                            dragMode = null
+                            visitedMediaIds.clear()
+                        },
+                        onDragCancel = {
+                            dragMode = null
+                            visitedMediaIds.clear()
+                        }
+                    )
+                }
+            }
+    ) {
+        LazyColumn(
+            contentPadding = PaddingValues(
+                start = 18.dp,
+                top = 48.dp,
+                end = 18.dp,
+                bottom = contentPadding.calculateBottomPadding() + if (isSelectionMode) 132.dp else 34.dp
+            )
+        ) {
+            item(key = "locked-header", contentType = "locked-header") {
+                LockedMediaHeader(
+                    lockedItemCount = lockedMediaItems.size,
+                    isUnlocked = isUnlocked,
+                    onBack = onBack
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(30.dp))
             }
 
-            if (lockedMediaItems.isEmpty()) {
-                item(key = "locked-empty", contentType = "locked-empty") {
-                    LockedMediaEmpty()
+            if (!isUnlocked) {
+                item(key = "locked-auth", contentType = "locked-auth") {
+                    LockedMediaAuthCard(
+                        hasPin = hasPin,
+                        biometricAvailable = biometricAvailable,
+                        authMessage = authMessage,
+                        authInProgress = authInProgress,
+                        onPinCreated = onPinCreated,
+                        onPinUnlock = onPinUnlock,
+                        onBiometricUnlock = onBiometricUnlock
+                    )
                 }
             } else {
-                items(
-                    items = lockedMediaItems.chunked(gridColumns.coerceAtLeast(2)),
-                    key = { rowItems -> "locked-grid-row-${rowItems.first().id}" },
-                    contentType = { "locked-grid-row" }
-                ) { rowItems ->
-                    LockedMediaGridRow(
-                        mediaItems = rowItems,
-                        columns = gridColumns.coerceAtLeast(2),
-                        onUnhideMedia = onUnhideMedia,
-                        onOpenMedia = onOpenMedia
+                item(key = "locked-summary", contentType = "locked-summary") {
+                    LockedMediaSummary(lockedItemCount = lockedMediaItems.size)
+                    Spacer(Modifier.height(24.dp))
+                    Text(
+                        text = "Private photos and videos",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onBackground
                     )
-                    Spacer(Modifier.height(1.dp))
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                if (lockedMediaItems.isEmpty()) {
+                    item(key = "locked-empty", contentType = "locked-empty") {
+                        LockedMediaEmpty()
+                    }
+                } else {
+                    items(
+                        items = gridRows,
+                        key = { rowItems -> "locked-grid-row-${rowItems.first().id}" },
+                        contentType = { "locked-grid-row" }
+                    ) { rowItems ->
+                        LockedMediaGridRow(
+                            mediaItems = rowItems,
+                            columns = gridColumns.coerceAtLeast(2),
+                            selectedMediaIds = selectedMediaIds,
+                            onMediaBoundsChanged = { mediaItem, bounds -> tileBounds[mediaItem.id] = bounds },
+                            onMediaLongClick = { mediaItem ->
+                                if (mediaItem.id !in selectedMediaIds) toggleSelection(mediaItem)
+                            },
+                            onMediaClick = { mediaItem, bounds ->
+                                if (isSelectionMode) toggleSelection(mediaItem) else onOpenMedia(mediaItem, bounds)
+                            }
+                        )
+                        Spacer(Modifier.height(1.dp))
+                    }
                 }
             }
+        }
+
+        if (isSelectionMode) {
+            LockedMediaSelectionToolbar(
+                selectedCount = selectedMediaIds.size,
+                totalCount = lockedMediaItems.size,
+                onClear = { selectedMediaIds = emptySet() },
+                onSelectAll = { selectedMediaIds = mediaIds },
+                onUnhide = {
+                    val selectedItems = lockedMediaItems.filter { it.id in selectedMediaIds }
+                    selectedMediaIds = emptySet()
+                    onUnhideSelected(selectedItems)
+                },
+                onDelete = {
+                    val selectedItems = lockedMediaItems.filter { it.id in selectedMediaIds }
+                    selectedMediaIds = emptySet()
+                    onDeleteSelected(selectedItems)
+                },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     }
 }
+
+internal fun shouldAutoLaunchLockedMediaBiometric(
+    isUnlocked: Boolean,
+    hasPin: Boolean,
+    biometricAvailable: Boolean
+): Boolean = !isUnlocked && hasPin && biometricAvailable
 
 @Composable
 private fun LockedMediaHeader(
@@ -203,6 +318,7 @@ private fun LockedMediaAuthCard(
     hasPin: Boolean,
     biometricAvailable: Boolean,
     authMessage: String?,
+    authInProgress: Boolean,
     onPinCreated: (String, String) -> Unit,
     onPinUnlock: (String) -> Unit,
     onBiometricUnlock: () -> Unit
@@ -245,6 +361,7 @@ private fun LockedMediaAuthCard(
             LockedPinField(
                 value = pin,
                 label = if (hasPin) "PIN" else "New PIN",
+                enabled = !authInProgress,
                 onValueChange = { pin = it }
             )
             if (!hasPin) {
@@ -252,6 +369,7 @@ private fun LockedMediaAuthCard(
                 LockedPinField(
                     value = confirmPin,
                     label = "Confirm PIN",
+                    enabled = !authInProgress,
                     onValueChange = { confirmPin = it }
                 )
             }
@@ -265,7 +383,7 @@ private fun LockedMediaAuthCard(
             }
             Spacer(Modifier.height(18.dp))
             Button(
-                enabled = if (hasPin) pinIsReady else setupReady,
+                enabled = !authInProgress && if (hasPin) pinIsReady else setupReady,
                 onClick = {
                     if (hasPin) {
                         onPinUnlock(pin)
@@ -288,6 +406,7 @@ private fun LockedMediaAuthCard(
                 Spacer(Modifier.height(8.dp))
                 TextButton(
                     onClick = onBiometricUnlock,
+                    enabled = !authInProgress,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(
@@ -307,10 +426,12 @@ private fun LockedMediaAuthCard(
 private fun LockedPinField(
     value: String,
     label: String,
+    enabled: Boolean,
     onValueChange: (String) -> Unit
 ) {
     OutlinedTextField(
         value = value,
+        enabled = enabled,
         onValueChange = { next -> onValueChange(next.filter { it.isDigit() }.take(12)) },
         modifier = Modifier.fillMaxWidth(),
         label = { Text(label) },
@@ -377,8 +498,10 @@ private fun LockedMediaEmpty() {
 @Composable
 private fun LockedMediaGridRow(
     mediaItems: List<MediaItem>,
-    onUnhideMedia: (MediaItem) -> Unit,
-    onOpenMedia: (MediaItem, Rect) -> Unit,
+    selectedMediaIds: Set<String>,
+    onMediaBoundsChanged: (MediaItem, Rect) -> Unit,
+    onMediaLongClick: (MediaItem) -> Unit,
+    onMediaClick: (MediaItem, Rect) -> Unit,
     columns: Int = 4,
     spacing: androidx.compose.ui.unit.Dp = 1.dp
 ) {
@@ -391,28 +514,18 @@ private fun LockedMediaGridRow(
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
             mediaItems.forEach { mediaItem ->
                 val itemBounds = remember(mediaItem.id) { LockedMediaBoundsRef() }
-                Box(modifier = Modifier.size(cellSize)) {
-                    MediaThumbnail(
-                        mediaItem = mediaItem,
-                        modifier = Modifier.matchParentSize(),
-                        cornerRadius = 0.dp,
-                        onBoundsChanged = { itemBounds.value = it },
-                        onClick = { onOpenMedia(mediaItem, itemBounds.value) }
-                    )
-                    TextButton(
-                        onClick = { onUnhideMedia(mediaItem) },
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(horizontal = 4.dp, vertical = 4.dp)
-                            .height(28.dp)
-                    ) {
-                        Text(
-                            text = "Show",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
+                MediaThumbnail(
+                    mediaItem = mediaItem,
+                    modifier = Modifier.size(cellSize),
+                    cornerRadius = 0.dp,
+                    selected = mediaItem.id in selectedMediaIds,
+                    onBoundsChanged = { bounds ->
+                        itemBounds.value = bounds
+                        onMediaBoundsChanged(mediaItem, bounds)
+                    },
+                    onLongClick = { onMediaLongClick(mediaItem) },
+                    onClick = { onMediaClick(mediaItem, itemBounds.value) }
+                )
             }
             repeat(columns - mediaItems.size) {
                 Spacer(Modifier.size(cellSize))
@@ -420,47 +533,54 @@ private fun LockedMediaGridRow(
         }
     }
 }
+
 @Composable
-private fun LockedMediaRow(
-    mediaItem: MediaItem,
-    onUnhide: () -> Unit
+private fun LockedMediaSelectionToolbar(
+    selectedCount: Int,
+    totalCount: Int,
+    onClear: () -> Unit,
+    onSelectAll: () -> Unit,
+    onUnhide: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(24.dp),
-        shadowElevation = 1.dp
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+        shape = RoundedCornerShape(8.dp),
+        shadowElevation = 14.dp
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            MediaThumbnail(
-                mediaItem = mediaItem,
-                modifier = Modifier.size(68.dp),
-                cornerRadius = 14.dp
-            )
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 14.dp)
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                IconButton(onClick = onClear) {
+                    Icon(Icons.Filled.Close, contentDescription = "Cancel selection")
+                }
                 Text(
-                    text = mediaItem.title,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1
+                    text = "%1$,d selected".format(selectedCount),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = if (mediaItem.isVideo) "Video - ${mediaItem.dateLabel}" else "Photo - ${mediaItem.dateLabel}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
+                IconButton(enabled = selectedCount < totalCount, onClick = onSelectAll) {
+                    Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
+                }
             }
-            TextButton(onClick = onUnhide) {
-                Text("Show")
+            Row(modifier = Modifier.fillMaxWidth()) {
+                TextButton(onClick = onUnhide, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Filled.LockOpen, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Unhide")
+                }
+                TextButton(onClick = onDelete, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Delete")
+                }
             }
         }
     }

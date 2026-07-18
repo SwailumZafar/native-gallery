@@ -72,6 +72,19 @@ object ThumbnailMemoryCache {
     }
 
     @Synchronized
+    fun replace(key: String, bitmap: Bitmap) {
+        val pinned = pinnedCache.get(key) != null
+        if (!pinned && cache.get(key) == null) {
+            indexKey(key)
+        }
+        if (pinned) {
+            pinnedCache.put(key, bitmap)
+        } else {
+            cache.put(key, bitmap)
+        }
+    }
+
+    @Synchronized
     fun pin(key: String, bitmap: Bitmap) {
         if (pinnedCache.get(key) == null) {
             indexKey(key)

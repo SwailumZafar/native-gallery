@@ -91,14 +91,25 @@ class MediaStoreGalleryRepository(
         baseSnapshot: GallerySnapshot?,
         latestPage: GallerySnapshot
     ): GallerySnapshot {
+        if (
+            baseSnapshot != null &&
+            !GallerySnapshotRefreshPolicy.latestPageHasChanges(
+                baseSnapshot = baseSnapshot,
+                latestPage = latestPage,
+                pageLimit = InitialGalleryPageSize
+            )
+        ) {
+            return baseSnapshot
+        }
+
         val mergedSnapshot = if (baseSnapshot == null) {
             latestPage
         } else {
             val latestIds = latestPage.mediaItems.asSequence().map { it.id }.toHashSet()
-            val mergedMedia = buildList {
+            val mergedMedia = MediaStoreDatePolicy.newestFirst(buildList {
                 addAll(latestPage.mediaItems)
                 addAll(baseSnapshot.mediaItems.filterNot { it.id in latestIds })
-            }
+            })
             val albumNames = (baseSnapshot.albums + latestPage.albums)
                 .asSequence()
                 .filterNot { it.isAllPhotos }
@@ -126,14 +137,10 @@ class MediaStoreGalleryRepository(
         } else {
             MediaStore.Files.getContentUri("external")
         }
-        val mediaTypes = buildList {
-            if (MediaKind.Images in mediaKinds) add(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)
-            if (MediaKind.Videos in mediaKinds) add(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO)
-        }
-        if (mediaTypes.isEmpty()) {
+        val formatSelection = MediaStoreMediaFormatPolicy.selectionFor(mediaKinds)
+        if (formatSelection == null) {
             return emptyList()
         }
-
         val projection = buildList {
             add(BaseColumns._ID)
             add(MediaStore.Files.FileColumns.MEDIA_TYPE)
@@ -147,6 +154,7 @@ class MediaStoreGalleryRepository(
             add(MediaStore.MediaColumns.SIZE)
             add(MediaStore.MediaColumns.WIDTH)
             add(MediaStore.MediaColumns.HEIGHT)
+            add(MediaStore.Images.ImageColumns.ORIENTATION)
             add(MediaStore.Video.Media.DURATION)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 add(MediaStore.MediaColumns.DATE_EXPIRES)
@@ -156,10 +164,9 @@ class MediaStoreGalleryRepository(
                 add(MediaStore.MediaColumns.DATA)
             }
         }.toTypedArray()
-        val placeholders = mediaTypes.joinToString(separator = ",") { "?" }
-        val selection = (listOf("${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($placeholders)") +
+        val selection = (listOf(formatSelection.clause) +
             MediaStoreVisibilityPolicy.selectionClauses(onlyTrashed)).joinToString(separator = " AND ")
-        val selectionArgs = mediaTypes.map { it.toString() }.toTypedArray()
+        val selectionArgs = formatSelection.args
         val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC, ${MediaStore.MediaColumns.DATE_MODIFIED} DESC, ${MediaStore.MediaColumns.DATE_TAKEN} DESC"
         val rows = mutableListOf<MediaStoreRow>()
         val dateFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.getDefault())
@@ -189,6 +196,7 @@ class MediaStoreGalleryRepository(
             val sizeColumn = mediaCursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
             val widthColumn = mediaCursor.getColumnIndex(MediaStore.MediaColumns.WIDTH)
             val heightColumn = mediaCursor.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
+            val orientationColumn = mediaCursor.getColumnIndex(MediaStore.Images.ImageColumns.ORIENTATION)
             val durationColumn = mediaCursor.getColumnIndex(MediaStore.Video.Media.DURATION)
             val pathColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 mediaCursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
@@ -209,41 +217,61 @@ class MediaStoreGalleryRepository(
                 }
 
                 val id = mediaCursor.getLong(idColumn)
-                val mediaTypeValue = mediaCursor.getInt(typeColumn)
-                val mediaType = if (mediaTypeValue == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO) {
-                    MediaType.Video
-                } else {
-                    MediaType.Photo
-                }
                 val bucketId = mediaCursor.getString(bucketIdColumn)?.takeIf { it.isNotBlank() } ?: "unknown"
                 val bucketName = mediaCursor.getString(bucketNameColumn)?.takeIf { it.isNotBlank() } ?: "Other"
                 val title = mediaCursor.getString(titleColumn)?.takeIf { it.isNotBlank() } ?: bucketName
-                val dateTakenMillis = mediaCursor.getLong(dateTakenColumn)
-                val dateModifiedSeconds = mediaCursor.getLong(dateModifiedColumn)
-                val dateAddedSeconds = mediaCursor.getLong(dateAddedColumn)
-                val rawDurationMillis = if (durationColumn >= 0 && !mediaCursor.isNull(durationColumn)) mediaCursor.getLong(durationColumn) else 0L
-                val videoDurationMillis = rawDurationMillis.takeIf { mediaType == MediaType.Video && it > 0L }
-                val mimeType = if (mimeTypeColumn >= 0 && !mediaCursor.isNull(mimeTypeColumn)) {
+                val rawMimeType = if (mimeTypeColumn >= 0 && !mediaCursor.isNull(mimeTypeColumn)) {
                     mediaCursor.getString(mimeTypeColumn)?.takeIf { it.isNotBlank() }
                 } else {
                     null
                 }
+                val mediaTypeValue = mediaCursor.getInt(typeColumn)
+                val mediaType = MediaStoreMediaFormatPolicy.mediaTypeFor(
+                    mediaStoreType = mediaTypeValue,
+                    mimeType = rawMimeType,
+                    displayName = title
+                ) ?: continue
+                val dateTakenMillis = mediaCursor.getLong(dateTakenColumn)
+                val dateModifiedSeconds = mediaCursor.getLong(dateModifiedColumn)
+                val dateAddedSeconds = mediaCursor.getLong(dateAddedColumn)
+                val sortTimestampMillis = MediaStoreDatePolicy.canonicalTimestampMillis(
+                    dateTakenMillis = dateTakenMillis,
+                    dateModifiedSeconds = dateModifiedSeconds,
+                    dateAddedSeconds = dateAddedSeconds
+                )
+                val rawDurationMillis = if (durationColumn >= 0 && !mediaCursor.isNull(durationColumn)) mediaCursor.getLong(durationColumn) else 0L
+                val videoDurationMillis = rawDurationMillis.takeIf { mediaType == MediaType.Video && it > 0L }
+                val mimeType = MediaStoreMediaFormatPolicy.normalizedMimeType(rawMimeType, title)
                 val fileSizeBytes = if (sizeColumn >= 0 && !mediaCursor.isNull(sizeColumn)) {
                     mediaCursor.getLong(sizeColumn).takeIf { it > 0L }
                 } else {
                     null
                 }
-                val width = if (widthColumn >= 0 && !mediaCursor.isNull(widthColumn)) {
+                val rawWidth = if (widthColumn >= 0 && !mediaCursor.isNull(widthColumn)) {
                     mediaCursor.getInt(widthColumn).takeIf { it > 0 }
                 } else {
                     null
                 }
-                val height = if (heightColumn >= 0 && !mediaCursor.isNull(heightColumn)) {
+                val rawHeight = if (heightColumn >= 0 && !mediaCursor.isNull(heightColumn)) {
                     mediaCursor.getInt(heightColumn).takeIf { it > 0 }
                 } else {
                     null
                 }
-                val contentUri = contentUriFor(mediaType, id)
+                val orientationDegrees = if (
+                    mediaType == MediaType.Photo &&
+                    orientationColumn >= 0 &&
+                    !mediaCursor.isNull(orientationColumn)
+                ) {
+                    mediaCursor.getInt(orientationColumn)
+                } else {
+                    0
+                }
+                val (width, height) = MediaStoreDimensionsPolicy.orientedDimensions(
+                    width = rawWidth,
+                    height = rawHeight,
+                    orientationDegrees = orientationDegrees
+                )
+                val contentUri = contentUriFor(mediaType, mediaTypeValue, id)
                 val dateExpiresSeconds = if (dateExpiresColumn >= 0 && !mediaCursor.isNull(dateExpiresColumn)) {
                     mediaCursor.getLong(dateExpiresColumn).takeIf { it > 0L }
                 } else {
@@ -254,7 +282,7 @@ class MediaStoreGalleryRepository(
                     albumId = bucketId,
                     type = mediaType,
                     title = title,
-                    dateLabel = dateLabel(dateTakenMillis, dateAddedSeconds, dateModifiedSeconds, dateFormatter),
+                    dateLabel = dateLabel(sortTimestampMillis, dateFormatter),
                     contentUri = contentUri,
                     isVideo = mediaType == MediaType.Video,
                     durationLabel = videoDurationMillis?.let(::formatDuration),
@@ -262,13 +290,18 @@ class MediaStoreGalleryRepository(
                     mimeType = mimeType,
                     fileSizeBytes = fileSizeBytes,
                     width = width,
-                    height = height
+                    height = height,
+                    relativePath = path,
+                    sortTimestampMillis = sortTimestampMillis
                 )
                 rows += MediaStoreRow(mediaItem, bucketName, dateExpiresSeconds)
             }
         }
 
-        return rows
+        return rows.sortedWith(
+            compareByDescending<MediaStoreRow> { it.mediaItem.sortTimestampMillis }
+                .thenByDescending { it.mediaItem.id }
+        )
     }
 
     private fun queryMediaCursor(
@@ -378,7 +411,15 @@ class MediaStoreGalleryRepository(
         return listOf(allPhotos) + regularAlbums
     }
 
-    private fun contentUriFor(mediaType: MediaType, id: Long): Uri {
+    private fun contentUriFor(mediaType: MediaType, mediaStoreType: Int, id: Long): Uri {
+        if (!MediaStoreMediaFormatPolicy.isNativeMediaStoreType(mediaStoreType, mediaType)) {
+            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            } else {
+                MediaStore.Files.getContentUri("external")
+            }
+            return ContentUris.withAppendedId(collection, id)
+        }
         val collection = if (mediaType == MediaType.Video) {
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         } else {
@@ -388,18 +429,11 @@ class MediaStoreGalleryRepository(
     }
 
     private fun dateLabel(
-        dateTakenMillis: Long,
-        dateAddedSeconds: Long,
-        dateModifiedSeconds: Long,
+        timestampMillis: Long,
         dateFormatter: DateTimeFormatter
     ): String {
-        val timestampMillis = when {
-            dateTakenMillis > 0L -> dateTakenMillis
-            dateAddedSeconds > 0L -> dateAddedSeconds * 1000L
-            dateModifiedSeconds > 0L -> dateModifiedSeconds * 1000L
-            else -> System.currentTimeMillis()
-        }
-        val date = Instant.ofEpochMilli(timestampMillis)
+        val resolvedTimestampMillis = timestampMillis.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val date = Instant.ofEpochMilli(resolvedTimestampMillis)
             .atZone(ZoneId.systemDefault())
             .toLocalDate()
         return if (date == LocalDate.now()) {

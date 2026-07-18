@@ -21,9 +21,25 @@ object MediaPermissions {
     private const val ReadMediaImages = "android.permission.READ_MEDIA_IMAGES"
     private const val ReadMediaVideo = "android.permission.READ_MEDIA_VIDEO"
     private const val ReadSelectedVisualMedia = "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
+    private const val PromptPreferences = "native_gallery_permission_prompt"
+    private const val InitialPromptHandled = "initial_prompt_handled"
 
     fun requestPermissions(): Array<String> {
         return requestPermissionsForSdk(Build.VERSION.SDK_INT)
+    }
+
+    fun shouldRequestOnLaunch(context: Context): Boolean {
+        return !context.applicationContext
+            .getSharedPreferences(PromptPreferences, Context.MODE_PRIVATE)
+            .getBoolean(InitialPromptHandled, false)
+    }
+
+    fun markInitialPromptHandled(context: Context) {
+        context.applicationContext
+            .getSharedPreferences(PromptPreferences, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(InitialPromptHandled, true)
+            .apply()
     }
 
     fun requestPermissionsForSdk(sdkInt: Int): Array<String> {

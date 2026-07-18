@@ -111,7 +111,8 @@ internal fun resolveGalleryBackAction(
         destination == GalleryDestination.HiddenItems ||
             destination == GalleryDestination.LockedMedia ||
             destination == GalleryDestination.RecentlyDeleted -> GalleryBackAction.ReturnToAlbums
-        destination == GalleryDestination.Cleanup -> GalleryBackAction.ReturnToMenu
+        destination == GalleryDestination.Cleanup ||
+            destination == GalleryDestination.Documents -> GalleryBackAction.ReturnToMenu
         destination == GalleryDestination.AlbumCreator -> GalleryBackAction.CancelAlbumCreator
         destination == GalleryDestination.PhotoEditor -> GalleryBackAction.ClosePhotoEditor
         else -> GalleryBackAction.System

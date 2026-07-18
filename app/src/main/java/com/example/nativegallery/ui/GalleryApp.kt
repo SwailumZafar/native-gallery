@@ -24,6 +24,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.EnterTransition
@@ -31,6 +32,11 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -55,6 +61,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -69,6 +77,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.filled.ChevronRight
@@ -99,6 +108,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -112,6 +122,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
@@ -124,7 +135,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.nativegallery.data.FakeGalleryRepository
+import com.example.nativegallery.data.DocumentPhotoRepository
 import com.example.nativegallery.data.FavoritesRepository
 import com.example.nativegallery.data.GalleryPrivacyFilter
 import com.example.nativegallery.data.GalleryGridDensity
@@ -134,7 +145,9 @@ import com.example.nativegallery.data.GallerySnapshot
 import com.example.nativegallery.data.HiddenAlbumsRepository
 import com.example.nativegallery.data.HiddenMediaRepository
 import com.example.nativegallery.data.HiddenSecurityRepository
+import com.example.nativegallery.data.LockedMediaVaultProvider
 import com.example.nativegallery.data.LockedMediaVaultRepository
+import com.example.nativegallery.data.LockedMediaVaultSnapshot
 import com.example.nativegallery.data.MediaPermissions
 import com.example.nativegallery.data.PhotoEditorRepository
 import com.example.nativegallery.data.RecentlyDeletedRepository
@@ -149,54 +162,21 @@ import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaAccessNotice
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.ThumbnailMemoryCache
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import com.example.nativegallery.ui.components.bouncyClickable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-internal enum class GalleryTab {
-    Photos,
-    Albums,
-    Menu
-}
-
-private fun GalleryTab.pageIndex(): Int = when (this) {
-    GalleryTab.Photos -> 0
-    GalleryTab.Albums -> 1
-    GalleryTab.Menu -> 2
-}
-
-private fun pageToGalleryTab(page: Int): GalleryTab {
-    return when (page) {
-        0 -> GalleryTab.Photos
-        1 -> GalleryTab.Albums
-        else -> GalleryTab.Menu
-    }
-}
-
-internal enum class GalleryDestination {
-    Main,
-    AlbumDetail,
-    HiddenItems,
-    LockedMedia,
-    RecentlyDeleted,
-    AlbumCreator,
-    PhotoEditor,
-    Cleanup
-}
-
-private data class GalleryLocation(
-    val destination: GalleryDestination,
-    val selectedTab: GalleryTab,
-    val selectedAlbumId: String?
-)
 
 private data class ViewerSessionSnapshot(
     val mediaItem: MediaItem,
@@ -251,6 +231,12 @@ private data class PendingMediaStoreWriteAction(
     val fromViewer: Boolean = false,
     val targetAlbumName: String? = null
 )
+
+private data class PendingLockConfirmation(
+    val mediaItems: List<MediaItem>,
+    val viewerMediaId: String? = null,
+    val viewerDirection: Int = 1
+)
 private data class MediaCloseTransitionSpec(
     val key: Int,
     val mediaItem: MediaItem,
@@ -272,29 +258,67 @@ fun GalleryApp(
     onSettingsChange: (GallerySettings) -> Unit
 ) {
     val context = LocalContext.current
+    val viewerConfiguration = LocalConfiguration.current
+    val viewerDensity = LocalDensity.current
+    val viewerPhotoDecodeSize = remember(
+        viewerConfiguration.screenWidthDp,
+        viewerConfiguration.screenHeightDp,
+        viewerDensity.density
+    ) {
+        (max(viewerConfiguration.screenWidthDp, viewerConfiguration.screenHeightDp) * viewerDensity.density)
+            .roundToInt()
+            .coerceIn(1440, 3072)
+    }
     val mediaStoreWriteRepository = remember(context) { MediaStoreWriteRepository(context) }
     val prefetchScope = rememberCoroutineScope()
     val mediaStoreRepository = remember(context) { MediaStoreGalleryRepository(context) }
     val initialMediaAccess = remember(context) { MediaPermissions.currentAccess(context) }
+    var initialPermissionPromptHandled by rememberSaveable {
+        mutableStateOf(!MediaPermissions.shouldRequestOnLaunch(context))
+    }
     val mediaViewModel: GalleryMediaViewModel = viewModel(
         factory = remember(mediaStoreRepository, initialMediaAccess) {
             GalleryMediaViewModelFactory(mediaStoreRepository, initialMediaAccess)
         }
     )
     val mediaUiState by mediaViewModel.uiState.collectAsStateWithLifecycle()
+    val navigationViewModel: GalleryNavigationViewModel = viewModel()
+    val navigationUiState by navigationViewModel.uiState.collectAsStateWithLifecycle()
+    val selectedTab = navigationUiState.selectedTab
+    val destination = navigationUiState.destination
+    val selectedAlbumId = navigationUiState.selectedAlbumId
     val hiddenRepository = remember(context) { HiddenAlbumsRepository(context) }
     val hiddenMediaRepository = remember(context) { HiddenMediaRepository(context) }
     val favoritesRepository = remember(context) { FavoritesRepository(context) }
     val recentlyDeletedRepository = remember(context) { RecentlyDeletedRepository(context) }
     val hiddenSecurityRepository = remember(context) { HiddenSecurityRepository(context) }
+    val lockedSecurityViewModel: LockedMediaSecurityViewModel = viewModel(
+        factory = remember(hiddenSecurityRepository) {
+            LockedMediaSecurityViewModelFactory(hiddenSecurityRepository)
+        }
+    )
+    val lockedSecurityUiState by lockedSecurityViewModel.uiState.collectAsStateWithLifecycle()
+    val hiddenVaultUnlocked = lockedSecurityUiState.isUnlocked
+    val hasHiddenPin = lockedSecurityUiState.hasPin
+    val hiddenAuthMessage = lockedSecurityUiState.authMessage
     val lockedVaultRepository = remember(context) { LockedMediaVaultRepository(context) }
+    val documentPhotoRepository = remember(context) { DocumentPhotoRepository(context) }
+    val documentPhotosViewModel: DocumentPhotosViewModel = viewModel(
+        factory = remember(documentPhotoRepository) {
+            DocumentPhotosViewModelFactory(documentPhotoRepository)
+        }
+    )
+    val documentPhotosUiState by documentPhotosViewModel.uiState.collectAsStateWithLifecycle()
     val photoEditorRepository = remember(context) { PhotoEditorRepository(context) }
     val hiddenStates = remember { mutableStateMapOf<String, Boolean>() }
     var hiddenMediaIds by remember { mutableStateOf(hiddenMediaRepository.initialHiddenMediaIds()) }
     var pendingLockedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var hiddenVaultUnlocked by remember { mutableStateOf(false) }
-    var hasHiddenPin by remember { mutableStateOf(hiddenSecurityRepository.hasPin()) }
-    var hiddenAuthMessage by rememberSaveable { mutableStateOf<String?>(null) }
+
+    var hiddenBiometricCancellation by remember { mutableStateOf<CancellationSignal?>(null) }
+
+    val latestDestination by rememberUpdatedState(destination)
+
+
     val biometricAvailable = remember(context) { context.supportsBiometricPrompt() }
     var favoriteMediaIds by remember { mutableStateOf(favoritesRepository.initialFavoriteIds()) }
     var recentlyDeletedMedia by remember { mutableStateOf(recentlyDeletedRepository.initialDeletedMedia()) }
@@ -303,16 +327,13 @@ fun GalleryApp(
     val mediaTileBounds = remember { mutableMapOf<String, Rect>() }
     val albumDetailGridModes = remember { mutableStateMapOf<String, AlbumDetailGridMode>() }
     val defaultAlbumGridMode = remember(settings.gridDensity) { settings.gridDensity.defaultAlbumGridMode() }
-    var selectedTab by rememberSaveable { mutableStateOf(GalleryTab.Photos) }
-    var destination by rememberSaveable { mutableStateOf(GalleryDestination.Main) }
-    var selectedAlbumId by rememberSaveable { mutableStateOf<String?>(null) }
-    var overlayReturnLocation by remember { mutableStateOf<GalleryLocation?>(null) }
-    var editorReturnLocation by remember { mutableStateOf<GalleryLocation?>(null) }
+
     var editorViewerSession by remember { mutableStateOf<ViewerSessionSnapshot?>(null) }
     var albumLayoutMode by rememberSaveable { mutableStateOf(AlbumLayoutMode.BigTiles) }
     var gallerySearchQuery by rememberSaveable { mutableStateOf("") }
     var vaultRefreshKey by remember { mutableIntStateOf(0) }
     var pendingMediaStoreWriteAction by remember { mutableStateOf<PendingMediaStoreWriteAction?>(null) }
+    var pendingLockConfirmation by remember { mutableStateOf<PendingLockConfirmation?>(null) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingAlbumName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -335,8 +356,12 @@ fun GalleryApp(
     var viewerSourceGridColumns by remember { mutableIntStateOf(4) }
     var albumTransition by remember { mutableStateOf<AlbumTransitionSpec?>(null) }
     var albumTransitionKey by remember { mutableIntStateOf(0) }
+    var albumWarmupReadyKey by remember { mutableIntStateOf(-1) }
+    var albumTransitionCommittedKey by remember { mutableIntStateOf(-1) }
+    var albumTransitionAwaitingDestinationKey by remember { mutableIntStateOf(-1) }
     var mediaOpenTransition by remember { mutableStateOf<MediaOpenTransitionSpec?>(null) }
     var mediaOpenTransitionKey by remember { mutableIntStateOf(0) }
+    var mediaOpenWarmupReadyKey by remember { mutableIntStateOf(-1) }
     var mediaCloseTransition by remember { mutableStateOf<MediaCloseTransitionSpec?>(null) }
     var mediaCloseTransitionKey by remember { mutableIntStateOf(0) }
     var viewerCloseInProgress by remember { mutableStateOf(false) }
@@ -393,12 +418,17 @@ fun GalleryApp(
         mediaViewModel.updateAccess(MediaPermissions.currentAccess(context))
     }
 
-    LaunchedEffect(mediaAccess.mediaKinds) {
-        if (mediaAccess.hasAccess) {
-            delay(900L)
-            mediaViewModel.requestQuickRefresh()
+    LaunchedEffect(initialPermissionPromptHandled, mediaAccess.hasAccess) {
+        if (!initialPermissionPromptHandled) {
+            initialPermissionPromptHandled = true
+            MediaPermissions.markInitialPromptHandled(context)
+            if (!mediaAccess.hasAccess) {
+                delay(180L)
+                permissionLauncher.launch(MediaPermissions.requestPermissions())
+            }
         }
     }
+
 
     DisposableEffect(mediaAccess.hasAccess, context) {
         if (!mediaAccess.hasAccess) {
@@ -440,7 +470,7 @@ fun GalleryApp(
                         val currentAccess = MediaPermissions.currentAccess(context)
                         mediaViewModel.updateAccess(currentAccess)
                         if (currentAccess.hasAccess) {
-                            mediaViewModel.onMediaStoreChanged()
+                            mediaViewModel.onAppResumed()
                         }
                     }
                 }
@@ -463,9 +493,15 @@ fun GalleryApp(
     }
 
     LaunchedEffect(destination) {
+        mediaViewModel.setRecentlyDeletedVisible(destination == GalleryDestination.RecentlyDeleted)
         if (destination != GalleryDestination.LockedMedia) {
-            hiddenVaultUnlocked = false
-            hiddenAuthMessage = null
+            lockedSecurityViewModel.lock()
+            withContext(Dispatchers.IO) {
+                LockedMediaVaultProvider.clearSessionCache(context.applicationContext)
+            }
+            val cancellation = hiddenBiometricCancellation
+            hiddenBiometricCancellation = null
+            cancellation?.cancel()
             if (!hasHiddenPin) {
                 pendingLockedMediaIds = emptySet()
             }
@@ -484,12 +520,12 @@ fun GalleryApp(
             }
         }
     }
-    val fakeSnapshot = remember { FakeGalleryRepository.snapshot() }
+    val emptySnapshot = remember { GallerySnapshot(emptyList(), emptyList()) }
     val isLoadingMedia = mediaAccess.hasAccess && (!initialMediaSyncComplete || mediaStoreSnapshot == null)
     val activeSnapshot = when {
-        isLoadingMedia -> GallerySnapshot(emptyList(), emptyList())
-        mediaAccess.hasAccess -> mediaStoreSnapshot ?: GallerySnapshot(emptyList(), emptyList())
-        else -> fakeSnapshot
+        isLoadingMedia -> emptySnapshot
+        mediaAccess.hasAccess -> mediaStoreSnapshot ?: emptySnapshot
+        else -> emptySnapshot
     }
     val removedMediaIds = remember(recentlyDeletedMedia, permanentlyDeletedMediaIds) {
         recentlyDeletedMedia.keys + permanentlyDeletedMediaIds
@@ -521,13 +557,25 @@ fun GalleryApp(
         derivedStateOf { hiddenStates.filterValues { it }.keys.toSet() }
     }
     val mediaById = remember(activeSnapshot.mediaItems) { activeSnapshot.mediaItems.associateBy { it.id } }
-    val recentlyDeletedItems = remember(recentlyDeletedMedia, mediaStoreDeletedItems, mediaById) {
-        val localDeletedItems = recentlyDeletedMedia
-            .mapNotNull { (mediaId, deletedAtMillis) ->
-                mediaById[mediaId]?.let { mediaItem ->
-                    RecentlyDeletedMedia(mediaItem = mediaItem, deletedAtMillis = deletedAtMillis)
-                }
+    var lockedVaultSnapshot by remember { mutableStateOf(LockedMediaVaultSnapshot()) }
+    LaunchedEffect(vaultRefreshKey) {
+        lockedVaultSnapshot = withContext(Dispatchers.IO) {
+            lockedVaultRepository.loadSnapshot()
+        }
+    }
+    val storedLockedMedia = lockedVaultSnapshot.mediaItems
+    val storedLockedMediaById = lockedVaultSnapshot.mediaById
+    val recentlyDeletedItems = remember(
+        recentlyDeletedMedia,
+        mediaStoreDeletedItems,
+        mediaById,
+        storedLockedMediaById
+    ) {
+        val localDeletedItems = recentlyDeletedMedia.mapNotNull { (mediaId, deletedAtMillis) ->
+            (mediaById[mediaId] ?: storedLockedMediaById[mediaId])?.let { mediaItem ->
+                RecentlyDeletedMedia(mediaItem = mediaItem, deletedAtMillis = deletedAtMillis)
             }
+        }
         (mediaStoreDeletedItems + localDeletedItems)
             .distinctBy { it.mediaItem.id }
             .sortedByDescending { it.deletedAtMillis }
@@ -535,14 +583,11 @@ fun GalleryApp(
     val hiddenAlbumMedia = remember(availableMedia, hiddenAlbumIds) {
         availableMedia.filter { hiddenAlbumIds.contains(it.albumId) }
     }
-    var storedLockedMedia by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    LaunchedEffect(hiddenMediaIds, vaultRefreshKey) {
-        storedLockedMedia = withContext(Dispatchers.IO) {
-            lockedVaultRepository.storedMediaItems().filter { hiddenMediaIds.contains(it.id) }
-        }
-    }
-    val privateHiddenMedia = remember(availableMedia, hiddenMediaIds, storedLockedMedia) {
-        (availableMedia.filter { hiddenMediaIds.contains(it.id) } + storedLockedMedia)
+    val privateHiddenMedia = remember(availableMedia, hiddenMediaIds, storedLockedMediaById) {
+        val liveHiddenMedia = availableMedia
+            .filter { hiddenMediaIds.contains(it.id) }
+            .map { mediaItem -> storedLockedMediaById[mediaItem.id] ?: mediaItem }
+        (liveHiddenMedia + storedLockedMediaById.values.filter { hiddenMediaIds.contains(it.id) })
             .distinctBy { it.id }
     }
     val visibleMedia = remember(availableMedia, hiddenAlbumIds, hiddenMediaIds) {
@@ -675,6 +720,14 @@ fun GalleryApp(
     val visibleMediaIds = remember(visibleMedia) { visibleMedia.map { it.id } }
     val visibleMediaIdSet = remember(visibleMediaIds) { visibleMediaIds.toSet() }
 
+    LaunchedEffect(destination, visibleMediaIds, viewerVisible) {
+        if (destination == GalleryDestination.Documents && !viewerVisible) {
+            documentPhotosViewModel.updateLibrary(visibleMedia)
+        } else {
+            documentPhotosViewModel.stopScanning()
+        }
+    }
+
     LaunchedEffect(visibleMediaIds, destination, viewerMediaItem?.id, viewerActionMode) {
         if (selectedMediaIds.any { it !in visibleMediaIdSet }) {
             selectedMediaIds = selectedMediaIds.intersect(visibleMediaIdSet)
@@ -692,59 +745,43 @@ fun GalleryApp(
         }
     }
 
-    fun currentLocation() = GalleryLocation(destination, selectedTab, selectedAlbumId)
-
-    fun rememberOverlayReturnLocation() {
-        overlayReturnLocation = currentLocation()
-    }
-
     fun returnFromOverlay(fallbackTab: GalleryTab) {
         selectedMediaIds = emptySet()
-        val returnLocation = overlayReturnLocation
-        overlayReturnLocation = null
-        if (returnLocation != null) {
-            destination = returnLocation.destination
-            selectedTab = returnLocation.selectedTab
-            selectedAlbumId = returnLocation.selectedAlbumId
-        } else {
-            destination = GalleryDestination.Main
-            selectedTab = fallbackTab
-            selectedAlbumId = null
-        }
+        navigationViewModel.returnFromOverlay(fallbackTab)
     }
 
     fun openPhotos() {
         selectedMediaIds = emptySet()
-        selectedTab = GalleryTab.Photos
-        destination = GalleryDestination.Main
+        navigationViewModel.openTab(GalleryTab.Photos)
     }
 
     fun openAlbums() {
         selectedMediaIds = emptySet()
-        selectedTab = GalleryTab.Albums
-        destination = GalleryDestination.Main
+        navigationViewModel.openTab(GalleryTab.Albums)
     }
 
     fun openRecentlyDeleted() {
         selectedMediaIds = emptySet()
-        rememberOverlayReturnLocation()
-        destination = GalleryDestination.RecentlyDeleted
+        navigationViewModel.openOverlay(GalleryDestination.RecentlyDeleted)
     }
-
 
     fun openCleanup() {
         selectedMediaIds = emptySet()
-        rememberOverlayReturnLocation()
-        destination = GalleryDestination.Cleanup
+        navigationViewModel.openOverlay(GalleryDestination.Cleanup)
     }
+
+    fun openDocuments() {
+        selectedMediaIds = emptySet()
+        navigationViewModel.openOverlay(GalleryDestination.Documents)
+    }
+
 
     fun startAlbumCreator(albumName: String) {
         val trimmedName = albumName.trim()
         if (trimmedName.isBlank()) return
         pendingAlbumName = trimmedName
         albumCreationSelectedIds = emptySet()
-        rememberOverlayReturnLocation()
-        destination = GalleryDestination.AlbumCreator
+        navigationViewModel.openOverlay(GalleryDestination.AlbumCreator)
     }
 
     fun cancelAlbumCreator() {
@@ -763,19 +800,9 @@ fun GalleryApp(
 
     fun closePhotoEditor() {
         editingMediaItem = null
-        val returnLocation = editorReturnLocation
         val viewerSession = editorViewerSession
-        editorReturnLocation = null
         editorViewerSession = null
-        if (returnLocation != null) {
-            destination = returnLocation.destination
-            selectedTab = returnLocation.selectedTab
-            selectedAlbumId = returnLocation.selectedAlbumId
-        } else {
-            selectedTab = GalleryTab.Photos
-            selectedAlbumId = null
-            destination = GalleryDestination.Main
-        }
+        navigationViewModel.closeEditor()
         if (viewerSession != null) {
             mediaOpenTransition = null
             mediaCloseTransition = null
@@ -795,28 +822,57 @@ fun GalleryApp(
 
     fun openHiddenItems() {
         selectedMediaIds = emptySet()
-        rememberOverlayReturnLocation()
-        destination = GalleryDestination.HiddenItems
+        navigationViewModel.openOverlay(GalleryDestination.HiddenItems)
     }
 
     fun openLockedMedia() {
         selectedMediaIds = emptySet()
-        rememberOverlayReturnLocation()
-        destination = GalleryDestination.LockedMedia
-        hiddenAuthMessage = null
+        navigationViewModel.openOverlay(GalleryDestination.LockedMedia)
+        lockedSecurityViewModel.clearMessage()
     }
-    fun lockedVaultMediaItem(mediaItem: MediaItem): MediaItem {
-        return lockedVaultRepository.encryptedUriFor(mediaItem.id)?.let { vaultUri ->
-            mediaItem.copy(contentUri = vaultUri)
-        } ?: mediaItem
+
+    fun closeLockedMedia() {
+        val cancellation = hiddenBiometricCancellation
+        hiddenBiometricCancellation = null
+        cancellation?.cancel()
+        returnFromOverlay(GalleryTab.Albums)
     }
-    fun lockedVaultMediaItems(mediaItems: List<MediaItem>): List<MediaItem> {
-        return mediaItems.map(::lockedVaultMediaItem)
+
+    val lockedDisplayMedia = remember(privateHiddenMedia, storedLockedMediaById) {
+        privateHiddenMedia.map { mediaItem -> storedLockedMediaById[mediaItem.id] ?: mediaItem }
+    }
+    val lockedGridMedia = remember(lockedDisplayMedia) {
+        lockedDisplayMedia.map { mediaItem ->
+            mediaItem.previewUri?.let { previewUri ->
+                mediaItem.copy(contentUri = previewUri)
+            } ?: mediaItem.copy(contentUri = null)
+        }
+    }
+    val missingLockedPreviewIds = remember(lockedVaultSnapshot, lockedDisplayMedia) {
+        val displayedIds = lockedDisplayMedia.mapTo(mutableSetOf()) { it.id }
+        lockedVaultSnapshot.missingPreviewIds.intersect(displayedIds)
+    }
+    val lockedPreviewMigrationKey = remember(missingLockedPreviewIds) {
+        missingLockedPreviewIds.sorted().joinToString(separator = "|")
+    }
+    LaunchedEffect(destination, hiddenVaultUnlocked, lockedPreviewMigrationKey) {
+        if (
+            destination != GalleryDestination.LockedMedia ||
+            !hiddenVaultUnlocked ||
+            missingLockedPreviewIds.isEmpty()
+        ) return@LaunchedEffect
+        val migratedAny = withContext(Dispatchers.IO) {
+            missingLockedPreviewIds.mapNotNull(storedLockedMediaById::get)
+                .fold(false) { migrated, mediaItem ->
+                    lockedVaultRepository.ensureEncryptedPreviewFromVault(mediaItem) || migrated
+                }
+        }
+        if (migratedAny) vaultRefreshKey += 1
     }
     lateinit var launchMediaStoreWrite: (PendingMediaStoreWriteAction) -> Unit
     fun lockMediaItems(mediaItems: List<MediaItem>, onLocked: () -> Unit = {}) {
         if (mediaItems.isEmpty()) return
-        hiddenAuthMessage = null
+        lockedSecurityViewModel.clearMessage()
         prefetchScope.launch {
             val importedMediaIds = withContext(Dispatchers.IO) {
                 mediaItems.mapNotNull { mediaItem ->
@@ -824,9 +880,13 @@ fun GalleryApp(
                 }
             }.toSet()
             if (importedMediaIds.isEmpty()) return@launch
+            vaultRefreshKey += 1
 
             val importedItems = mediaItems.filter { importedMediaIds.contains(it.id) }
-            hiddenMediaIds = hiddenMediaRepository.setMediaHidden(importedMediaIds, true)
+            val updatedHiddenMediaIds = withContext(Dispatchers.IO) {
+                hiddenMediaRepository.setMediaHidden(importedMediaIds, true)
+            }
+            hiddenMediaIds = updatedHiddenMediaIds
             onLocked()
             launchMediaStoreWrite(
                 PendingMediaStoreWriteAction(
@@ -836,84 +896,76 @@ fun GalleryApp(
             )
         }
     }
-    fun createHiddenPin(pin: String, confirmPin: String) {
-        when {
-            pin != confirmPin -> hiddenAuthMessage = "PINs do not match."
-            !HiddenSecurityRepository.isValidPin(pin) -> hiddenAuthMessage = "Use 4 to 12 digits for the PIN."
-            hiddenSecurityRepository.setPin(pin) -> {
-                hasHiddenPin = true
-                if (pendingLockedMediaIds.isNotEmpty()) {
-                    val pendingItems = availableMedia.filter { pendingLockedMediaIds.contains(it.id) }
-                    pendingLockedMediaIds = emptySet()
-                    lockMediaItems(pendingItems)
-                }
-                hiddenSecurityRepository.clearFailedPinAttempts()
-                hiddenVaultUnlocked = true
-                hiddenAuthMessage = null
-            }
-            else -> hiddenAuthMessage = "Could not save this PIN."
+    LaunchedEffect(lockedSecurityUiState.pinCreationEventId) {
+        if (lockedSecurityUiState.pinCreationEventId <= 0 || pendingLockedMediaIds.isEmpty()) {
+            return@LaunchedEffect
         }
-    }
-
-    fun unlockHiddenWithPin(pin: String) {
-        val remainingLockoutMillis = hiddenSecurityRepository.pinLockoutUntilMillis() - System.currentTimeMillis()
-        if (remainingLockoutMillis > 0L) {
-            hiddenAuthMessage = pinLockoutMessage(remainingLockoutMillis)
-            return
-        }
-
-        if (hiddenSecurityRepository.verifyPin(pin)) {
-            hiddenSecurityRepository.clearFailedPinAttempts()
-            hiddenVaultUnlocked = true
-            hiddenAuthMessage = null
-        } else {
-            val failureState = hiddenSecurityRepository.recordFailedPinAttempt()
-            hiddenAuthMessage = if (failureState.remainingMillis() > 0L) {
-                pinLockoutMessage(failureState.remainingMillis())
-            } else {
-                "Incorrect PIN."
-            }
-        }
+        val pendingItems = availableMedia.filter { pendingLockedMediaIds.contains(it.id) }
+        pendingLockedMediaIds = emptySet()
+        lockMediaItems(pendingItems)
     }
 
     fun requestHiddenBiometricUnlock() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            hiddenAuthMessage = "Biometric unlock is not available on this Android version."
+            lockedSecurityViewModel.showMessage("Biometric unlock is not available on this Android version.")
             return
         }
         val activity = context.findActivity()
         if (activity == null) {
-            hiddenAuthMessage = "Biometric unlock needs an active screen."
+            lockedSecurityViewModel.showMessage("Biometric unlock needs an active screen.")
             return
         }
         val keyguardManager = context.getSystemService(KeyguardManager::class.java)
         if (keyguardManager?.isDeviceSecure == false) {
-            hiddenAuthMessage = "Set up screen lock or biometrics in Android settings first."
+            lockedSecurityViewModel.showMessage("Set up screen lock or biometrics in Android settings first.")
             return
         }
+
+        val cancellationSignal = CancellationSignal()
+        hiddenBiometricCancellation?.cancel()
+        hiddenBiometricCancellation = cancellationSignal
         val prompt = BiometricPrompt.Builder(activity)
             .setTitle("Unlock locked media")
             .setSubtitle("Use face, fingerprint, or another available biometric")
             .setNegativeButton("Use PIN", activity.mainExecutor) { _, _ ->
-                hiddenAuthMessage = null
+                if (hiddenBiometricCancellation === cancellationSignal) {
+                    hiddenBiometricCancellation = null
+                    lockedSecurityViewModel.clearMessage()
+                }
             }
             .build()
         prompt.authenticate(
-            CancellationSignal(),
+            cancellationSignal,
             activity.mainExecutor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
-                    hiddenSecurityRepository.clearFailedPinAttempts()
-                    hiddenVaultUnlocked = true
-                    hiddenAuthMessage = null
+                    if (
+                        hiddenBiometricCancellation !== cancellationSignal ||
+                        latestDestination != GalleryDestination.LockedMedia
+                    ) {
+                        return
+                    }
+                    hiddenBiometricCancellation = null
+                    lockedSecurityViewModel.unlockWithBiometric()
                 }
 
                 override fun onAuthenticationFailed() {
-                    hiddenAuthMessage = "Biometric was not recognized."
+                    if (
+                        hiddenBiometricCancellation === cancellationSignal &&
+                        latestDestination == GalleryDestination.LockedMedia
+                    ) {
+                        lockedSecurityViewModel.showMessage("Biometric was not recognized.")
+                    }
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
-                    hiddenAuthMessage = errString?.toString()?.takeIf { it.isNotBlank() }
+                    if (hiddenBiometricCancellation !== cancellationSignal) return
+                    hiddenBiometricCancellation = null
+                    if (latestDestination == GalleryDestination.LockedMedia) {
+                        lockedSecurityViewModel.showMessage(
+                            errString?.toString()?.takeIf { it.isNotBlank() }
+                        )
+                    }
                 }
             }
         )
@@ -921,29 +973,33 @@ fun GalleryApp(
 
     fun hideSelectedMedia() {
         val mediaToLock = selectedMediaItems
-        val mediaIds = mediaToLock.map { it.id }.toSet()
-        if (mediaIds.isEmpty()) return
-        selectedMediaIds = emptySet()
-        if (!hasHiddenPin) {
-            rememberOverlayReturnLocation()
-            pendingLockedMediaIds = pendingLockedMediaIds + mediaIds
-            hiddenVaultUnlocked = false
-            hiddenAuthMessage = String.format(Locale.getDefault(), "Set a PIN to lock %1$,d selected items.", mediaIds.size)
-            selectedTab = GalleryTab.Albums
-            destination = GalleryDestination.LockedMedia
-            return
-        }
-        lockMediaItems(mediaToLock)
+        if (mediaToLock.isEmpty()) return
+        pendingLockConfirmation = PendingLockConfirmation(mediaItems = mediaToLock)
     }
-    fun unhideMedia(mediaItem: MediaItem) {
-        if (!mediaById.containsKey(mediaItem.id)) {
-            hiddenAuthMessage = "This item is encrypted-only now. Keep it locked until restore is available."
-            return
+    fun unhideMediaItems(
+        mediaItems: List<MediaItem>,
+        onCompleted: (Set<String>) -> Unit = {}
+    ) {
+        if (mediaItems.isEmpty()) return
+        prefetchScope.launch {
+            val restoredIds = withContext(Dispatchers.IO) {
+                mediaItems.mapNotNull { mediaItem ->
+                    val restored = lockedVaultRepository.originalMediaExists(mediaItem.id) ||
+                        lockedVaultRepository.restoreMedia(mediaItem) != null
+                    mediaItem.id.takeIf { restored }?.also {
+                        lockedVaultRepository.delete(mediaItem.id)
+                    }
+                }.toSet()
+            }
+            if (restoredIds.isEmpty()) {
+                lockedSecurityViewModel.showMessage("Could not restore the selected media.")
+                return@launch
+            }
+            hiddenMediaIds = hiddenMediaRepository.setMediaHidden(restoredIds, false)
+            vaultRefreshKey += 1
+            mediaViewModel.requestQuickRefresh()
+            onCompleted(restoredIds)
         }
-
-        lockedVaultRepository.delete(mediaItem.id)
-        hiddenMediaIds = hiddenMediaRepository.setMediaHidden(mediaItem.id, false)
-        vaultRefreshKey += 1
     }
     fun updateAlbumHidden(album: Album, hidden: Boolean) {
         if (album.isAllPhotos) return
@@ -961,7 +1017,7 @@ fun GalleryApp(
                 viewerVisible = false
             }
             if (selectedAlbumId == album.id) {
-                selectedAlbumId = null
+                navigationViewModel.clearSelectedAlbum()
             }
         }
     }
@@ -975,31 +1031,38 @@ fun GalleryApp(
         if (albumTransition != null) return
         val tileBounds = bounds.takeIf { it != Rect.Zero } ?: albumTileBounds[album.id]
         val openingMedia = mediaForAlbumFast(album, visibleMedia, visibleMediaByAlbum, favoriteMedia)
-        selectedAlbumId = album.id
-        selectedTab = GalleryTab.Albums
+        navigationViewModel.selectAlbumForOpening(album.id)
         selectedMediaIds = emptySet()
 
         val hasTileTransition = tileBounds?.isUsableTransitionBounds() == true
         if (hasTileTransition) {
             albumTileBounds[album.id] = tileBounds
-            prefetchScope.launch {
-                prefetchMediaThumbnails(
-                    context = context.applicationContext,
-                    mediaItems = openingMedia,
-                    thumbnailSizes = listOf(160),
-                    maxItems = 12
-                )
-            }
             albumTransitionKey += 1
+            val openingKey = albumTransitionKey
+            albumWarmupReadyKey = -1
+            albumTransitionCommittedKey = -1
+            albumTransitionAwaitingDestinationKey = -1
             albumTransition = AlbumTransitionSpec(
-                key = albumTransitionKey,
+                key = openingKey,
                 album = album,
                 tileBounds = tileBounds,
                 mode = AlbumTransitionMode.Opening
             )
+            prefetchScope.launch {
+                prefetchMediaThumbnails(
+                    context = context.applicationContext,
+                    mediaItems = openingMedia,
+                    thumbnailSizes = listOf(384),
+                    maxItems = 24,
+                    pinInMemory = true
+                )
+                if (albumTransitionKey == openingKey) {
+                    albumWarmupReadyKey = openingKey
+                }
+            }
             return
         }
-        destination = GalleryDestination.AlbumDetail
+        navigationViewModel.showAlbumDetail()
     }
 
     fun closeAlbumDetail() {
@@ -1016,16 +1079,26 @@ fun GalleryApp(
                 mode = AlbumTransitionMode.Closing
             )
         }
-        selectedTab = GalleryTab.Albums
-        destination = GalleryDestination.Main
+        navigationViewModel.closeAlbumDetail()
     }
 
     LaunchedEffect(destination, selectedAlbumId, visibleAlbumIds) {
         if (destination == GalleryDestination.AlbumDetail && selectedAlbumId != null && selectedAlbum == null) {
-            selectedAlbumId = null
+            navigationViewModel.clearSelectedAlbum()
             openAlbums()
         }
     }
+    LaunchedEffect(destination, albumTransitionAwaitingDestinationKey) {
+        val awaitingKey = albumTransitionAwaitingDestinationKey
+        if (destination == GalleryDestination.AlbumDetail && awaitingKey >= 0) {
+            if (albumTransition?.key == awaitingKey) {
+                albumTransition = null
+                albumTransitionCommittedKey = -1
+            }
+            albumTransitionAwaitingDestinationKey = -1
+        }
+    }
+
     LaunchedEffect(selectedTab, destination) {
         if (destination == GalleryDestination.Main) {
             val targetPage = selectedTab.pageIndex()
@@ -1040,10 +1113,7 @@ fun GalleryApp(
 
     LaunchedEffect(mainPagerState) {
         snapshotFlow { mainPagerState.settledPage }.collect { page ->
-            val settledTab = pageToGalleryTab(page)
-            if (selectedTab != settledTab) {
-                selectedTab = settledTab
-            }
+            navigationViewModel.syncPagerTab(pageToGalleryTab(page))
         }
     }
 
@@ -1074,6 +1144,7 @@ fun GalleryApp(
     ) {
         mediaOpenTransitionKey += 1
         val openKey = mediaOpenTransitionKey
+        mediaOpenWarmupReadyKey = -1
         mediaTileBounds.clear()
         if (bounds.isUsableTransitionBounds()) {
             viewerReturnFallbackBounds = bounds
@@ -1083,7 +1154,8 @@ fun GalleryApp(
         viewerSourceMediaIds = mediaItems.map { it.id }
         viewerSourceGridColumns = sourceGridColumns.coerceAtLeast(1)
 
-        if (bounds.isUsableTransitionBounds()) {
+        val hasTileTransition = bounds.isUsableTransitionBounds()
+        if (hasTileTransition) {
             mediaTileBounds[mediaItem.id] = bounds
             mediaOpenTransition = MediaOpenTransitionSpec(
                 key = openKey,
@@ -1095,26 +1167,47 @@ fun GalleryApp(
                 sharedElementKeyPrefix = sharedElementKeyPrefix,
                 actionMode = actionMode
             )
-        } else {
-            finishViewerOpen(
-                mediaItem = mediaItem,
-                mediaItems = mediaItems,
-                sharedElementKey = sharedElementKey,
-                sharedElementKeyPrefix = sharedElementKeyPrefix,
-                actionMode = actionMode
-            )
         }
 
-        prefetchScope.launch {
-            val warmupItems = listOf(transitionMediaItem, mediaItem)
-                .distinctBy { item -> item.id to item.contentUri }
-                .filter { it.contentUri != null }
-            if (warmupItems.isNotEmpty()) {
+        val warmupItem = (if (actionMode == ViewerActionMode.Locked) {
+            transitionMediaItem.copy(isVideo = false)
+        } else {
+            mediaItem
+        }).takeIf { it.contentUri != null }
+        if (warmupItem != null) {
+            prefetchScope.launch {
                 prefetchMediaThumbnails(
                     context = context.applicationContext,
-                    mediaItems = warmupItems,
-                    thumbnailSizes = listOf(1440, 512),
-                    maxItems = warmupItems.size
+                    mediaItems = listOf(warmupItem),
+                    thumbnailSizes = listOf(
+                        if (actionMode == ViewerActionMode.Locked || warmupItem.isVideo) 512
+                        else viewerPhotoDecodeSize
+                    ),
+                    maxItems = 1,
+                    pinInMemory = true
+                )
+                if (mediaOpenTransitionKey == openKey) {
+                    mediaOpenWarmupReadyKey = openKey
+                    if (!hasTileTransition) {
+                        finishViewerOpen(
+                            mediaItem = mediaItem,
+                            mediaItems = mediaItems,
+                            sharedElementKey = sharedElementKey,
+                            sharedElementKeyPrefix = sharedElementKeyPrefix,
+                            actionMode = actionMode
+                        )
+                    }
+                }
+            }
+        } else {
+            mediaOpenWarmupReadyKey = openKey
+            if (!hasTileTransition) {
+                finishViewerOpen(
+                    mediaItem = mediaItem,
+                    mediaItems = mediaItems,
+                    sharedElementKey = sharedElementKey,
+                    sharedElementKeyPrefix = sharedElementKeyPrefix,
+                    actionMode = actionMode
                 )
             }
         }
@@ -1236,9 +1329,56 @@ fun GalleryApp(
         }
     }
 
+    fun confirmLockMedia(pending: PendingLockConfirmation) {
+        pendingLockConfirmation = null
+        val mediaIds = pending.mediaItems.map { it.id }.toSet()
+        if (mediaIds.isEmpty()) return
+        selectedMediaIds = selectedMediaIds - mediaIds
+
+        if (!hasHiddenPin) {
+            pendingLockedMediaIds = pendingLockedMediaIds + mediaIds
+            lockedSecurityViewModel.lock(if (mediaIds.size == 1) {
+                "Set a PIN to lock this item."
+            } else {
+                String.format(Locale.getDefault(), "Set a PIN to lock %1$,d selected items.", mediaIds.size)
+            })
+            if (pending.viewerMediaId != null) viewerVisible = false
+            navigationViewModel.openOverlay(
+                destination = GalleryDestination.LockedMedia,
+                destinationTab = GalleryTab.Albums
+            )
+            return
+        }
+
+        lockMediaItems(pending.mediaItems) {
+            pending.viewerMediaId?.let { viewerMediaId ->
+                pending.mediaItems.firstOrNull { it.id == viewerMediaId }?.let { mediaItem ->
+                    advanceViewerAfterRemoval(mediaItem, pending.viewerDirection)
+                }
+            }
+        }
+    }
+
     fun completeMediaStoreWrite(action: PendingMediaStoreWriteAction) {
         val mediaIds = action.mediaItems.map { it.id }.toSet()
         if (mediaIds.isEmpty()) return
+        if (action.mode == MediaStoreWriteMode.MoveToAlbum) {
+            val albumName = action.targetAlbumName.orEmpty()
+            prefetchScope.launch {
+                val moved = withContext(Dispatchers.IO) {
+                    mediaStoreWriteRepository.moveToAlbum(action.mediaItems, albumName)
+                }
+                mediaViewModel.finishAppMediaStoreWrite()
+                if (moved) {
+                    pendingAlbumName = null
+                    albumCreationSelectedIds = emptySet()
+                    selectedMediaIds = emptySet()
+                    navigationViewModel.openTab(GalleryTab.Albums)
+                }
+                mediaViewModel.requestFullRefresh()
+            }
+            return
+        }
 
         when (action.mode) {
             MediaStoreWriteMode.Trash -> {
@@ -1261,7 +1401,6 @@ fun GalleryApp(
                 val deleteState = recentlyDeletedRepository.deleteForever(mediaIds)
                 recentlyDeletedMedia = deleteState.deletedMedia
                 permanentlyDeletedMediaIds = deleteState.permanentlyDeletedMediaIds
-                mediaIds.forEach(lockedVaultRepository::delete)
                 favoriteMediaIds = favoritesRepository.removeFavorites(mediaIds)
                 selectedMediaIds = selectedMediaIds - mediaIds
                 if (action.fromViewer) {
@@ -1271,46 +1410,80 @@ fun GalleryApp(
                 }
             }
             MediaStoreWriteMode.DeleteLockedOriginals -> Unit
-            MediaStoreWriteMode.MoveToAlbum -> {
-                val albumName = action.targetAlbumName.orEmpty()
-                if (mediaStoreWriteRepository.moveToAlbum(action.mediaItems, albumName)) {
-                    pendingAlbumName = null
-                    albumCreationSelectedIds = emptySet()
-                    selectedMediaIds = emptySet()
-                    selectedTab = GalleryTab.Albums
-                    destination = GalleryDestination.Main
-                }
-            }
+            MediaStoreWriteMode.MoveToAlbum -> Unit
+
         }
-        mediaViewModel.requestFullRefresh()
+        if (action.mode == MediaStoreWriteMode.DeleteLockedOriginals) {
+            mediaViewModel.requestQuickRefresh()
+        } else {
+            mediaViewModel.requestFullRefresh()
+        }
     }
 
     fun completeMediaStoreFallback(action: PendingMediaStoreWriteAction) {
-        when (action.mode) {
-            MediaStoreWriteMode.Trash -> {
-                recentlyDeletedMedia = recentlyDeletedRepository.markDeleted(action.mediaItems.map { it.id })
-                completeMediaStoreWrite(action)
+        prefetchScope.launch {
+            when (action.mode) {
+                MediaStoreWriteMode.Trash -> {
+                    recentlyDeletedMedia = recentlyDeletedRepository.markDeleted(action.mediaItems.map { it.id })
+                    mediaViewModel.finishAppMediaStoreWrite()
+                    completeMediaStoreWrite(action)
+                }
+                MediaStoreWriteMode.RestoreFromTrash -> {
+                    mediaViewModel.finishAppMediaStoreWrite()
+                    completeMediaStoreWrite(action)
+                }
+                MediaStoreWriteMode.DeleteForever -> {
+                    withContext(Dispatchers.IO) {
+                        mediaStoreWriteRepository.deleteDirectly(action.mediaItems)
+                    }
+                    mediaViewModel.finishAppMediaStoreWrite()
+                    completeMediaStoreWrite(action)
+                }
+                MediaStoreWriteMode.DeleteLockedOriginals -> {
+                    withContext(Dispatchers.IO) {
+                        mediaStoreWriteRepository.deleteDirectly(action.mediaItems)
+                    }
+                    mediaViewModel.finishAppMediaStoreWrite()
+                    mediaViewModel.requestQuickRefresh()
+                }
+                MediaStoreWriteMode.MoveToAlbum -> {
+                    completeMediaStoreWrite(action)
+                }
             }
-            MediaStoreWriteMode.RestoreFromTrash -> completeMediaStoreWrite(action)
-            MediaStoreWriteMode.DeleteForever -> {
-                mediaStoreWriteRepository.deleteDirectly(action.mediaItems)
-                completeMediaStoreWrite(action)
-            }
-            MediaStoreWriteMode.DeleteLockedOriginals -> {
-                mediaStoreWriteRepository.deleteDirectly(action.mediaItems)
-                mediaViewModel.requestFullRefresh()
-            }
-            MediaStoreWriteMode.MoveToAlbum -> completeMediaStoreWrite(action)
         }
     }
 
+    fun rollbackCancelledLockedMedia(action: PendingMediaStoreWriteAction) {
+        if (action.mode != MediaStoreWriteMode.DeleteLockedOriginals) return
+        prefetchScope.launch {
+            val rollbackIds = withContext(Dispatchers.IO) {
+                action.mediaItems
+                    .filter { lockedVaultRepository.originalMediaExists(it.id) }
+                    .map { it.id }
+                    .toSet()
+            }
+            if (rollbackIds.isEmpty()) return@launch
+            hiddenMediaIds = hiddenMediaRepository.setMediaHidden(rollbackIds, false)
+            withContext(Dispatchers.IO) {
+                rollbackIds.forEach(lockedVaultRepository::delete)
+            }
+            vaultRefreshKey += 1
+            lockedSecurityViewModel.showMessage(
+                "Original removal was cancelled, so those items were not moved to Locked Media."
+            )
+            mediaViewModel.requestQuickRefresh()
+        }
+    }
     val mediaStoreWriteLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
         val action = pendingMediaStoreWriteAction
         pendingMediaStoreWriteAction = null
+        mediaViewModel.finishAppMediaStoreWrite()
         if (result.resultCode == Activity.RESULT_OK && action != null) {
             completeMediaStoreWrite(action)
+        } else if (action != null) {
+            rollbackCancelledLockedMedia(action)
         }
     }
 
@@ -1323,6 +1496,7 @@ fun GalleryApp(
             MediaStoreWriteMode.MoveToAlbum -> mediaStoreWriteRepository.createWriteRequest(action.mediaItems)
         }
 
+        mediaViewModel.beginAppMediaStoreWrite()
         if (request != null) {
             pendingMediaStoreWriteAction = action
             mediaStoreWriteLauncher.launch(request)
@@ -1331,20 +1505,11 @@ fun GalleryApp(
         }
     }
     fun hideMedia(mediaItem: MediaItem, direction: Int) {
-        selectedMediaIds = selectedMediaIds - mediaItem.id
-        if (!hasHiddenPin) {
-            rememberOverlayReturnLocation()
-            pendingLockedMediaIds = pendingLockedMediaIds + mediaItem.id
-            hiddenVaultUnlocked = false
-            hiddenAuthMessage = "Set a PIN to lock this item."
-            viewerVisible = false
-            selectedTab = GalleryTab.Albums
-            destination = GalleryDestination.LockedMedia
-            return
-        }
-        lockMediaItems(listOf(mediaItem)) {
-            advanceViewerAfterRemoval(mediaItem, direction)
-        }
+        pendingLockConfirmation = PendingLockConfirmation(
+            mediaItems = listOf(mediaItem),
+            viewerMediaId = mediaItem.id,
+            viewerDirection = direction
+        )
     }
     fun completeMediaDelete(mediaItem: MediaItem, direction: Int) {
         recentlyDeletedMedia = recentlyDeletedRepository.markDeleted(mediaItem.id)
@@ -1352,34 +1517,81 @@ fun GalleryApp(
         advanceViewerAfterRemoval(mediaItem, direction)
     }
 
-    fun permanentlyDeleteMedia(mediaItem: MediaItem, direction: Int) {
-        val deleteState = recentlyDeletedRepository.deleteForever(mediaItem.id)
-        recentlyDeletedMedia = deleteState.deletedMedia
-        permanentlyDeletedMediaIds = deleteState.permanentlyDeletedMediaIds
-        favoriteMediaIds = favoritesRepository.removeFavorites(setOf(mediaItem.id))
-        lockedVaultRepository.delete(mediaItem.id)
-        selectedMediaIds = selectedMediaIds - mediaItem.id
-        advanceViewerAfterRemoval(mediaItem, direction)
+    fun isVaultMedia(mediaItem: MediaItem): Boolean {
+        return storedLockedMediaById.containsKey(mediaItem.id) ||
+            mediaItem.contentUri?.authority == LockedMediaVaultRepository.vaultAuthority(context)
+    }
+
+    fun softDeleteLockedMediaItems(
+        mediaItems: List<MediaItem>,
+        viewerDirection: Int? = null
+    ) {
+        if (mediaItems.isEmpty()) return
+        val mediaIds = mediaItems.map { it.id }
+        recentlyDeletedMedia = recentlyDeletedRepository.markDeleted(mediaIds)
+        hiddenMediaIds = hiddenMediaRepository.setMediaHidden(mediaIds.toSet(), false)
+        selectedMediaIds = selectedMediaIds - mediaIds.toSet()
+        viewerDirection?.let { direction ->
+            mediaItems.firstOrNull()?.let { advanceViewerAfterRemoval(it, direction) }
+        }
+    }
+
+    fun restoreVaultDeletedMediaItems(
+        mediaItems: List<MediaItem>,
+        viewerDirection: Int? = null
+    ) {
+        if (mediaItems.isEmpty()) return
+        val mediaIds = mediaItems.map { it.id }.toSet()
+        recentlyDeletedMedia = recentlyDeletedRepository.restore(mediaIds)
+        hiddenMediaIds = hiddenMediaRepository.setMediaHidden(mediaIds, true)
+        selectedMediaIds = selectedMediaIds - mediaIds
+        viewerDirection?.let { direction ->
+            mediaItems.firstOrNull()?.let { advanceViewerAfterRemoval(it, direction) }
+        }
+    }
+
+    fun permanentlyDeleteVaultMediaItems(
+        mediaItems: List<MediaItem>,
+        viewerDirection: Int? = null
+    ) {
+        if (mediaItems.isEmpty()) return
+        prefetchScope.launch {
+            val mediaIds = mediaItems.map { it.id }.toSet()
+            withContext(Dispatchers.IO) {
+                mediaIds.forEach(lockedVaultRepository::delete)
+            }
+            val deleteState = recentlyDeletedRepository.deleteForever(mediaIds)
+            recentlyDeletedMedia = deleteState.deletedMedia
+            permanentlyDeletedMediaIds = deleteState.permanentlyDeletedMediaIds
+            favoriteMediaIds = favoritesRepository.removeFavorites(mediaIds)
+            hiddenMediaIds = hiddenMediaRepository.setMediaHidden(mediaIds, false)
+            selectedMediaIds = selectedMediaIds - mediaIds
+            vaultRefreshKey += 1
+            viewerDirection?.let { direction ->
+                mediaItems.firstOrNull()?.let { advanceViewerAfterRemoval(it, direction) }
+            }
+        }
     }
 
     fun requestMediaDelete(mediaItem: MediaItem, direction: Int) {
         when {
             viewerActionMode == ViewerActionMode.RecentlyDeleted ||
                 (destination == GalleryDestination.RecentlyDeleted && recentlyDeletedMedia.containsKey(mediaItem.id)) -> {
-                launchMediaStoreWrite(
-                    PendingMediaStoreWriteAction(
-                        mode = MediaStoreWriteMode.DeleteForever,
-                        mediaItems = listOf(mediaItem),
-                        viewerDirection = direction,
-                        fromViewer = true
+                if (isVaultMedia(mediaItem)) {
+                    permanentlyDeleteVaultMediaItems(listOf(mediaItem), direction)
+                } else {
+                    launchMediaStoreWrite(
+                        PendingMediaStoreWriteAction(
+                            mode = MediaStoreWriteMode.DeleteForever,
+                            mediaItems = listOf(mediaItem),
+                            viewerDirection = direction,
+                            fromViewer = true
+                        )
                     )
-                )
+                }
             }
             viewerActionMode == ViewerActionMode.Locked -> {
-                lockedVaultRepository.delete(mediaItem.id)
-                hiddenMediaIds = hiddenMediaRepository.setMediaHidden(mediaItem.id, false)
-                selectedMediaIds = selectedMediaIds - mediaItem.id
-                advanceViewerAfterRemoval(mediaItem, direction)
+                softDeleteLockedMediaItems(listOf(mediaItem), direction)
             }
             else -> launchMediaStoreWrite(
                 PendingMediaStoreWriteAction(
@@ -1441,7 +1653,7 @@ fun GalleryApp(
 
     fun editPhoto(mediaItem: MediaItem) {
         if (mediaItem.isVideo || mediaItem.contentUri == null) return
-        editorReturnLocation = currentLocation()
+        navigationViewModel.openEditor()
         editorViewerSession = viewerMediaItem?.let { currentViewerItem ->
             ViewerSessionSnapshot(
                 mediaItem = currentViewerItem,
@@ -1458,47 +1670,59 @@ fun GalleryApp(
         }
         clearViewerAfterClose()
         editingMediaItem = mediaItem
-        destination = GalleryDestination.PhotoEditor
     }
 
 
-    fun restoreDeletedMedia(entry: RecentlyDeletedMedia) {
-        launchMediaStoreWrite(PendingMediaStoreWriteAction(MediaStoreWriteMode.RestoreFromTrash, listOf(entry.mediaItem)))
-    }
 
     fun restoreViewerMedia(mediaItem: MediaItem, direction: Int) {
         when (viewerActionMode) {
             ViewerActionMode.RecentlyDeleted -> {
-                launchMediaStoreWrite(
-                    PendingMediaStoreWriteAction(
-                        mode = MediaStoreWriteMode.RestoreFromTrash,
-                        mediaItems = listOf(mediaItem),
-                        viewerDirection = direction,
-                        fromViewer = true
+                if (isVaultMedia(mediaItem)) {
+                    restoreVaultDeletedMediaItems(listOf(mediaItem), direction)
+                } else {
+                    launchMediaStoreWrite(
+                        PendingMediaStoreWriteAction(
+                            mode = MediaStoreWriteMode.RestoreFromTrash,
+                            mediaItems = listOf(mediaItem),
+                            viewerDirection = direction,
+                            fromViewer = true
+                        )
                     )
-                )
+                }
             }
             ViewerActionMode.Locked -> {
-                lockedVaultRepository.delete(mediaItem.id)
-                hiddenMediaIds = hiddenMediaRepository.setMediaHidden(mediaItem.id, false)
-                advanceViewerAfterRemoval(mediaItem, direction)
+                unhideMediaItems(listOf(mediaItem)) { restoredIds ->
+                    if (mediaItem.id in restoredIds) {
+                        advanceViewerAfterRemoval(mediaItem, direction)
+                    }
+                }
             }
             ViewerActionMode.Normal -> Unit
         }
     }
 
-    fun restoreAllDeletedMedia() {
-        if (recentlyDeletedItems.isEmpty()) return
-        launchMediaStoreWrite(PendingMediaStoreWriteAction(MediaStoreWriteMode.RestoreFromTrash, recentlyDeletedItems.map { it.mediaItem }))
+    fun restoreDeletedMediaItems(entries: List<RecentlyDeletedMedia>) {
+        if (entries.isEmpty()) return
+        val mediaItems = entries.map { it.mediaItem }
+        val (vaultItems, mediaStoreItems) = mediaItems.partition(::isVaultMedia)
+        restoreVaultDeletedMediaItems(vaultItems)
+        if (mediaStoreItems.isNotEmpty()) {
+            launchMediaStoreWrite(
+                PendingMediaStoreWriteAction(MediaStoreWriteMode.RestoreFromTrash, mediaStoreItems)
+            )
+        }
     }
 
-    fun deleteDeletedMedia(entry: RecentlyDeletedMedia) {
-        launchMediaStoreWrite(PendingMediaStoreWriteAction(MediaStoreWriteMode.DeleteForever, listOf(entry.mediaItem)))
-    }
-
-    fun deleteAllDeletedMedia() {
-        if (recentlyDeletedItems.isEmpty()) return
-        launchMediaStoreWrite(PendingMediaStoreWriteAction(MediaStoreWriteMode.DeleteForever, recentlyDeletedItems.map { it.mediaItem }))
+    fun deleteDeletedMediaItems(entries: List<RecentlyDeletedMedia>) {
+        if (entries.isEmpty()) return
+        val mediaItems = entries.map { it.mediaItem }
+        val (vaultItems, mediaStoreItems) = mediaItems.partition(::isVaultMedia)
+        permanentlyDeleteVaultMediaItems(vaultItems)
+        if (mediaStoreItems.isNotEmpty()) {
+            launchMediaStoreWrite(
+                PendingMediaStoreWriteAction(MediaStoreWriteMode.DeleteForever, mediaStoreItems)
+            )
+        }
     }
 
     val navigationTransitionIdle = albumTransition == null &&
@@ -1535,9 +1759,9 @@ fun GalleryApp(
             }
             GalleryBackAction.CancelAlbumOpen -> {
                 albumTransition = null
-                selectedAlbumId = null
-                selectedTab = GalleryTab.Albums
-                destination = GalleryDestination.Main
+                albumTransitionCommittedKey = -1
+                albumTransitionAwaitingDestinationKey = -1
+                navigationViewModel.cancelAlbumOpen()
             }
             GalleryBackAction.CancelMediaOpen -> {
                 mediaOpenTransition = null
@@ -1546,7 +1770,13 @@ fun GalleryApp(
             GalleryBackAction.ClearSelection -> clearMediaSelection()
             GalleryBackAction.OpenPhotos -> openPhotos()
             GalleryBackAction.CloseAlbumDetail -> closeAlbumDetail()
-            GalleryBackAction.ReturnToAlbums -> returnFromOverlay(GalleryTab.Albums)
+            GalleryBackAction.ReturnToAlbums -> {
+                if (destination == GalleryDestination.LockedMedia) {
+                    closeLockedMedia()
+                } else {
+                    returnFromOverlay(GalleryTab.Albums)
+                }
+            }
             GalleryBackAction.ReturnToMenu -> returnFromOverlay(GalleryTab.Menu)
             GalleryBackAction.CancelAlbumCreator -> cancelAlbumCreator()
             GalleryBackAction.ClosePhotoEditor -> closePhotoEditor()
@@ -1678,6 +1908,7 @@ fun GalleryApp(
                     bottomBar = {
                         if (
                             destination == GalleryDestination.Main &&
+                            selectedMediaIds.isEmpty() &&
                             !viewerVisible &&
                             navigationTransitionIdle &&
                             !adaptivePolicy.useNavigationRail
@@ -1688,8 +1919,7 @@ fun GalleryApp(
                                 onTabSelected = { tab ->
                                     selectedMediaIds = emptySet()
                                     bottomNavigationVisible = true
-                                    selectedTab = tab
-                                    destination = GalleryDestination.Main
+                                    navigationViewModel.openTab(tab)
                                 }
                             )
                         }
@@ -1698,6 +1928,7 @@ fun GalleryApp(
                     Row(modifier = Modifier.fillMaxSize()) {
                         if (
                             destination == GalleryDestination.Main &&
+                            selectedMediaIds.isEmpty() &&
                             !viewerVisible &&
                             navigationTransitionIdle &&
                             adaptivePolicy.useNavigationRail
@@ -1706,8 +1937,7 @@ fun GalleryApp(
                                 selectedTab = selectedTab,
                                 onTabSelected = { tab ->
                                     selectedMediaIds = emptySet()
-                                    selectedTab = tab
-                                    destination = GalleryDestination.Main
+                                    navigationViewModel.openTab(tab)
                                 }
                             )
                         }
@@ -1716,7 +1946,52 @@ fun GalleryApp(
                                 .weight(1f)
                                 .fillMaxHeight()
                         ) {
-                        when (destination) {
+                            AnimatedContent(
+                                targetState = destination,
+                                modifier = Modifier.fillMaxSize(),
+                                transitionSpec = {
+                                    val usesAlbumHero = initialState == GalleryDestination.AlbumDetail ||
+                                        targetState == GalleryDestination.AlbumDetail
+                                    when {
+                                        usesAlbumHero -> {
+                                            EnterTransition.None togetherWith ExitTransition.None
+                                        }
+                                        targetState == GalleryDestination.Main -> {
+                                            (
+                                                fadeIn(tween(GalleryMotion.SecondaryCloseMillis)) +
+                                                    slideInHorizontally(
+                                                        animationSpec = tween(GalleryMotion.SecondaryCloseMillis),
+                                                        initialOffsetX = { -it / 14 }
+                                                    )
+                                                ) togetherWith (
+                                                fadeOut(tween(150)) +
+                                                    slideOutHorizontally(
+                                                        animationSpec = tween(GalleryMotion.SecondaryCloseMillis),
+                                                        targetOffsetX = { it / 10 }
+                                                    )
+                                                )
+                                        }
+                                        else -> {
+                                            (
+                                                fadeIn(tween(GalleryMotion.SecondaryOpenMillis)) +
+                                                    slideInHorizontally(
+                                                        animationSpec = tween(GalleryMotion.SecondaryOpenMillis),
+                                                        initialOffsetX = { it / 10 }
+                                                    )
+                                                ) togetherWith (
+                                                fadeOut(tween(150)) +
+                                                    slideOutHorizontally(
+                                                        animationSpec = tween(GalleryMotion.SecondaryOpenMillis),
+                                                        targetOffsetX = { -it / 14 }
+                                                    )
+                                                )
+                                        }
+                                    }
+                                },
+                                contentKey = { it },
+                                label = "gallery destination"
+                            ) { animatedDestination ->
+                                when (animatedDestination) {
                             GalleryDestination.Main -> {
                                 val tabFlingBehavior = PagerDefaults.flingBehavior(
                                     state = mainPagerState,
@@ -1799,7 +2074,10 @@ fun GalleryApp(
                                                 contentPadding = innerPadding,
                                                 listState = albumsListState,
                                                 activeTransitionAlbumId = albumTransition
-                                                    ?.takeIf { it.mode == AlbumTransitionMode.Opening }
+                                                    ?.takeIf {
+                                                        it.mode == AlbumTransitionMode.Opening &&
+                                                            albumTransitionCommittedKey == it.key
+                                                    }
                                                     ?.album?.id,
                                                 mediaAccessNotice = mediaAccessNotice,
                                                 isLoading = isLoadingMedia,
@@ -1815,6 +2093,7 @@ fun GalleryApp(
                                                 onOpenHiddenItems = ::openHiddenItems,
                                                 onOpenLockedMedia = ::openLockedMedia,
                                                 onOpenRecentlyDeleted = ::openRecentlyDeleted,
+                                                onOpenDocuments = ::openDocuments,
                                                 onOpenSettings = { showSettingsDialog = true },
                                                 onOpenCleanup = ::openCleanup
                                             )
@@ -1845,6 +2124,7 @@ fun GalleryApp(
                                         onSelectionClear = ::clearMediaSelection,
                                         onSelectAllVisible = { selectMedia(selectedAlbumMedia) },
                                         onDeleteSelected = ::deleteSelectedMedia,
+                                        onShareSelected = ::shareSelectedMedia,
                                         onHideSelected = ::hideSelectedMedia,
                                         onHideAlbum = { hideAlbumAndReturn(selectedAlbum) },
                                         onMediaBoundsChanged = { mediaItem, bounds ->
@@ -1881,20 +2161,28 @@ fun GalleryApp(
                                 contentPadding = PaddingValues()
                             )
                             GalleryDestination.LockedMedia -> LockedMediaScreen(
-                                lockedMediaItems = privateHiddenMedia,
+                                lockedMediaItems = lockedGridMedia,
                                 isUnlocked = hiddenVaultUnlocked,
                                 hasPin = hasHiddenPin,
                                 biometricAvailable = biometricAvailable,
                                 authMessage = hiddenAuthMessage,
-                                onBack = { returnFromOverlay(GalleryTab.Albums) },
-                                onPinCreated = ::createHiddenPin,
-                                onPinUnlock = ::unlockHiddenWithPin,
+                                authInProgress = lockedSecurityUiState.operationInProgress,
+                                onBack = ::closeLockedMedia,
+                                onPinCreated = lockedSecurityViewModel::createPin,
+                                onPinUnlock = lockedSecurityViewModel::unlockWithPin,
                                 onBiometricUnlock = ::requestHiddenBiometricUnlock,
-                                onUnhideMedia = ::unhideMedia,
+                                onUnhideSelected = { selectedItems ->
+                                    val fullItemsById = lockedDisplayMedia.associateBy { it.id }
+                                    unhideMediaItems(selectedItems.map { fullItemsById[it.id] ?: it })
+                                },
+                                onDeleteSelected = { selectedItems ->
+                                    val fullItemsById = lockedDisplayMedia.associateBy { it.id }
+                                    softDeleteLockedMediaItems(selectedItems.map { fullItemsById[it.id] ?: it })
+                                },
                                 onOpenMedia = { mediaItem, bounds ->
-                                    val lockedViewerItems = lockedVaultMediaItems(privateHiddenMedia)
+                                    val lockedViewerItems = lockedDisplayMedia
                                     val lockedViewerItem = lockedViewerItems.firstOrNull { it.id == mediaItem.id }
-                                        ?: lockedVaultMediaItem(mediaItem)
+                                        ?: mediaItem
                                     startViewerOpen(
                                         mediaItem = lockedViewerItem,
                                         mediaItems = lockedViewerItems,
@@ -1906,6 +2194,26 @@ fun GalleryApp(
                                 },
                                 contentPadding = PaddingValues(),
                                 gridColumns = adaptivePolicy.utilityGridColumns
+                            )
+                            GalleryDestination.Documents -> DocumentPhotosScreen(
+                                matches = documentPhotosUiState.matches,
+                                scanning = documentPhotosUiState.scanning,
+                                scannedCount = documentPhotosUiState.scannedCount,
+                                totalCount = documentPhotosUiState.totalCount,
+                                errorMessage = documentPhotosUiState.errorMessage,
+                                onBack = { returnFromOverlay(GalleryTab.Menu) },
+                                onRescan = documentPhotosViewModel::rescan,
+                                onOpenMedia = { mediaItem, mediaItems, bounds ->
+                                    startViewerOpen(
+                                        mediaItem = mediaItem,
+                                        mediaItems = mediaItems,
+                                        bounds = bounds,
+                                        sourceGridColumns = adaptivePolicy.utilityGridColumns
+                                    )
+                                },
+                                gridColumns = adaptivePolicy.utilityGridColumns,
+                                maxContentWidth = if (adaptivePolicy.useNavigationRail) 760.dp else androidx.compose.ui.unit.Dp.Unspecified,
+                                contentPadding = PaddingValues()
                             )
                             GalleryDestination.RecentlyDeleted -> RecentlyDeletedScreen(
                                 deletedItems = recentlyDeletedItems,
@@ -1919,10 +2227,8 @@ fun GalleryApp(
                                         sourceGridColumns = adaptivePolicy.utilityGridColumns
                                     )
                                 },
-                                onRestore = ::restoreDeletedMedia,
-                                onRestoreAll = ::restoreAllDeletedMedia,
-                                onDeleteForever = ::deleteDeletedMedia,
-                                onDeleteAllForever = ::deleteAllDeletedMedia,
+                                onRestoreSelected = ::restoreDeletedMediaItems,
+                                onDeleteForeverSelected = ::deleteDeletedMediaItems,
                                 contentPadding = PaddingValues(),
                                 gridColumns = adaptivePolicy.utilityGridColumns
                             )
@@ -1987,21 +2293,35 @@ fun GalleryApp(
                                 }
                             )
                         }
+                            }
                     }
                 }
                 }
 
                 PositionAwareAlbumTransitionOverlay(
                     transition = albumTransition,
+                    contentReady = albumTransition?.key == albumWarmupReadyKey,
+                    committed = albumTransition?.let {
+                        it.mode != AlbumTransitionMode.Opening ||
+                            albumTransitionCommittedKey == it.key
+                    } == true,
                     rootWidthPx = rootWidthPx,
                     rootHeightPx = rootHeightPx,
                     rootBoundsInWindow = transitionRootBoundsInWindow,
+                    onCommitted = { committedTransition ->
+                        if (albumTransition?.key == committedTransition.key) {
+                            albumTransitionCommittedKey = committedTransition.key
+                        }
+                    },
                     onFinished = { finishedTransition ->
                         if (albumTransition?.key == finishedTransition.key) {
                             if (finishedTransition.mode == AlbumTransitionMode.Opening) {
-                                destination = GalleryDestination.AlbumDetail
+                                albumTransitionAwaitingDestinationKey = finishedTransition.key
+                                navigationViewModel.showAlbumDetail()
+                            } else {
+                                albumTransition = null
+                                albumTransitionCommittedKey = -1
                             }
-                            albumTransition = null
                         }
                     }
                 ) { overlayAlbum, _ ->
@@ -2015,6 +2335,8 @@ fun GalleryApp(
                 }
                 ReferenceMediaOpenOverlay(
                     transition = mediaOpenTransition,
+                    contentReady = mediaOpenTransition?.key == mediaOpenWarmupReadyKey,
+                    photoDecodeSize = viewerPhotoDecodeSize,
                     rootWidthPx = rootWidthPx,
                     rootHeightPx = rootHeightPx,
                     rootBoundsInWindow = transitionRootBoundsInWindow,
@@ -2072,6 +2394,7 @@ fun GalleryApp(
                     albumNameForMedia = { item -> albumNameById[item.albumId] },
                     autoplayVideos = settings.autoplayVideos,
                     startVideosMuted = settings.startVideosMuted,
+                    preferredPhotoDecodeSize = viewerPhotoDecodeSize,
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = this,
                     sharedBoundsTransform = GalleryMediaBoundsTransform,
@@ -2086,6 +2409,42 @@ fun GalleryApp(
                     predictiveBackDirectionProvider = {
                         if (predictiveBackSwipeEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
                     }
+                )
+            }
+
+            pendingLockConfirmation?.let { pending ->
+                val itemCount = pending.mediaItems.size
+                AlertDialog(
+                    onDismissRequest = { pendingLockConfirmation = null },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Filled.Lock,
+                            contentDescription = null
+                        )
+                    },
+                    title = {
+                        Text(if (itemCount == 1) "Lock this item?" else "Lock %1$,d items?".format(itemCount))
+                    },
+                    text = {
+                        Text(
+                            if (itemCount == 1) {
+                                "This item will move to Locked Media and will no longer appear in your gallery. Android may ask you to confirm removing the original."
+                            } else {
+                                "These items will move to Locked Media and will no longer appear in your gallery. Android may ask you to confirm removing the originals."
+                            }
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { confirmLockMedia(pending) }) {
+                            Text("Lock")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingLockConfirmation = null }) {
+                            Text("Cancel")
+                        }
+                    },
+                    shape = RoundedCornerShape(8.dp)
                 )
             }
 
@@ -2286,6 +2645,7 @@ private fun GalleryMenuScreen(
     onOpenHiddenItems: () -> Unit,
     onOpenLockedMedia: () -> Unit,
     onOpenRecentlyDeleted: () -> Unit,
+    onOpenDocuments: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenCleanup: () -> Unit
 ) {
@@ -2355,6 +2715,13 @@ private fun GalleryMenuScreen(
                     label = "Recently deleted",
                     description = "Photos removed in the last 30 days",
                     onClick = onOpenRecentlyDeleted,
+                    showDivider = true
+                )
+                GalleryMenuRow(
+                    icon = Icons.Filled.Description,
+                    label = "Document photos",
+                    description = "Find bills, menus, letters, forms and text-heavy pictures",
+                    onClick = onOpenDocuments,
                     showDivider = true
                 )
                 GalleryMenuRow(
@@ -2756,10 +3123,6 @@ private fun GalleryMenuRow(
         }
     }
 }
-private fun pinLockoutMessage(remainingMillis: Long): String {
-    val seconds = ((remainingMillis.coerceAtLeast(1L) + 999L) / 1000L).coerceAtLeast(1L)
-    return "Too many wrong PIN attempts. Try again in ${seconds}s."
-}
 private tailrec fun Context.findActivity(): Activity? {
     return when (this) {
         is Activity -> this
@@ -2914,9 +3277,12 @@ private fun mediaForAlbum(
 @Composable
 private fun PositionAwareAlbumTransitionOverlay(
     transition: AlbumTransitionSpec?,
+    contentReady: Boolean,
+    committed: Boolean,
     rootWidthPx: Float,
     rootHeightPx: Float,
     rootBoundsInWindow: Rect,
+    onCommitted: (AlbumTransitionSpec) -> Unit,
     onFinished: (AlbumTransitionSpec) -> Unit,
     content: @Composable (Album, Float) -> Unit
 ) {
@@ -2933,10 +3299,15 @@ private fun PositionAwareAlbumTransitionOverlay(
         }
         return
     }
+    if (transition.mode == AlbumTransitionMode.Opening && !committed) {
+        SideEffect { onCommitted(transition) }
+        return
+    }
 
     val progress = remember(transition.key) {
         Animatable(if (transition.mode == AlbumTransitionMode.Closing) 1f else 0f)
     }
+    val latestContentReady by rememberUpdatedState(contentReady)
 
     LaunchedEffect(transition.key) {
         val targetValue = if (transition.mode == AlbumTransitionMode.Closing) 0f else 1f
@@ -2951,24 +3322,35 @@ private fun PositionAwareAlbumTransitionOverlay(
                 easing = FastOutSlowInEasing
             )
         )
+        if (transition.mode == AlbumTransitionMode.Opening && !latestContentReady) {
+            withTimeoutOrNull(180L) {
+                snapshotFlow { latestContentReady }.first { it }
+            }
+        }
         onFinished(transition)
     }
 
+    val density = LocalDensity.current
     val expansion = progress.value.coerceIn(0f, 1f)
-    val startScaleX = (sourceBounds.width / rootWidthPx).coerceIn(0.01f, 1f)
-    val startScaleY = (sourceBounds.height / rootHeightPx).coerceIn(0.01f, 1f)
-    val pivotX = sourceBounds.center.x.coerceIn(0f, rootWidthPx)
-    val pivotY = sourceBounds.center.y.coerceIn(0f, rootHeightPx)
-    val pivotFractionX = (pivotX / rootWidthPx).coerceIn(0f, 1f)
-    val pivotFractionY = (pivotY / rootHeightPx).coerceIn(0f, 1f)
-    val startTranslationX = sourceBounds.left - (pivotX - pivotX * startScaleX)
-    val startTranslationY = sourceBounds.top - (pivotY - pivotY * startScaleY)
-    val scaleX = lerp(startScaleX, 1f, expansion)
-    val scaleY = lerp(startScaleY, 1f, expansion)
-    val translationX = lerp(startTranslationX, 0f, expansion)
-    val translationY = lerp(startTranslationY, 0f, expansion)
-    val cornerRadius = lerp(22f, 0f, expansion).dp
-    val scrimAlpha = GalleryMotion.smoothstep(0f, 0.72f, expansion) * 0.18f
+    val approachProgress = GalleryMotion.smoothstep(0f, 0.22f, expansion)
+    val revealProgress = GalleryMotion.smoothstep(0.18f, 1f, expansion)
+    val rootBounds = Rect(0f, 0f, rootWidthPx, rootHeightPx)
+    val towardCenter = Offset(
+        x = (rootBounds.center.x - sourceBounds.center.x) * 0.12f * approachProgress,
+        y = (rootBounds.center.y - sourceBounds.center.y) * 0.08f * approachProgress
+    )
+    val approachedBounds = scaledRectAroundCenter(
+        rect = sourceBounds,
+        scale = lerp(1f, 1.055f, approachProgress),
+        offset = towardCenter
+    )
+    val heroBounds = lerpRect(approachedBounds, rootBounds, revealProgress)
+    val heroWidth = heroBounds.width.coerceAtLeast(1f)
+    val heroHeight = heroBounds.height.coerceAtLeast(1f)
+    val detailAlpha = GalleryMotion.smoothstep(0.34f, 0.68f, expansion)
+    val coverAlpha = 1f - GalleryMotion.smoothstep(0.22f, 0.58f, expansion)
+    val cornerRadius = lerp(22f, 0f, revealProgress).dp
+    val scrimAlpha = GalleryMotion.smoothstep(0.04f, 0.70f, expansion) * 0.18f
 
     Box(
         modifier = Modifier
@@ -2977,19 +3359,46 @@ private fun PositionAwareAlbumTransitionOverlay(
     ) {
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .width(with(density) { heroWidth.toDp() })
+                .height(with(density) { heroHeight.toDp() })
                 .graphicsLayer {
-                    transformOrigin = TransformOrigin(pivotFractionX, pivotFractionY)
-                    this.scaleX = scaleX
-                    this.scaleY = scaleY
-                    this.translationX = translationX
-                    this.translationY = translationY
-                    shadowElevation = 18f * (1f - expansion)
+                    transformOrigin = TransformOrigin(0f, 0f)
+                    translationX = heroBounds.left
+                    translationY = heroBounds.top
+                    shadowElevation = with(density) {
+                        22.dp.toPx() * approachProgress * (1f - revealProgress)
+                    }
                     clip = true
                     shape = RoundedCornerShape(cornerRadius)
                 }
+                .background(MaterialTheme.colorScheme.background)
         ) {
-            content(transition.album, expansion)
+            Box(
+                modifier = Modifier
+                    .requiredWidth(with(density) { rootWidthPx.toDp() })
+                    .requiredHeight(with(density) { rootHeightPx.toDp() })
+                    .graphicsLayer {
+                        alpha = detailAlpha
+                        translationX = (heroWidth - rootWidthPx) / 2f
+                        translationY = (heroHeight - rootHeightPx) / 2f
+                    }
+            ) {
+                content(transition.album, expansion)
+            }
+            GalleryImage(
+                imageRes = transition.album.coverRes,
+                imageUri = transition.album.coverUri,
+                contentDescription = transition.album.name,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = coverAlpha },
+                cornerRadius = 0.dp,
+                contentScale = ContentScale.Crop,
+                thumbnailSize = 512,
+                loadQuality = ImageLoadQuality.Thumbnail,
+                backgroundColor = MaterialTheme.colorScheme.surfaceVariant,
+                cachedOnly = true
+            )
         }
     }
 }
@@ -3000,6 +3409,8 @@ private val ReferenceViewerCloseEasing = CubicBezierEasing(0.30f, 0f, 0.58f, 1f)
 @Composable
 private fun ReferenceMediaOpenOverlay(
     transition: MediaOpenTransitionSpec?,
+    contentReady: Boolean,
+    photoDecodeSize: Int,
     rootWidthPx: Float,
     rootHeightPx: Float,
     rootBoundsInWindow: Rect,
@@ -3019,8 +3430,12 @@ private fun ReferenceMediaOpenOverlay(
         return
     }
     val progress = remember(transition.key) { Animatable(0f) }
+    val latestContentReady by rememberUpdatedState(contentReady)
 
     LaunchedEffect(transition.key) {
+        if (!latestContentReady) {
+            snapshotFlow { latestContentReady }.first { it }
+        }
         progress.animateTo(
             targetValue = 1f,
             animationSpec = tween(
@@ -3031,13 +3446,27 @@ private fun ReferenceMediaOpenOverlay(
         onFinished(transition)
     }
 
+    val heroThumbnailSize = if (
+        transition.actionMode == ViewerActionMode.Locked || transition.mediaItem.isVideo
+    ) 512 else photoDecodeSize
+    val decodedHeroBitmap = transition.transitionMediaItem.contentUri?.let { uri ->
+        ThumbnailMemoryCache.get(ThumbnailMemoryCache.key(uri, heroThumbnailSize))
+    }
+    val geometryMediaItem = decodedHeroBitmap?.let { bitmap ->
+        transition.mediaItem.copy(width = bitmap.width, height = bitmap.height)
+    } ?: transition.mediaItem
     val expansion = progress.value.coerceIn(0f, 1f)
     ReferenceMediaHeroFrame(
         mediaItem = transition.transitionMediaItem,
         startBounds = tileBounds,
-        endBounds = fittedMediaRect(rootWidthPx, rootHeightPx, transition.mediaItem),
+        endBounds = fittedMediaRect(rootWidthPx, rootHeightPx, geometryMediaItem),
         progress = expansion,
-        backdropAlpha = GalleryMotion.smoothstep(0f, 0.82f, expansion)
+        backdropAlpha = GalleryMotion.smoothstep(0f, 0.82f, expansion),
+        thumbnailSize = heroThumbnailSize,
+        loadQuality = if (
+            transition.actionMode == ViewerActionMode.Locked || transition.mediaItem.isVideo
+        ) ImageLoadQuality.Thumbnail else ImageLoadQuality.HighQuality,
+        cachedOnly = false
     )
 }
 
@@ -3097,7 +3526,10 @@ private fun ReferenceMediaHeroFrame(
     startBounds: Rect,
     endBounds: Rect,
     progress: Float,
-    backdropAlpha: Float
+    backdropAlpha: Float,
+    thumbnailSize: Int = 512,
+    loadQuality: ImageLoadQuality = ImageLoadQuality.Thumbnail,
+    cachedOnly: Boolean = true
 ) {
     val density = LocalDensity.current
     val fraction = progress.coerceIn(0f, 1f)
@@ -3133,9 +3565,10 @@ private fun ReferenceMediaHeroFrame(
                 modifier = Modifier.fillMaxSize(),
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Crop,
-                thumbnailSize = 512,
-                loadQuality = ImageLoadQuality.Thumbnail,
-                backgroundColor = Color.Black
+                thumbnailSize = thumbnailSize,
+                loadQuality = loadQuality,
+                backgroundColor = Color.Black,
+                cachedOnly = cachedOnly
             )
         }
     }

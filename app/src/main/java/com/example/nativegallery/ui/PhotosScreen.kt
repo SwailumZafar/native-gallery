@@ -49,7 +49,6 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -77,6 +76,7 @@ import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.GalleryFastScroller
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.PremiumDropdownMenu
+import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
 import com.example.nativegallery.ui.components.PremiumOverflowButton
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
@@ -205,7 +205,7 @@ fun PhotosScreen(
                 start = 0.dp,
                 top = 0.dp,
                 end = 0.dp,
-                bottom = contentPadding.calculateBottomPadding() + if (isSelectionMode) 178.dp else 34.dp
+                bottom = contentPadding.calculateBottomPadding() + if (isSelectionMode) 132.dp else 34.dp
             )
         ) {
             item(key = "pictures-header", contentType = "pictures-header") {
@@ -271,7 +271,6 @@ fun PhotosScreen(
             totalVisibleCount = mediaItems.size,
             onClear = onSelectionClear,
             onSelectAll = onSelectAllVisible,
-            contentPadding = contentPadding,
             onShare = onShareSelected,
             onHide = onHideSelected,
             onDelete = onDeleteSelected,
@@ -310,76 +309,83 @@ private fun PicturesHeader(
             .padding(start = 10.dp, top = topPadding, end = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            text = if (selectedCount > 0) "%1$,d selected".format(selectedCount) else "Photos",
-            modifier = Modifier.graphicsLayer {
-                alpha = titleAlpha
-                transformOrigin = TransformOrigin(0.5f, 0f)
-                scaleX = titleScale
-                scaleY = titleScale
-            },
-            style = MaterialTheme.typography.headlineLarge.copy(
-                fontSize = 46.sp,
-                lineHeight = 52.sp,
-                fontWeight = FontWeight.SemiBold
-            ),
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Spacer(Modifier.height(titleSpacing))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
-            Row(
+        if (selectedCount > 0) {
+            Text(
+                text = "%1$,d selected".format(selectedCount),
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Spacer(Modifier.height(18.dp))
+        } else {
+            Text(
+                text = "Photos",
                 modifier = Modifier.graphicsLayer {
-                    alpha = interpolate(1f, 0.9f, progress)
-                    translationY = -8f * progress
+                    alpha = titleAlpha
+                    transformOrigin = TransformOrigin(0.5f, 0f)
+                    scaleX = titleScale
+                    scaleY = titleScale
                 },
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontSize = 46.sp,
+                    lineHeight = 52.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Spacer(Modifier.height(titleSpacing))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
             ) {
-                SearchCircle()
-                Box {
-                    PremiumOverflowButton(
-                        expanded = menuExpanded,
-                        contentDescription = "Photo options",
-                        onClick = { menuExpanded = true }
-                    )
-                    PremiumDropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Refresh") },
-                            leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                            onClick = {
-                                menuExpanded = false
-                                onRefresh()
-                            }
+                Row(
+                    modifier = Modifier.graphicsLayer {
+                        alpha = interpolate(1f, 0.9f, progress)
+                        translationY = -8f * progress
+                    },
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SearchCircle()
+                    Box {
+                        PremiumOverflowButton(
+                            expanded = menuExpanded,
+                            contentDescription = "Photo options",
+                            onClick = { menuExpanded = true }
                         )
-                        DropdownMenuItem(
-                            text = { Text("Select all") },
-                            leadingIcon = { Icon(Icons.Filled.SelectAll, contentDescription = null) },
-                            enabled = totalVisibleCount > 0 && selectedCount < totalVisibleCount,
-                            onClick = {
-                                menuExpanded = false
-                                onSelectAllVisible()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Settings") },
-                            leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                            onClick = {
-                                menuExpanded = false
-                                onOpenSettings()
-                            }
-                        )
+                        PremiumDropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false }
+                        ) {
+                            PremiumDropdownMenuItem(
+                                text = { Text("Refresh") },
+                                leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onRefresh()
+                                }
+                            )
+                            PremiumDropdownMenuItem(
+                                text = { Text("Select all") },
+                                leadingIcon = { Icon(Icons.Filled.SelectAll, contentDescription = null) },
+                                enabled = totalVisibleCount > 0,
+                                onClick = {
+                                    menuExpanded = false
+                                    onSelectAllVisible()
+                                }
+                            )
+                            PremiumDropdownMenuItem(
+                                text = { Text("Settings") },
+                                leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onOpenSettings()
+                                }
+                            )
+                        }
                     }
                 }
             }
-        }
-        Spacer(Modifier.height(14.dp))
-        if (selectedCount == 0) {
+            Spacer(Modifier.height(14.dp))
             SearchPill(
                 placeholder = "Search photos and videos",
                 query = searchQuery,
@@ -420,7 +426,6 @@ private fun SelectionBottomActionBar(
     totalVisibleCount: Int,
     onClear: () -> Unit,
     onSelectAll: () -> Unit,
-    contentPadding: PaddingValues,
     onShare: () -> Unit,
     onHide: () -> Unit,
     onDelete: () -> Unit,
@@ -436,13 +441,9 @@ private fun SelectionBottomActionBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(
-                    start = 18.dp,
-                    end = 18.dp,
-                    bottom = contentPadding.calculateBottomPadding() + 8.dp
-                ),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-            shape = RoundedCornerShape(36.dp),
+                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+            shape = RoundedCornerShape(8.dp),
             shadowElevation = 14.dp
         ) {
             Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
@@ -453,8 +454,7 @@ private fun SelectionBottomActionBar(
                     IconButton(onClick = onClear) {
                         Icon(
                             imageVector = Icons.Filled.Close,
-                            contentDescription = "Clear selection",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            contentDescription = "Cancel selection"
                         )
                     }
                     Text(
@@ -463,11 +463,14 @@ private fun SelectionBottomActionBar(
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    TextButton(
+                    IconButton(
                         enabled = selectedCount < totalVisibleCount,
                         onClick = onSelectAll
                     ) {
-                        Text("Select all")
+                        Icon(
+                            imageVector = Icons.Filled.SelectAll,
+                            contentDescription = "Select all"
+                        )
                     }
                 }
                 Row(modifier = Modifier.fillMaxWidth()) {

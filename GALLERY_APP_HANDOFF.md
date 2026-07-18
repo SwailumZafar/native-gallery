@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-07-17
+Last updated: 2026-07-19
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -31,22 +31,47 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-15 slice: added two passing Recently Deleted state tests for batch restore and permanent-delete behavior.
   - 2026-07-15 slice: added four passing search-index tests covering ordering, metadata, album propagation, and empty results.
   - 2026-07-15 slice: added eight tests covering legacy/API 33/API 34 permission policy, limited access, pending/trashed/path visibility, lock filtering, PIN lockout transitions, and album sorting.
+  - 2026-07-17 slice: added four media-format policy tests covering broad video/image discovery, MKV fallback classification, and AVIF image inference.
+  - 2026-07-17 slice: added eight navigation/refresh policy tests covering album identity, exact overlay/editor return locations, unchanged-page skips, latest-page additions/deletions, and resume staleness.
+  - 2026-07-17 slice: added pager-selection synchronization and Locked Media biometric-entry policy regression tests.
+  - 2026-07-17 slice: added stable viewer-filmstrip window and Locked Media restore MIME/name policy tests; the suite now has 49 passing tests.
+  - 2026-07-17 slice: added PBKDF2 derivation, readable restore, app-write refresh suppression, and Locked Media security policy coverage; the suite now has 54 passing tests.
+  - 2026-07-18 slice: added locked restore-path/traversal, orientation-aware dimension, and video side-gesture intent coverage; the suite reached 58 passing tests.
+  - 2026-07-19 slice: added eight document-photo classifier tests covering bills, menus, forms/letters, transcripts/notes, general text pages, short signs, social-app chrome, and whole-word category matching; the suite now has 66 passing tests.
+  - 2026-07-19 follow-up: added MKV seek acknowledgement coverage; the suite now has 67 passing tests.
 - [ ] Gradually move screen state and business logic out of `GalleryApp.kt` into ViewModels and testable state holders.
   - 2026-07-15 slice: extracted viewer delete selection and Photos lazy-list indexing into `GalleryLogic.kt`.
   - 2026-07-15 slice: extracted normalized media/album search documents and matching into `GallerySearchIndex.kt`.
   - 2026-07-15 slice: added `GalleryMediaViewModel`, lifecycle-aware `StateFlow` collection, and ViewModel-owned initial/quick/full/observer MediaStore refresh state. Navigation and feature-specific UI state remain intentionally incremental.
+  - 2026-07-17 slice: extracted tab, destination, selected-album, overlay-return, and editor-return state into GalleryNavigationViewModel; GalleryApp now emits navigation events instead of mutating those values directly.
+  - 2026-07-17 slice: made every settled pager page synchronize the selected navigation tab, removing the stale captured-tab path that could leave Photos visible while Albums stayed selected.
+  - 2026-07-17 slice: extracted PIN creation, unlock, lockout messaging, stale-operation cancellation, biometric result state, and auth progress into LockedMediaSecurityViewModel.
+  - 2026-07-19 slice: added DocumentPhotoRepository and DocumentPhotosViewModel so cancellable OCR indexing, cache validation, scan progress, and rescan state stay outside GalleryApp composition state.
 - [ ] Continue reducing unnecessary MediaStore reloads and background I/O.
   - 2026-07-15 slice: restore/delete-forever batches now persist Recently Deleted state once per action instead of once per media item.
   - 2026-07-15 slice: observer bursts now coalesce to one newest-page query and one full reconciliation; repeated quick refreshes cancel before queueing duplicate work.
+  - 2026-07-17 slice: removed the redundant post-permission quick reload, added freshness-aware resume reconciliation, moved newest-page merge work to Dispatchers.Default, and skipped unchanged snapshot rebuilds and StateFlow publications.
+  - 2026-07-17 slice: successful locked-original removal now requests only a newest-page refresh instead of forcing an immediate full-library scan; observer reconciliation remains in place.
+  - 2026-07-17 slice: app-owned MediaStore writes suppress duplicate observer full scans, Recently Deleted queries trashed rows only while visible, and direct fallback deletes plus album moves run off the main thread.
+  - 2026-07-18 slice: Locked Media now loads one background inventory/preview snapshot, avoids per-item filesystem checks in composition, batches legacy preview migration into one refresh, uses per-file provider locks, and keeps vault preference/restore/delete I/O off the main thread.
+  - 2026-07-19 slice: document-photo OCR runs sequentially off the UI thread, caches positive and negative results by media fingerprint, publishes progress in batches, and cancels while the screen/viewer is not active.
 - [x] Move large-library search indexing and expensive interaction lookup off the main UI path. Completed 2026-07-15.
   - 2026-07-15 slice: search indexing and query execution now run on `Dispatchers.Default`; remaining expensive interaction lookups stay queued.
   - 2026-07-15 slice: encrypted-vault inventory reads now run on `Dispatchers.IO` instead of during composition.
 - [x] Improve thumbnail coordination, cache bookkeeping, and legacy video-thumbnail handling. Completed 2026-07-15 with bounded per-key lock/index cleanup, throttled disk access writes, sampled legacy image decode, and legacy video frame extraction.
-- [x] Migrate video playback to Jetpack Media3 when video work is in scope. Completed 2026-07-15 with API-35-compatible Media3 1.8.1 and the existing custom controls preserved.
-- [ ] Harden Locked Folder PIN derivation, key access, encrypted videos, and original-media deletion guarantees.
-- [ ] Complete predictive back and adaptive tablet, foldable, and landscape layouts as those surfaces are touched.
+- [x] Migrate video playback to Jetpack Media3 when video work is in scope. Completed 2026-07-15; upgraded to Media3 1.10.1 with compileSdk 36 on 2026-07-19 to pick up the upstream Matroska multi-track cue-seeking fix while preserving the custom controls.
+- [x] Harden Locked Folder PIN derivation, key access, encrypted videos, and original-media deletion guarantees. Completed 2026-07-17.
+  - 2026-07-17 slice: scoped automatic biometric authentication to Locked Media entry, canceled active prompts on exit or replacement, and ignored callbacks from stale prompt sessions.
+  - 2026-07-17 slice: vault URIs now preserve broad image/video MIME types, encrypted media decrypts once into an app-private screen-session cache that is reused by thumbnails and Media3 then cleared on exit/process start, locked prefetch is bounded to five grid rows, and encrypted-only restore cannot delete the sole protected copy.
+  - 2026-07-17 slice: new locks create small encrypted JPEG preview sidecars, thumbnail requests use those sidecars instead of decrypting full photos/videos, bulk Unhide restores missing originals into MediaStore, and vault cleanup occurs only after restore succeeds.
+  - 2026-07-17 slice: older locked entries migrate encrypted preview sidecars sequentially on a background dispatcher; the grid keeps placeholders until each preview is ready and clears temporary decrypted migration files with the vault session.
+  - 2026-07-17 slice: PINs now use versioned 210,000-iteration PBKDF2-HMAC-SHA256 credentials with constant-time verification and transparent legacy migration; new vault keys are explicit 256-bit device-unlocked Keystore keys and missing keys fail closed over existing encrypted files.
+  - 2026-07-17 slice: restored photos/videos must be non-empty, readable, and successfully published in MediaStore before the encrypted vault copy can be removed.
+  - 2026-07-17 slice: cancelling Android original-removal approval rolls items with readable originals back out of Locked Media instead of presenting them as protected; encrypted copies are retained when the original is actually gone.
+- [x] Complete predictive back and adaptive tablet and landscape layouts. Completed 2026-07-19.
   - 2026-07-15 slice: added progress-aware predictive back for viewer and secondary destinations, native back-to-home from Photos, nested crop cancellation, and a tested centralized back router.
-  - 2026-07-15 slice: added current-window adaptive classes, a navigation rail from 600 dp, denser media and album grids, compact landscape editor/menu behavior, and four policy tests. Separating-hinge-aware dual-pane placement remains.
+  - 2026-07-15 slice: added current-window adaptive classes, a navigation rail from 600 dp, denser media and album grids, compact landscape editor/menu behavior, and four policy tests.
+  - 2026-07-19 slice: Document photos uses centralized back routing and adaptive content width, and the application manifest enables OnBackInvoked callbacks so predictive back is active on Android 13+.
 - [ ] Add Macrobenchmark coverage and a Baseline Profile after navigation and media flows stabilize.
 - [ ] Verify release shrinking, bundle size, and final Play configuration near feature freeze.
   - 2026-07-15 slice: R8 minification and resource shrinking pass; unsigned release APK is 3,447,046 bytes. Signing, final application ID, version policy, and AAB validation remain.
@@ -100,6 +125,275 @@ project workflows. Machine-local/generated files such as local.properties,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
 
+## 2026-07-19 MKV Scrubbing, Repeated-Video Performance, and Albums Overflow Follow-up
+
+Completed 2026-07-19:
+
+- Upgraded Media3 from 1.8.1 to 1.10.1 and compileSdk from 35 to 36. Media3 1.9.0 fixed inaccurate Matroska seeking when files contain multiple tracks by associating cue points with their respective tracks; 1.10.1 carries that fix.
+- MKV playback now requests the closest synchronization point, rejects the false nonzero-to-zero seek discontinuity that caused the scrubber to snap back to the beginning, retries one rejected seek, and keeps polling from replacing a pending user seek.
+- Added a focused regression test for the MKV false-zero response and valid nearby synchronization-point acknowledgement.
+- Fixed the repeated-video slowdown at its three local pressure points: viewer posters now reuse the existing 512 px frame cache instead of decoding 1440 px posters into the shared gallery cache; each player buffers at most 15 seconds with no back buffer; and PlayerView/video surfaces are explicitly detached before ExoPlayer release.
+- Removed the expanded primary/purple container tint from the shared three-dot overflow button. The Albums overflow keeps the existing icon animation but remains transparent when its menu is open.
+
+Reason for the slowdown:
+
+- Opening 5-6 videos repeatedly inserted large 1440 px posters into the same bounded memory cache used by gallery thumbnails, evicting normal grid thumbnails and forcing re-decodes/garbage collection.
+- Media3's default playback buffer can retain much more local video data than this gallery needs, and the PlayerView surface was not explicitly detached as each viewer player was disposed.
+- The combined cache churn, decoder/buffer pressure, and delayed surface cleanup made later gallery frames jittery even though only one video page was active at a time.
+
+Verification:
+
+- `app:testDebugUnitTest`: BUILD SUCCESSFUL, 67 tests, 0 failures, 0 errors
+- `app:lintDebug`: BUILD SUCCESSFUL
+- `app:assembleDebug`: BUILD SUCCESSFUL
+- `git diff --check`: clean except expected CRLF conversion notices
+- Debug APK: `F:/App/Gallery/app/build/outputs/apk/debug/app-debug.apk`
+- Size: 81,461,630 bytes
+- Last write: 2026-07-19 04:37:25 Asia/Karachi
+- SHA-256: `4F3E326302ACA604DAEA08AF62A0536018E5C5A4E20EE64ACB42FE0C6AD5A5F1`
+
+The user elected to install and verify this APK themselves. Installation and live-device verification were intentionally not performed in this pass. PowerShell installation command:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
+```
+
+Device checks still required: scrub at several positions in a representative multi-track MKV, then open/play/exit at least six videos and confirm Photos/Albums scrolling remains smooth.
+## 2026-07-19 Document Photos, Locked Media, Viewer, and Device Validation Pass
+
+Completed 2026-07-19:
+
+- Rebuilt every app overflow menu around a modern rounded Material 3 surface. Rows remain neutral, text uses the normal surface color, and only leading/trailing icons receive the active theme color.
+- Replaced the PDF/Office file picker with Document photos: a dedicated adaptive gallery screen that finds text-heavy pictures, searches recognized text, filters Bills & receipts, Menus, Forms & letters, Notes & transcripts, and Other, and opens results in the normal viewer.
+- Bundled on-device Latin text recognition scans only visible normal photos, sequentially and off the UI thread. Positive and negative results are fingerprinted, written to a WAL-enabled SQLite index in batches, resumed after leaving/viewing, and invalidated when media or classifier policy changes. The migration clears the removed file-browser state and releases its persisted read grants.
+- Locked Media inventory now loads once as a background snapshot instead of performing full vault and preview filesystem checks during composition. Legacy preview migration is sequential, off-main, and publishes one refresh; provider decrypt work is serialized per file instead of globally.
+- Locked Media Delete now performs an app-owned soft delete: the encrypted copy remains in the vault and the item appears in Recently Deleted. Restore from Recently Deleted returns it to Locked Media; Delete forever alone removes the encrypted copy.
+- Unlock restores to the normalized original relative folder when that folder still exists. Only a missing/invalid original folder falls back to Pictures/Native Gallery Restored or Movies/Native Gallery Restored, while the original capture timestamp is retained.
+- Locked viewer/grid paths use encrypted preview sidecars while a full item decrypts, memoize grid rows, and avoid immediate full MediaStore scans after lock/unlock state changes.
+- Video side brightness/volume gestures now use narrower edge zones, require 2.25x touch slop with clear vertical-axis dominance, yield immediately to horizontal pager intent, and adjust at a gentler rate.
+- MKV/video thumbnails now fall back from the platform service to bounded retriever/codec extraction. Files that still cannot expose a frame use a themed nonblank video tile, and the first real frame rendered by Media3 is persisted into the 384/512 px memory and disk caches for future grid/album previews.
+- Video duration starts from MediaStore metadata while Media3 prepares, pending seeks cannot be overwritten by position polling, and completed seek discontinuities become the new authoritative position.
+- Viewer photo transitions now wait for the exact warmed bitmap and compute their fitted geometry from decoded dimensions. MediaStore width/height are normalized for 90/270-degree orientation, preventing the brief half-frame/aspect correction seen on rotated photos.
+- Added manifest opt-in for OnBackInvoked callbacks after physical-device logs showed the existing predictive-back code was not enabled.
+
+Physical-device validation (Realme RMX3852, Android 16):
+
+- Installed the debug APK over the existing app without clearing app data.
+- Modern overflow menu rendered with neutral rows and theme-colored icons.
+- Document photos rendered and began progressive indexing across 15,081 eligible photos. It found receipts, forms, transcripts, and other text-heavy pictures immediately; searching recognized text for receipt returned 18 current matches, and opening a result used the normal viewer.
+- The scan reached 380 items before leaving, resumed from the SQLite cache at 426 after re-entry, paused at 0% app CPU while a result was viewed, and resumed at 635 after returning. Legacy document preferences were empty and the SQLite/WAL files were active. A longer first-index run was stopped at the user's direction; the cached partial index remains resumable.
+- Rapid Photos grid stress (13 synthetic swipes): 711 frames, 3.38% current jank, 10 ms median, 18 ms 95th percentile, 24 ms 99th percentile, and zero slow bitmap uploads.
+- Horizontal video paging from inside the volume edge zone changed to the next video while media volume remained 14/16 and no volume overlay appeared.
+- Added two photos to Locked Media through Android's scoped-storage approval, unlocked with the app PIN, opened and repeatedly paged the encrypted items, soft-deleted one item, observed Recently Deleted change to exactly one item, restored it, observed Recently Deleted return to zero, and confirmed Locked Media returned to two. Nothing was permanently deleted.
+- Locked encrypted-image stress completed without a crash or slow bitmap upload. The debug/synthetic run was heavier than the normal grid (29 ms 95th percentile during eight forced page swaps), so encrypted viewer startup remains a future benchmark target rather than being represented as release-profile data.
+- MediaStore contains 221 MKV entries. A real VP9/MKV with missing MediaStore duration played at its correct 3:19 duration; Android's thumbnail service and MediaMetadataRetriever both returned no frame for four files, leading to the nonblank placeholder plus Media3 first-frame cache hardening above.
+
+Verification:
+
+- app:testDebugUnitTest: BUILD SUCCESSFUL, 66 tests, 0 failures
+- app:lintDebug: BUILD SUCCESSFUL
+- app:assembleDebug: BUILD SUCCESSFUL
+- git diff --check: clean except expected CRLF conversion notices
+- Debug APK: F:/App/Gallery/app/build/outputs/apk/debug/app-debug.apk
+- Size: 70,755,779 bytes
+- Last write: 2026-07-19 02:05:29 Asia/Karachi
+- SHA-256: 10D2D564B9C951C7AAE043747BF3901A94DD7B5982BFBDA40DA8BFC5715E4857
+
+The final APK was installed over the existing app without clearing app data. Locked Media still contained both protected items, PIN 2825 unlocked them, one item opened in the viewer, and logcat contained no fatal exception, ANR, SQLite failure, or out-of-memory event.
+
+## 2026-07-17 Security, Refresh, and State Extraction Pass
+
+Completed 2026-07-17:
+
+- Replaced the fast salted SHA-256 PIN hash with versioned PBKDF2-HMAC-SHA256 at 210,000 iterations, random 128-bit salts, constant-time comparison, durable credential/lockout commits, and automatic migration after the first successful legacy PIN unlock.
+- PIN creation and verification now run away from the main thread. Authentication controls disable while work is active, and stale operations cannot unlock Locked Media after the user leaves.
+- New vault keys explicitly use 256-bit AES-GCM and require the device to be unlocked. If encrypted vault files exist but the Keystore key is unavailable, the repository refuses to generate a replacement key that would silently strand those files.
+- Locked Media restore now verifies that the output is readable and non-empty and that pending MediaStore publication succeeds. Failure removes the partial output and preserves the encrypted original.
+- Cancelling Android's original-removal approval now rolls readable originals back out of Locked Media; only items whose originals are actually gone remain protected in the vault.
+- App-owned MediaStore operations no longer cause an observer full scan followed by a second completion full scan. Observer bursts still fully reconcile external changes.
+- MediaStore trashed rows are loaded only while Recently Deleted is visible, and direct fallback deletion plus move-to-album operations now run on Dispatchers.IO.
+- Extracted Locked Media authentication state and business logic from GalleryApp.kt into LockedMediaSecurityViewModel, with focused validation and lockout policy tests.
+
+Verification:
+
+- app:testDebugUnitTest: BUILD SUCCESSFUL, 54 tests, 0 failures
+- app:lintDebug: BUILD SUCCESSFUL
+- app:assembleDebug: BUILD SUCCESSFUL
+- git diff --check: clean except existing CRLF conversion notices
+- Debug APK: F:/App/Gallery/app/build/outputs/apk/debug/app-debug.apk
+- Size: 70,755,779 bytes
+- Last write: 2026-07-17 23:11:44
+- SHA-256: 09B4A70F0DA046430A53CBD8A75D167B874B89E17846921EF8A832590ED60230
+
+Physical-device validation remains user-owned for this pass.
+
+## 2026-07-17 Stable Viewer and Cross-Screen Selection Pass
+
+Completed 2026-07-17:
+
+- The viewer filmstrip is now a fixed seven-item window instead of a LazyRow that scrolls itself after the first layout. It appears in its final position immediately and prewarms the exact 384 px filmstrip entries.
+- Adjacent photo pager pages use the same screen-sized high-quality cache key as the active page. Swiping no longer switches a page from a 1440 px thumbnail decode to a separate active decode, removing the blur/blink/reset path after the first photo.
+- Photos selection has Cancel and Select all back in the bottom surface as aligned Close/SelectAll icons, with Share/Lock/Delete below them. Album Detail uses the same SelectAll icon treatment.
+- Shared three-dot menus now use Material 3's actual container-color parameter with the app primary-container theme color and a matching primary border.
+- Album Detail grids, opening previews, skeletons, and live media now use the Photos grid's tight 1 dp spacing, 8 dp side inset, and square-corner full tiles so the destination no longer changes from rounded blocks after opening.
+- Locked Media now supports long-press selection, drag-across add/remove selection, Select all, Cancel, and bulk Unhide.
+- Every newly locked item stores a small encrypted JPEG preview beside the encrypted original. Grid and thumbnail requests decrypt only this preview; full encrypted media is opened only for viewer playback. Existing locked entries migrate these previews one at a time in the background while placeholders keep the grid responsive.
+- Locked Media no longer launches a 20-item/full-media prefetch on unlock, and successful original removal requests a newest-page refresh instead of an immediate full-library rescan.
+- Unhide is now functional for encrypted-only items: if Android already removed the original, the vault decrypts it into Pictures/Native Gallery Restored or Movies/Native Gallery Restored, then removes the encrypted vault copy only after MediaStore restore succeeds.
+- Recently Deleted no longer opens a thumbnail action popup on long press. It now supports long-press selection, drag-across selection, Select all, Restore, and Delete forever with plain-text app confirmations.
+- Android's final MediaStore remove/delete approval remains OS-owned and can include Android-provided thumbnails/text. It cannot be removed for non-app-owned media without leaving originals accessible to other gallery apps, so the privacy guarantee is preserved.
+- Related hardening: locked-original completion no longer forces an expensive full-library refresh, and vault deletion is conditional on successful original reuse or restore.
+
+Verification:
+
+- app:testDebugUnitTest: BUILD SUCCESSFUL, 49 tests, 0 failures
+- app:lintDebug: BUILD SUCCESSFUL
+- app:assembleDebug: BUILD SUCCESSFUL
+- git diff --check: clean except existing CRLF conversion notices
+- Debug APK: F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+- Size: 70,755,779 bytes
+- Last write: 2026-07-17 21:05:29
+- SHA-256: 22F19290D6AAE2F3177D60BA0E10AFDC0267411D087BCDB350D293D26FA64158
+
+Physical-device validation remains user-owned for this pass.
+
+## 2026-07-17 Viewer, Selection, and Vault Playback Pass
+
+Completed 2026-07-17:
+
+- The active photo viewer no longer starts from a nearest low-resolution cache entry. It waits for the exact screen-size frame before transition handoff and renders that exact cache entry immediately, removing the visible blur/sharpen adjustment.
+- The viewer filmstrip now appears in place with fade-only chrome and uses an immediate centered scroll instead of visibly sliding into position.
+- Album Detail supports drag-across add/remove selection while selection mode is active.
+- Album transition preview typography, icon sizing, title placement, and item summary now match the mounted Album Detail header, removing the one-frame small-title adjustment.
+- Photos selection now places Close/count/Select all in the top header and keeps only Share/Lock/Delete in the bottom action surface. The main bottom navigation/rail disappears during selection and the action surface is anchored to the system-navigation inset instead of the gallery bottom bar.
+- Shared overflow menus now use a stable 8 dp rectangular shape without scale distortion.
+- Locking first shows a clean app-owned confirmation with no thumbnails and clear Locked Media wording. Android's later MediaStore removal approval is OS-owned and cannot be restyled; it remains necessary to remove originals safely under scoped storage.
+- Locked Media grid thumbnails and videos now read the encrypted vault URI with the original MIME type. The provider reuses one decrypted app-private session file per item instead of decrypting on every thumbnail/player request, and the cache clears on Locked Media exit or provider process start.
+- Locked Media preload dropped from 120 items at two sizes to at most five visible grid rows at one size, and the per-thumbnail Show overlay was removed.
+- Related hardening: attempting to restore an encrypted-only item no longer deletes its only encrypted copy; it remains protected until a real restore/export path is implemented.
+- Added focused MIME fallback and bounded Locked Media prefetch tests.
+
+Verification:
+
+- app:testDebugUnitTest: BUILD SUCCESSFUL, 47 tests, 0 failures
+- app:lintDebug: BUILD SUCCESSFUL
+- app:assembleDebug: BUILD SUCCESSFUL
+- git diff --check: clean except existing CRLF conversion notices
+- Debug APK: F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+- Size: 70,755,779 bytes
+- Last write: 2026-07-17 05:45:45
+- SHA-256: AA8940DBDFB599320F3165B98E13D426FF84A5A622D7258F741E242D5114915A
+
+Physical-device validation remains user-owned for this pass.
+
+## 2026-07-17 Navigation, Album Selection, and Locked Media Stabilization
+
+Completed 2026-07-17:
+
+- The settled HorizontalPager page now always synchronizes GalleryNavigationViewModel, fixing the state path that could leave Photos visible while the bottom bar still selected Albums.
+- Locked Media automatic biometric authentication now runs only when that screen enters. Leaving cancels the active CancellationSignal before navigation, replacing a prompt cancels the old session, and callbacks from stale or exited sessions are ignored.
+- Album Detail now exposes Select all in its overflow menu and its selection toolbar presents the same visible Share, Lock, and Delete actions as Photos.
+- Album opening keeps the tapped source tile visible until the transition overlay has committed, then hides both atomically. The redundant destination fade around Album Detail was removed, and the fully-open overlay now remains until Album Detail is actually composed, preventing either end of the handoff from exposing a one-frame flash.
+- Related hardening: Locked Media authentication now has an explicit request lifecycle instead of allowing biometric callbacks to outlive their destination.
+- Added regression tests for settled pager selection and automatic biometric eligibility.
+
+Verification:
+
+- app:testDebugUnitTest: BUILD SUCCESSFUL, 45 tests, 0 failures
+- app:lintDebug: BUILD SUCCESSFUL
+- app:assembleDebug: BUILD SUCCESSFUL
+- git diff --check: clean except existing CRLF conversion notices
+- Debug APK: F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+- Size: 70,755,779 bytes
+- Last write: 2026-07-17 05:01:51
+- SHA-256: A0DFB24A367C23C95CF2CAB08C6788A2E930B3722DFA87ED33F6E6F0B80B7A28
+
+Physical-device validation remains user-owned for this pass.
+## 2026-07-17 Navigation State and Refresh Efficiency Pass
+
+Completed 2026-07-17:
+
+- Added GalleryNavigationViewModel as the owner of the main tab, destination, selected album, overlay return location, and editor return location.
+- GalleryApp now collects immutable navigation StateFlow state and sends explicit navigation events for tab changes, album open/close/cancel, menu overlays, locked-media setup, and photo editor entry/return.
+- Added focused navigation tests for album identity preservation and exact overlay/editor return behavior.
+- Removed the redundant delayed quick refresh that ran after media-access changes; GalleryMediaViewModel already owns the required access refresh.
+- App resume now performs one newest-page query and runs a full reconciliation only when that page changed or the last full scan is at least five minutes old. Content-observer events still retain a delayed full scan so edits outside the newest page are discovered.
+- Unchanged newest pages return the cached snapshot without rebuilding album/media lists, merge work runs on Dispatchers.Default, and equal state is not republished to Compose.
+- The refresh policy compares the ordered newest-page slice, including a regression test for deletion of a newest item.
+
+Verification:
+
+- app:testDebugUnitTest: BUILD SUCCESSFUL, 43 tests, 0 failures
+- app:lintDebug: BUILD SUCCESSFUL
+- app:assembleDebug: BUILD SUCCESSFUL
+- git diff --check: clean except existing CRLF conversion notices
+- Debug APK: F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+- Size: 70,755,779 bytes
+- Last write: 2026-07-17 03:47:25
+- SHA-256: 0214A2301E80890159FAB7A1C1A0141C3BF9BDA3DC67D0D9EE54B11D9AFCF20A
+
+Physical-device validation was intentionally left to the user for this pass.
+## 2026-07-17 Album, Viewer, Navigation, and Media Ordering Pass
+
+Completed 2026-07-17:
+
+- Replaced the album transition's independent horizontal/vertical scaling with a two-stage whole-tile motion: the tapped tile first lifts slightly toward the screen center, then expands as a clipped container. Closing reverses the same path and settles the intact tile back into place, removing the squeezed/compressed look and the big-tile "book opening" effect.
+- Album opening now prewarms and pins the first 24 detail thumbnails at the same 384 px size used by the transition preview and interactive grid. The transition can hold its final frame briefly for that warmup, preventing the real grid from appearing with delayed thumbnails after the overlay clears.
+- Viewer opening now prewarms the selected photo at the exact device display decode size, pins it, and holds the final hero frame briefly until it is ready. The moving hero uses a stable cached bitmap rather than visibly upgrading resolution during the animation; the full viewer consumes the same exact-size cache entry.
+- Added smooth directional fade/slide transitions for Recently Deleted, Hidden Items, Locked Media, Cleanup, album creation, the editor, and their return paths. Album Detail keeps its dedicated tile transition.
+- Normalized Recently Deleted to the app's compact header typography, simplified the retention message, aligned item count and batch actions, and tightened the empty state.
+- Deleted FakeGalleryRepository and removed the production fallback to demo media. A fresh install now presents an empty real-media state, automatically requests gallery access once, and then shows only MediaStore content.
+- Added a canonical media timestamp that prefers capture time, then modified time, then added time. Full loads and newest-page merges are re-sorted by that timestamp, so rescanning an older file cannot promote it above genuinely newer photos.
+- Related hardening: cached-only transition images now fall back to a real thumbnail load if Android evicts the tapped bitmap, and three focused date-policy tests protect capture-time priority, missing-capture fallback, and page-merge ordering.
+
+Verification:
+
+    :app:testDebugUnitTest -> BUILD SUCCESSFUL (35 tests, 0 failures)
+    :app:lintDebug -> BUILD SUCCESSFUL
+    :app:assembleDebug -> BUILD SUCCESSFUL
+    git diff --check -> clean except existing CRLF conversion notices
+    Debug APK: F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+    Size: 30,621,223 bytes
+    Last write: 2026-07-17 02:42:50
+    SHA-256: 27C1F10EB05C4C904B8D1FB12C35D9E786EF2F913200DB0429E6F14167FDEC8B
+
+Physical-device checks still required because ADB reported no attached device:
+
+- Open and close both Big Tiles and Basic albums repeatedly, including All photos. Confirm the whole tile lifts/expands without stretching, then falls back intact without a squeeze at the end.
+- Cold-open an album with uncached media and confirm the first visible grid is already populated when the transition clears.
+- Cold-open portrait, landscape, and high-resolution photos and confirm there is no blurry-to-sharp jump or geometry gap at viewer handoff.
+- Enter and leave Recently Deleted, Hidden Items, Locked Media, and Cleanup and confirm the directional transitions remain smooth with predictive/system back.
+- Clear app data or reinstall, confirm no demo pictures appear, verify the permission dialog is shown once, and confirm only real device media appears after access is granted.
+- Scroll deep into Photos, trigger a MediaStore refresh by capturing or editing media, and confirm the newest real photo remains at the top while older rescanned items stay in chronological position.
+## 2026-07-17 Broad Image and Video Format Pass
+
+Completed 2026-07-17:
+
+- Added a centralized `MediaStoreMediaFormatPolicy` so gallery discovery no longer depends only on MediaStore's native image/video media-type flag.
+- MediaStore queries now include native image/video rows plus `image/*`, `video/*`, and common extension fallbacks for formats including JPG/JPEG, PNG, WebP, GIF, BMP, HEIC, HEIF, AVIF, DNG, MP4, M4V, 3GP, MKV, WebM, AVI, MOV/QT, FLV, WMV/ASF, TS/M2TS/MTS, and OGV.
+- Rows that Android leaves as an unknown file type but that are recognizable by MIME or extension are now classified as photo/video and use the Files content URI, so MKV-style rows are not lost before playback.
+- Generic binary MIME values such as `application/octet-stream` are normalized from the filename when possible; `.mkv` becomes `video/x-matroska`.
+- The video viewer now passes the normalized MIME/container hint into Media3 ExoPlayer, helping content-URI playback for files whose URI does not expose a useful extension.
+- Added focused unit tests for the new media-format policy as the related hardening/test slice from the handoff.
+
+Verification:
+
+```text
+:app:testDebugUnitTest -> BUILD SUCCESSFUL
+:app:lintDebug -> BUILD SUCCESSFUL
+:app:assembleDebug -> BUILD SUCCESSFUL
+Debug APK: F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Size: 30,621,223 bytes
+Last write: 2026-07-17 01:34:51
+SHA-256: B8C1785788502FE62F8DF5385BE3ED16BAE75322C88EEC6C989B214238F99F12
+```
+
+Physical-device checks still required:
+
+- Add representative MKV, WebM, MOV, AVI, MP4, and 3GP videos to the phone and confirm they appear in Photos/Albums with a video badge.
+- Open those videos and verify picture, audio, play/pause, scrubbing, 10-second skip, mute/volume, brightness, fit/fill, and swipe/back gestures.
+- Add representative HEIC, HEIF, AVIF, WebP, GIF, BMP, PNG, and JPEG images and confirm they appear with thumbnails and open in the viewer.
+- If a listed video appears but does not play, inspect the contained codec on the device; this pass improves discovery/container hints, but hardware/OS codec support can still decide playback.
 ## 2026-07-17 GitHub Sync and Repository Hygiene
 
 - Confirmed that 13 feature and hardening commits had been recorded locally but had not previously been pushed to GitHub.
@@ -272,9 +566,9 @@ git diff --check -> clean except existing CRLF conversion warnings
 
 Completed 2026-07-15:
 
-- Added a pure, testable current-window policy using the standard compact, medium, and expanded width breakpoints. It responds to rotation, split screen, freeform resizing, and fold/unfold size changes without caching a device category.
+- Added a pure, testable current-window policy using the standard compact, medium, and expanded width breakpoints. It responds to rotation, split screen, and freeform resizing without caching a device category.
 - Portrait phones keep the existing bottom navigation and current grid density. Compact landscape gains one extra media column without changing navigation placement.
-- Windows at least 600 dp wide use an 88 dp navigation rail instead of the bottom bar, leaving more vertical room on landscape phones, tablets, and unfolded foldables.
+- Windows at least 600 dp wide use an 88 dp navigation rail instead of the bottom bar, leaving more vertical room on landscape phones and tablets.
 - Photos, Album Detail, Big/Basic album layouts, Locked Media, Recently Deleted, and album creation scale their column counts with usable width. Loading skeletons now match the active Photos column count.
 - Album hero height scales by window class, and viewer return calculations use the same adaptive source column count as the visible grid.
 - Short landscape editor windows move Save into the header and tighten preview padding so editing tools retain usable image space.
@@ -286,8 +580,7 @@ Physical-device and emulator checks:
 - Confirm an ordinary portrait phone still uses the existing bottom navigation and original photo density.
 - Rotate to landscape and verify the rail appears at 600 dp or wider, with no Menu/editor content clipped vertically.
 - Rotate while Photos, Album Detail, Recently Deleted, and the editor are open; the current destination and selected media should remain intact.
-- Resize through split-screen widths and unfold/refold a foldable emulator; columns and navigation should change without a blank frame or crash.
-- On a separating-hinge device, verify content remains usable. Hinge-aware dual-pane placement is intentionally still pending.
+- Resize through split-screen widths; columns and navigation should change without a blank frame or crash.
 
 Verification:
 

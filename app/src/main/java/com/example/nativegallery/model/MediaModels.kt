@@ -12,13 +12,16 @@ data class MediaItem(
     val dateLabel: String,
     val imageRes: Int? = null,
     val contentUri: Uri? = null,
+    val previewUri: Uri? = null,
     val isVideo: Boolean = false,
     val durationLabel: String? = null,
     val durationMillis: Long? = null,
     val mimeType: String? = null,
     val fileSizeBytes: Long? = null,
     val width: Int? = null,
-    val height: Int? = null
+    val height: Int? = null,
+    val relativePath: String? = null,
+    val sortTimestampMillis: Long = 0L
 )
 
 @Immutable
