@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "NativeGallery"
 include(":app")
+include(":benchmark")

@@ -35,6 +35,53 @@ internal data class GalleryAdaptivePolicy(
     val useCompactEditorLayout: Boolean
 )
 
+internal data class GallerySafePaneInsetsPx(
+    val start: Float = 0f,
+    val top: Float = 0f,
+    val end: Float = 0f,
+    val bottom: Float = 0f
+)
+
+/**
+ * Keeps a single-pane gallery surface wholly on one side of an occluding/separating fold. A
+ * normal crease returns zero insets so flexible foldables can still use the full canvas.
+ */
+internal fun gallerySafePaneInsets(
+    rootWidthPx: Float,
+    rootHeightPx: Float,
+    foldLeftPx: Float,
+    foldTopPx: Float,
+    foldRightPx: Float,
+    foldBottomPx: Float
+): GallerySafePaneInsetsPx {
+    if (rootWidthPx <= 0f || rootHeightPx <= 0f) return GallerySafePaneInsetsPx()
+    val left = foldLeftPx.coerceIn(0f, rootWidthPx)
+    val right = foldRightPx.coerceIn(left, rootWidthPx)
+    val top = foldTopPx.coerceIn(0f, rootHeightPx)
+    val bottom = foldBottomPx.coerceIn(top, rootHeightPx)
+    val foldWidth = right - left
+    val foldHeight = bottom - top
+    if (foldWidth <= 0f || foldHeight <= 0f) return GallerySafePaneInsetsPx()
+
+    return if (foldHeight >= foldWidth) {
+        val startPaneWidth = left
+        val endPaneWidth = rootWidthPx - right
+        if (startPaneWidth >= endPaneWidth) {
+            GallerySafePaneInsetsPx(end = rootWidthPx - left)
+        } else {
+            GallerySafePaneInsetsPx(start = right)
+        }
+    } else {
+        val topPaneHeight = top
+        val bottomPaneHeight = rootHeightPx - bottom
+        if (topPaneHeight >= bottomPaneHeight) {
+            GallerySafePaneInsetsPx(bottom = rootHeightPx - top)
+        } else {
+            GallerySafePaneInsetsPx(top = bottom)
+        }
+    }
+}
+
 internal fun galleryAdaptivePolicy(widthDp: Float, heightDp: Float): GalleryAdaptivePolicy {
     val safeWidth = widthDp.coerceAtLeast(1f)
     val safeHeight = heightDp.coerceAtLeast(1f)

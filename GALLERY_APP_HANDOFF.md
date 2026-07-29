@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-07-19
+Last updated: 2026-07-30
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -39,6 +39,8 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-18 slice: added locked restore-path/traversal, orientation-aware dimension, and video side-gesture intent coverage; the suite reached 58 passing tests.
   - 2026-07-19 slice: added eight document-photo classifier tests covering bills, menus, forms/letters, transcripts/notes, general text pages, short signs, social-app chrome, and whole-word category matching; the suite now has 66 passing tests.
   - 2026-07-19 follow-up: added MKV seek acknowledgement coverage; the suite now has 67 passing tests.
+  - 2026-07-22 slice: added album arrangement/pinning/swap/codec, stricter document classification/prefilter/cache migration, editor-filter, video-volume, and background-playback policy coverage; the suite now has 81 passing tests.
+  - 2026-07-30 slice: added media-management, two-phase vault rollback, viewer-session rotation, adaptive-viewer, fold-safe-pane, and legacy permission tests; the local suite now has 98 passing tests. Instrumentation coverage now exercises encrypted vault round trips, navigation, recreation, compact landscape, and three-button insets.
 - [ ] Gradually move screen state and business logic out of `GalleryApp.kt` into ViewModels and testable state holders.
   - 2026-07-15 slice: extracted viewer delete selection and Photos lazy-list indexing into `GalleryLogic.kt`.
   - 2026-07-15 slice: extracted normalized media/album search documents and matching into `GallerySearchIndex.kt`.
@@ -47,6 +49,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-17 slice: made every settled pager page synchronize the selected navigation tab, removing the stale captured-tab path that could leave Photos visible while Albums stayed selected.
   - 2026-07-17 slice: extracted PIN creation, unlock, lockout messaging, stale-operation cancellation, biometric result state, and auth progress into LockedMediaSecurityViewModel.
   - 2026-07-19 slice: added DocumentPhotoRepository and DocumentPhotosViewModel so cancellable OCR indexing, cache validation, scan progress, and rescan state stay outside GalleryApp composition state.
+  - 2026-07-30 slice: extracted two-phase Locked Media import/rollback decisions into `LockedMediaOperations`, and added an Activity-scoped viewer/pending-MediaStore session holder so rotation cannot discard an open viewer or a required cancellation rollback.
 - [ ] Continue reducing unnecessary MediaStore reloads and background I/O.
   - 2026-07-15 slice: restore/delete-forever batches now persist Recently Deleted state once per action instead of once per media item.
   - 2026-07-15 slice: observer bursts now coalesce to one newest-page query and one full reconciliation; repeated quick refreshes cancel before queueing duplicate work.
@@ -55,6 +58,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-17 slice: app-owned MediaStore writes suppress duplicate observer full scans, Recently Deleted queries trashed rows only while visible, and direct fallback deletes plus album moves run off the main thread.
   - 2026-07-18 slice: Locked Media now loads one background inventory/preview snapshot, avoids per-item filesystem checks in composition, batches legacy preview migration into one refresh, uses per-file provider locks, and keeps vault preference/restore/delete I/O off the main thread.
   - 2026-07-19 slice: document-photo OCR runs sequentially off the UI thread, caches positive and negative results by media fingerprint, publishes progress in batches, and cancels while the screen/viewer is not active.
+  - 2026-07-22 slice: first presentation waits for the newest MediaStore page and a timeout-bounded 12-thumbnail warmup; the complete album list stays in a loading state until full reconciliation so partial rows never reflow after opening. Album Detail warms 30 rows without blocking and stays 14 rows ahead while scrolling; Document Photos reuses unchanged version-2 OCR text under the stricter classifier rather than rescanning the entire library.
 - [x] Move large-library search indexing and expensive interaction lookup off the main UI path. Completed 2026-07-15.
   - 2026-07-15 slice: search indexing and query execution now run on `Dispatchers.Default`; remaining expensive interaction lookups stay queued.
   - 2026-07-15 slice: encrypted-vault inventory reads now run on `Dispatchers.IO` instead of during composition.
@@ -68,13 +72,15 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-17 slice: PINs now use versioned 210,000-iteration PBKDF2-HMAC-SHA256 credentials with constant-time verification and transparent legacy migration; new vault keys are explicit 256-bit device-unlocked Keystore keys and missing keys fail closed over existing encrypted files.
   - 2026-07-17 slice: restored photos/videos must be non-empty, readable, and successfully published in MediaStore before the encrypted vault copy can be removed.
   - 2026-07-17 slice: cancelling Android original-removal approval rolls items with readable originals back out of Locked Media instead of presenting them as protected; encrypted copies are retained when the original is actually gone.
-- [x] Complete predictive back and adaptive tablet and landscape layouts. Completed 2026-07-19.
+- [x] Complete predictive back and adaptive tablet, landscape, and separating-hinge layouts. Completed 2026-07-30.
   - 2026-07-15 slice: added progress-aware predictive back for viewer and secondary destinations, native back-to-home from Photos, nested crop cancellation, and a tested centralized back router.
   - 2026-07-15 slice: added current-window adaptive classes, a navigation rail from 600 dp, denser media and album grids, compact landscape editor/menu behavior, and four policy tests.
   - 2026-07-19 slice: Document photos uses centralized back routing and adaptive content width, and the application manifest enables OnBackInvoked callbacks so predictive back is active on Android 13+.
-- [ ] Add Macrobenchmark coverage and a Baseline Profile after navigation and media flows stabilize.
+  - 2026-07-30 slice: viewer chrome uses a separate below-media action partition, compact landscape video controls, capped tablet/foldable control widths, and exact system-bar insets. WindowManager fold information keeps the application surface on one safe pane when a separating or fully occluding hinge is present.
+- [x] Add Macrobenchmark coverage and a Baseline Profile generator after navigation and media flows stabilize. Added 2026-07-30; profile generation and benchmark runs remain physical-device release checks.
 - [ ] Verify release shrinking, bundle size, and final Play configuration near feature freeze.
   - 2026-07-15 slice: R8 minification and resource shrinking pass; unsigned release APK is 3,447,046 bytes. Signing, final application ID, version policy, and AAB validation remain.
+  - 2026-07-30 slice: candidate application ID/version/target, environment-only upload signing, R8/resource shrinking, release lint, release APK, and valid unsigned AAB all pass. The AAB is 25,406,881 bytes; upload-key creation, final ID approval, signing, and Play internal-track validation remain external release-owner steps.
 - [x] Harden editor bitmap transform disposal and normalized crop export. Completed 2026-07-15.
 
 Check off completed items with a dated note. If only one slice is complete, keep the item unchecked and record that slice beneath it.
@@ -98,8 +104,8 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Latest feature commit: ddf557a Complete gallery media reliability and performance fixes
-GitHub sync: feature commit ddf557a pushed to origin/main on 2026-07-19
+Latest pushed baseline before the 2026-07-30 hardening pass: 3e916d7 Clean repository assets and add project setup
+GitHub sync: baseline commit 3e916d7 is on origin/main; the completed hardening pass must be committed and pushed after final verification
 Repository visibility: private
 ```
 
@@ -124,6 +130,71 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-07-30 Release Hardening, Adaptive Viewer, and Startup Pass
+
+Completed 2026-07-30:
+
+- Added optional Android 12+ media-management special access with an accurate Settings explanation and the normal per-operation confirmation flow retained as fallback. This is the supported way to reduce the large system confirmation block where the device exposes the access; the Android-owned screen itself cannot be restyled by the app.
+- Extracted the Locked Media two-phase import/original-removal operation and made cancellation, partial import, ambiguous deletion, and legacy direct-delete failure data-safe. Pending system write actions now survive Activity recreation, so rotation while Android confirmation is open cannot skip rollback.
+- Retained the active viewer across rotation and fold/unfold Activity recreation. Process death intentionally returns to the gallery rather than persisting sensitive viewer state.
+- Moved filmstrip and delete/lock/share/info controls into a distinct rounded partition below the media. Compact landscape suppresses the filmstrip, uses a 62 dp action reservation and one-row video controls, shortens side sliders, and preserves 48 dp touch targets.
+- Added responsive phone/tablet layouts plus WindowManager separating-hinge/occlusion detection. A true hinge confines content to the larger safe pane; a non-occluding crease continues using the full adaptive grid and navigation rail.
+- Reduced the floating bottom navigation footprint without going below accessible touch targets, removed tab-switch animation latency, and deferred precomposition of all three primary pages until after the first presentation so direct Photos-to-Menu navigation is warm without delaying the cold frame.
+- Reduced cold-start gating to at most 180 ms and skip it entirely on Activity recreation, reduced blocking first-viewport thumbnail warmup to six items/250 ms, and added cold-start/frame-timing macrobenchmarks plus a Baseline Profile generator.
+- Configured candidate Play identity `com.swailumzafar.nativegallery`, target SDK 36, minified/resource-shrunk release builds, environment-only upload signing, ML Kit/privacy disclosures, and a release checklist. Confirm the final application ID before first Play upload: installs using the earlier `com.example.nativegallery` ID have a different data sandbox and do not migrate settings or vault contents automatically.
+- Added/compiled device tests for real encrypted MediaStore vault round trips, navigation, viewer recreation, compact layout, and three-button navigation inset safety. Physical/OEM execution and performance measurement remain assigned to the user.
+- Final automated verification passed: 98 local unit tests with 0 failures; debug lint with 0 errors/8 non-blocking warnings; debug APK, release APK, release AAB, Android-test compilation, and benchmark compilation. The unsigned release AAB is 25,406,881 bytes with SHA-256 `7700CD41735C35DA5E6EC3379DF0D7E4C912155335221EFD913857C31DA52B8F`.
+## 2026-07-22 UI Consistency, Album Control, Media Readiness, and Playback Pass
+
+Completed 2026-07-22:
+
+- Added one shared responsive secondary-screen header and applied it to Hidden albums, Locked media, Recently deleted, Document photos, Album Detail, Cleanup, and the photo editor. Titles/back buttons now share one 48 dp top rhythm and trailing actions stack below the title below 320 dp or with enlarged text, preventing the narrow-phone vertical `None` and wrapped-title failures from the new reference screenshots.
+- Normalized Photos, Albums, and Menu to the same primary heading typography. Light mode now uses neutral gray-white surfaces (`#F3F4F2` background and `#FCFCFB` surface) instead of the earlier yellow/washed tint.
+- Cold launch now stays on Android's icon-free system launch surface only until the newest MediaStore page and a timeout-bounded 12-thumbnail first viewport are ready; the full scan continues in the background. Photos therefore appears quickly with its newest row stable, while Albums deliberately shows its loading layout until the full album snapshot is complete so no partial album rows can append/reflow.
+- Added persistent free album ordering and one pinned album without permanent card controls. A normal long press opens the clean Pin/Delete menu; continuing the hold enters drag mode. A target is selected only after real overlap/center containment, the hovered album springs toward the source position, and dropping performs an exact swap. Dropping onto the hero transfers the pin to the moved album; dragging the pinned hero away unpins it. Per-album composition keys keep spring state attached to the correct card.
+- Album Detail warms sixteen complete rows for the selected grid density and adaptive device column boost (bounded to 128 items) before the real grid takes over, except MKV entries that deliberately use the immediate stable video fallback. Its transition preview uses the exact shared lazy-row renderer, preserves current sort and scroll position on close, and the underlying destination card stays hidden until the closing overlay finishes. The 420 ms open / 400 ms close timing, easing, and geometry were not changed.
+- Photos timeline markers such as Today and dated groups now use regular body typography rather than large semibold heading typography.
+- Fixed Settings > Grid > Spacious end to end: Photos and Album Detail now both allow the requested two-column layout instead of clamping/mapping it to three columns.
+- Album Detail selection now offers Move to album. The operation uses MediaStore's real relative path/write approval, so the files move in the device's original gallery as well; the app then refreshes from MediaStore without rewriting capture dates or imposing a new sort order.
+- Replaced the stretched Albums Recently deleted pill with a compact 20 dp utility card containing a neutral icon tile, subtitle, and chevron. Removed the pink icon tint and unused lower album space, and accounted for the floating bottom navigation inset so it cannot overlap the card after returning from Recently Deleted.
+- Strengthened the editor crop frame with a 3 dp white edge, dark contrast rim, 1.25 dp rule-of-thirds grid, and longer corner handles. Filters now include Original, Vivid, Mono, Noir, Warm, Cool, Sepia, and Fade, shown as real image-preview cards with matching export matrices.
+- Video volume now initializes from and writes to the media stream, includes a player-gain fallback, handles audio focus/noisy-device changes, and keeps Start muted local until the user adjusts volume. Lifecycle observation pauses and clears play intent below RESUMED, so leaving the app cannot continue audio and returning does not silently autoplay.
+- Document Photos now rejects incidental scene/UI text more aggressively, skips tiny/extreme-aspect/GIF/WBMP candidates before OCR, creates the recognizer lazily, and migrates unchanged cached text through the stricter classifier without forcing a 15,000-photo rescan. A genuinely new large library still needs a progressive first on-device OCR pass because MediaStore has no reliable document-photo label; this feature is classification, not training on the user's library.
+- Replaced the bitmap launcher foreground with a minimalist adaptive vector photo mark and matching monochrome themed icon.
+- Neutralized every Material surface/container/outline role used by Albums selectors and overflow menus, strengthened the light outline, made Settings headings and labels consistently bold, made Settings scroll on short displays, and rebuilt Move to album with cover previews and clearer destination cards.
+- Saved a restorable pre-fix album-animation snapshot as annotated local tag `local/album-animation-baseline-20260722-0450` at commit `e08b005a519ce7b902023de0ba630d25cf9b06a8`.
+
+Verification:
+
+- `:app:testDebugUnitTest`: BUILD SUCCESSFUL, 81 tests, 0 failures, 0 errors, 0 skipped
+- `:app:lintDebug`: report generated twice with 0 errors and 28 non-blocking warnings (existing unused sample resources/SDK preference warnings; the desktop wrapper timed out immediately after each report write)
+- `:app:assembleDebug`: BUILD SUCCESSFUL
+- `git diff --check`: clean except expected CRLF conversion notices
+
+Latest verified APK:
+
+```text
+F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+Size: 81,461,793 bytes
+Last write: 2026-07-22 05:33:28 Asia/Karachi
+SHA-256: 02134016770A74AB7081BED62927DC12EC02D72637F4200529C78F6DE3413E72
+```
+
+Physical-device validation on Realme RMX3852 / device `30e49129`:
+
+- The immediately preceding APK was installed without clearing app data and used for live checks. The final edge-case build above was intentionally not installed because the user chose to install it themselves.
+- Cold-start frame bursts reached a stable Photos grid at about one second, with an icon-free system launch surface and no in-app preparation/icon page.
+- The 9,651-item Screenshots album opened with the shared transition/detail rows. Fast photo-open -> back -> album-close frame captures contained no white/black flash or duplicate target tile. Settings, neutral Albums controls/menus, and the redesigned Move dialog were also checked on device.
+- Device logcat contained no Gallery fatal exception or ANR during the launch and repeated large-album checks.
+
+Install the final APK without clearing app data:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk"
+```
+
+Physical checks still required on the final build: album pin/drag/drop persistence and cross-row spring; narrow-screen/enlarged-text headers; editor preview/export parity; volume gesture from zero; background video stop; and Document Photos precision against the user's previously misclassified images.
 
 ## 2026-07-19 MKV Scrubbing, Repeated-Video Performance, and Albums Overflow Follow-up
 
@@ -854,7 +925,7 @@ It should not feel like Google Photos or Apple Photos. It should not become an A
 
 Do not build these into v1:
 
-- AI features.
+- Cloud AI, face grouping, or generative/memories features. Bundled on-device document OCR remains allowed.
 - Face/person grouping.
 - Shared albums.
 - Story cards.
@@ -863,7 +934,7 @@ Do not build these into v1:
 - Big promotional banners.
 - Heavy privacy/vault branding.
 - C++ or Rust modules.
-- A persistent `Menu` tab.
+- Promotional or account-driven tabs; the existing local-tools `Menu` tab is approved.
 
 Do not make the app identity only dark/black. It must support both light and dark themes.
 
@@ -879,44 +950,12 @@ Set A palette:
 
 Set B, the 60/30/10 palette, was generated but not selected. It can remain as a fallback idea, but implementation should continue from Set A.
 
-## Reference Images
+## Design Reference Status
 
-Reference images are in:
-
-```text
-F:\App\Gallery\Refrence Pictures
-```
-
-The folder name is intentionally spelled as it exists on disk.
-
-Important references:
-
-```text
-WhatsApp Image 2026-06-19 at 7.38.48 PM.jpeg
-```
-
-Photos reference notes:
-
-- Large `Photos` title.
-- Search pill under title.
-- Timeline sections such as `Today`, `14 June 2026`, and `11 June 2026`.
-- Simple two-tab bottom navigation: `Photos` and `Albums`.
-- Light theme with calm spacing.
-
-```text
-WhatsApp Image 2026-06-19 at 7.38.48 PM (1).jpeg
-```
-
-Albums reference notes:
-
-- Large `Albums` title.
-- Search pill under title.
-- Top-right actions: plus, grid/layout, overflow.
-- Big rounded album cards with image covers.
-- Album names and counts overlaid on image covers.
-- Overflow menu includes hidden-item style access.
-
-Other reference images include Oppo/Vivo/Samsung-like inspiration, album grids, dark theme examples, menu sheets, and photo timeline examples.
+The temporary `Refrence Pictures` and `Refrence Videos` directories were removed
+from GitHub during the repository cleanup completed in commit `3e916d7`. Do not
+restore those binary audit assets. The production UI, tests, and the approved
+Set A direction recorded here are now the maintained source of truth.
 
 ## App Structure
 
@@ -1225,7 +1264,7 @@ Avoid:
 - Flutter or React Native for v1
 - C++/Rust unless profiling later proves a need
 - over-designed privacy-first UI
-- AI features
+- Cloud AI, face grouping, and generative/memories features
 - marketing-page style screens
 - decorative features that distract from normal gallery browsing
 
@@ -2015,7 +2054,7 @@ This save point uses the new native gallery recording pulled from the connected 
 
 `	ext
 /storage/emulated/0/Pictures/Screenshots/Record_2026-06-28-05-20-44_99c04817c0de5652397fc8b56c3b3817.mp4
-F:\App\Gallery\Refrence Videos\native_gallery_album_open_2026-06-28_052044.mp4
+Historical local reference removed from the repository during the 2026-07-30 cleanup.
 `
 
 Latest verified APK:

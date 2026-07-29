@@ -20,6 +20,9 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.fadeOut
@@ -45,6 +48,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
@@ -99,6 +103,7 @@ fun PhotosScreen(
     isLoading: Boolean = false,
     searchQuery: String = "",
     gridColumns: Int = 4,
+    onGridColumnsChange: (Int) -> Unit = {},
     listState: LazyListState,
     revealMediaId: String? = null,
     onSearchQueryChange: (String) -> Unit = {},
@@ -110,6 +115,7 @@ fun PhotosScreen(
     onDeleteSelected: () -> Unit = {},
     onShareSelected: () -> Unit = {},
     onHideSelected: () -> Unit = {},
+    onMoveSelected: () -> Unit = {},
     onRefresh: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit = { _, _ -> },
@@ -132,6 +138,7 @@ fun PhotosScreen(
     val isSelectionMode = selectedMediaIds.isNotEmpty()
     val showLoading = isLoading
     val revealOffsetPx = with(LocalDensity.current) { 72.dp.roundToPx() }
+    var pinchPreviewScale by remember { mutableStateOf(1f) }
 
     LaunchedEffect(revealMediaId, sections, gridColumns) {
         val mediaId = revealMediaId ?: return@LaunchedEffect
@@ -197,9 +204,41 @@ fun PhotosScreen(
                     )
                 }
             }
+            .pointerInput(gridColumns) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var cumulativeZoom = 1f
+                    var densityChanged = false
+                    try {
+                        var gestureActive = true
+                        while (gestureActive) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.count { it.pressed } >= 2) {
+                                cumulativeZoom *= event.calculateZoom()
+                                pinchPreviewScale = (1f + (cumulativeZoom - 1f) * 0.22f)
+                                    .coerceIn(0.94f, 1.06f)
+                                if (!densityChanged && cumulativeZoom >= 1.16f) {
+                                    onGridColumnsChange((gridColumns - 1).coerceAtLeast(2))
+                                    densityChanged = true
+                                } else if (!densityChanged && cumulativeZoom <= 0.86f) {
+                                    onGridColumnsChange((gridColumns + 1).coerceAtMost(10))
+                                    densityChanged = true
+                                }
+                                event.changes.forEach { it.consume() }
+                            }
+                            gestureActive = event.changes.any { it.pressed }
+                        }
+                    } finally {
+                        pinchPreviewScale = 1f
+                    }
+                }
+            }
     ) {
         LazyColumn(
-            modifier = Modifier,
+            modifier = Modifier.graphicsLayer {
+                scaleX = pinchPreviewScale
+                scaleY = pinchPreviewScale
+            },
             state = listState,
             contentPadding = PaddingValues(
                 start = 0.dp,
@@ -273,6 +312,7 @@ fun PhotosScreen(
             onSelectAll = onSelectAllVisible,
             onShare = onShareSelected,
             onHide = onHideSelected,
+            onMove = onMoveSelected,
             onDelete = onDeleteSelected,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -325,11 +365,7 @@ private fun PicturesHeader(
                     scaleX = titleScale
                     scaleY = titleScale
                 },
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontSize = 46.sp,
-                    lineHeight = 52.sp,
-                    fontWeight = FontWeight.SemiBold
-                ),
+                style = MaterialTheme.typography.headlineLarge,
                 color = MaterialTheme.colorScheme.onBackground
             )
             Spacer(Modifier.height(titleSpacing))
@@ -428,6 +464,7 @@ private fun SelectionBottomActionBar(
     onSelectAll: () -> Unit,
     onShare: () -> Unit,
     onHide: () -> Unit,
+    onMove: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -489,6 +526,13 @@ private fun SelectionBottomActionBar(
                         modifier = Modifier.weight(1f)
                     )
                     SelectionBottomAction(
+                        label = "Move",
+                        icon = Icons.Filled.Folder,
+                        enabled = selectedCount > 0,
+                        onClick = onMove,
+                        modifier = Modifier.weight(1f)
+                    )
+                    SelectionBottomAction(
                         label = "Delete",
                         icon = Icons.Filled.Delete,
                         enabled = selectedCount > 0,
@@ -547,14 +591,10 @@ private fun LazyListScope.photoSection(
         Text(
             text = title,
             modifier = Modifier.padding(horizontal = 10.dp),
-            style = MaterialTheme.typography.titleLarge.copy(
-                fontSize = 22.sp,
-                lineHeight = 28.sp,
-                fontWeight = FontWeight.SemiBold
-            ),
+            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Normal),
             color = MaterialTheme.colorScheme.onBackground
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
     }
     val rowCount = (mediaItems.size + columns - 1) / columns
     items(

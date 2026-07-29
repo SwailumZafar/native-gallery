@@ -37,7 +37,11 @@ class MediaStoreWriteRepository(context: Context) {
         ).build()
     }
 
-    fun moveToAlbum(mediaItems: List<MediaItem>, albumName: String): Boolean {
+    fun moveToAlbum(
+        mediaItems: List<MediaItem>,
+        albumName: String,
+        targetRelativePath: String? = null
+    ): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
         val safeAlbumName = albumName
             .trim()
@@ -46,8 +50,17 @@ class MediaStoreWriteRepository(context: Context) {
             .take(80)
         if (safeAlbumName.isBlank()) return false
 
+        val destinationPath = targetRelativePath
+            ?.replace('\\', '/')
+            ?.split('/')
+            ?.map(String::trim)
+            ?.filter { it.isNotBlank() && it != "." && it != ".." }
+            ?.joinToString(separator = "/", postfix = "/")
+            ?.takeIf(String::isNotBlank)
+            ?: "DCIM/$safeAlbumName/"
+
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/$safeAlbumName/")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, destinationPath)
         }
         val uris = mediaItems.mapNotNull { it.contentUri }.distinct()
         if (uris.isEmpty()) return false

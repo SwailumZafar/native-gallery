@@ -52,8 +52,8 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.RecentlyDeletedMedia
+import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.MediaThumbnail
 
 private class RecentlyDeletedBoundsRef(var value: Rect = Rect.Zero)
@@ -187,37 +187,32 @@ fun RecentlyDeletedScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 10.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = if (isSelectionMode) ({ selectedMediaIds = emptySet() }) else onBack) {
-                            Icon(
-                                imageVector = if (isSelectionMode) Icons.Filled.Close else Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = if (isSelectionMode) "Cancel selection" else "Back",
-                                tint = MaterialTheme.colorScheme.onBackground
-                            )
+                    GalleryScreenHeader(
+                        title = if (isSelectionMode) {
+                            "%1$,d selected".format(selectedMediaIds.size)
+                        } else {
+                            "Recently deleted"
+                        },
+                        onBack = if (isSelectionMode) ({ selectedMediaIds = emptySet() }) else onBack,
+                        leadingIcon = if (isSelectionMode) {
+                            Icons.Filled.Close
+                        } else {
+                            Icons.AutoMirrored.Filled.ArrowBack
+                        },
+                        leadingContentDescription = if (isSelectionMode) {
+                            "Cancel selection"
+                        } else {
+                            "Back"
+                        },
+                        trailingContent = {
+                            IconButton(
+                                enabled = deletedItems.isNotEmpty() && selectedMediaIds.size < deletedItems.size,
+                                onClick = { selectedMediaIds = availableIds }
+                            ) {
+                                Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
+                            }
                         }
-                        Text(
-                            text = if (isSelectionMode) "%1$,d selected".format(selectedMediaIds.size) else "Recently deleted",
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(start = 8.dp),
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                fontSize = 24.sp,
-                                lineHeight = 30.sp,
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            color = MaterialTheme.colorScheme.onBackground,
-                            maxLines = 1
-                        )
-                        IconButton(
-                            enabled = deletedItems.isNotEmpty() && selectedMediaIds.size < deletedItems.size,
-                            onClick = { selectedMediaIds = availableIds }
-                        ) {
-                            Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
-                        }
-                    }
+                    )
                     if (!isSelectionMode) {
                         Spacer(Modifier.height(12.dp))
                         Text(

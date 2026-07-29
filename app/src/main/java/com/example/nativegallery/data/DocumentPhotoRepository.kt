@@ -20,6 +20,9 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -74,24 +77,35 @@ class DocumentPhotoRepository(context: Context) {
 
         val matches = mutableListOf<DocumentPhotoMatch>()
         val pending = mutableListOf<MediaItem>()
+        val upgradedRecords = mutableListOf<StoredDocumentPhotoRecord>()
         var scannedCount = 0
 
         photos.forEach { item ->
             val record = recordsById[item.id]
-            if (record != null && record.fingerprint == fingerprint(item)) {
+            val expectedFingerprint = fingerprint(item)
+            val usableRecord = when {
+                record == null -> null
+                record.fingerprint == expectedFingerprint -> record
+                hasSameDocumentPhotoSource(record.fingerprint, expectedFingerprint) -> {
+                    record.upgradeClassifierPolicy(expectedFingerprint).also(upgradedRecords::add)
+                }
+                else -> null
+            }
+            if (usableRecord != null) {
                 scannedCount += 1
-                record.category?.let { category ->
+                usableRecord.category?.let { category ->
                     matches += DocumentPhotoMatch(
                         mediaItem = item,
                         category = category,
-                        recognizedText = record.recognizedText,
-                        lineCount = record.lineCount
+                        recognizedText = usableRecord.recognizedText,
+                        lineCount = usableRecord.lineCount
                     )
                 }
             } else {
                 pending += item
             }
         }
+        database.upsert(upgradedRecords)
         matches.sortByDescending { it.mediaItem.sortTimestampMillis }
         onProgress(
             DocumentPhotoScanProgress(
@@ -103,60 +117,81 @@ class DocumentPhotoRepository(context: Context) {
         )
         if (pending.isEmpty()) return@withContext
 
-        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        val recognizers = if (pending.any(::isDocumentPhotoAnalysisCandidate)) {
+            List(SCAN_PARALLELISM) {
+                TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            }
+        } else {
+            emptyList()
+        }
         val bufferedRecords = mutableListOf<StoredDocumentPhotoRecord>()
         try {
-            pending.forEachIndexed { index, item ->
+            pending.chunked(SCAN_PARALLELISM).forEachIndexed { batchIndex, batch ->
                 coroutineContext.ensureActive()
-                val classification = try {
-                    recognizePhoto(item, recognizer)
-                } catch (cancellation: CancellationException) {
-                    throw cancellation
-                } catch (_: Exception) {
-                    null
+                val scannedBatch = coroutineScope {
+                    batch.mapIndexed { slot, item ->
+                        async(Dispatchers.IO) {
+                            val classification = try {
+                                if (isDocumentPhotoAnalysisCandidate(item)) {
+                                    recognizePhoto(item, recognizers[slot])
+                                } else {
+                                    null
+                                }
+                            } catch (cancellation: CancellationException) {
+                                throw cancellation
+                            } catch (_: Exception) {
+                                null
+                            }
+                            ScannedDocumentPhoto(item, classification)
+                        }
+                    }.awaitAll()
                 }
-                bufferedRecords += StoredDocumentPhotoRecord(
-                    mediaId = item.id,
-                    fingerprint = fingerprint(item),
-                    category = classification?.category,
-                    recognizedText = classification?.recognizedText.orEmpty(),
-                    lineCount = classification?.lineCount ?: 0
-                )
-                if (
-                    bufferedRecords.size >= DATABASE_WRITE_BATCH_SIZE ||
-                    index == pending.lastIndex
-                ) {
-                    database.upsert(bufferedRecords)
-                    bufferedRecords.clear()
-                }
+                scannedBatch.forEachIndexed { batchItemIndex, scanned ->
+                    val item = scanned.mediaItem
+                    val classification = scanned.classification
+                    val pendingIndex = batchIndex * SCAN_PARALLELISM + batchItemIndex
+                    bufferedRecords += StoredDocumentPhotoRecord(
+                        mediaId = item.id,
+                        fingerprint = fingerprint(item),
+                        category = classification?.category,
+                        recognizedText = classification?.recognizedText.orEmpty(),
+                        lineCount = classification?.lineCount ?: 0
+                    )
+                    if (
+                        bufferedRecords.size >= DATABASE_WRITE_BATCH_SIZE ||
+                        pendingIndex == pending.lastIndex
+                    ) {
+                        database.upsert(bufferedRecords)
+                        bufferedRecords.clear()
+                    }
 
-                if (classification != null) {
-                    matches += DocumentPhotoMatch(
-                        mediaItem = item,
-                        category = classification.category,
-                        recognizedText = classification.recognizedText,
-                        lineCount = classification.lineCount
-                    )
-                    matches.sortByDescending { it.mediaItem.sortTimestampMillis }
-                }
-                scannedCount += 1
-                val shouldPublishProgress =
-                    scannedCount == photos.size ||
-                        scannedCount % PROGRESS_BATCH_SIZE == 0
-                if (shouldPublishProgress) {
-                    matches.sortByDescending { it.mediaItem.sortTimestampMillis }
-                    onProgress(
-                        DocumentPhotoScanProgress(
-                            matches = matches.toList(),
-                            scannedCount = scannedCount,
-                            totalCount = photos.size,
-                            scanning = scannedCount < photos.size
+                    if (classification != null) {
+                        matches += DocumentPhotoMatch(
+                            mediaItem = item,
+                            category = classification.category,
+                            recognizedText = classification.recognizedText,
+                            lineCount = classification.lineCount
                         )
-                    )
+                    }
+                    scannedCount += 1
+                    val shouldPublishProgress =
+                        scannedCount == photos.size ||
+                            scannedCount % PROGRESS_BATCH_SIZE == 0
+                    if (shouldPublishProgress) {
+                        matches.sortByDescending { it.mediaItem.sortTimestampMillis }
+                        onProgress(
+                            DocumentPhotoScanProgress(
+                                matches = matches.toList(),
+                                scannedCount = scannedCount,
+                                totalCount = photos.size,
+                                scanning = scannedCount < photos.size
+                            )
+                        )
+                    }
                 }
             }
         } finally {
-            recognizer.close()
+            recognizers.forEach(TextRecognizer::close)
         }
     }
 
@@ -261,12 +296,18 @@ class DocumentPhotoRepository(context: Context) {
         const val LEGACY_RECORD_PREFIX = "record_"
         const val LEGACY_INDEX_MIGRATION_KEY = "sqlite_index_migrated"
         const val LEGACY_FILE_BROWSER_REMOVAL_KEY = "file_browser_removed"
-        const val CLASSIFIER_VERSION = 2
-        const val MAX_ANALYSIS_EDGE = 1280
+        const val CLASSIFIER_VERSION = 4
+        const val MAX_ANALYSIS_EDGE = 1024
+        const val SCAN_PARALLELISM = 2
         const val PROGRESS_BATCH_SIZE = 20
         const val DATABASE_WRITE_BATCH_SIZE = 20
     }
 }
+
+private data class ScannedDocumentPhoto(
+    val mediaItem: MediaItem,
+    val classification: DocumentPhotoClassification?
+)
 
 private data class StoredDocumentPhotoRecord(
     val mediaId: String,
@@ -275,6 +316,57 @@ private data class StoredDocumentPhotoRecord(
     val recognizedText: String,
     val lineCount: Int
 )
+
+private fun StoredDocumentPhotoRecord.upgradeClassifierPolicy(
+    expectedFingerprint: String
+): StoredDocumentPhotoRecord {
+    if (category == null || recognizedText.isBlank()) {
+        return copy(fingerprint = expectedFingerprint)
+    }
+    val reclassified = classifyDocumentPhoto(
+        text = recognizedText,
+        lineCount = lineCount,
+        // Version 2 did not persist block geometry. A positive cached record had already
+        // passed OCR structure checks, so two blocks is a conservative migration value.
+        blockCount = 2
+    )
+    return copy(
+        fingerprint = expectedFingerprint,
+        category = reclassified?.category,
+        recognizedText = reclassified?.recognizedText.orEmpty(),
+        lineCount = reclassified?.lineCount ?: 0
+    )
+}
+
+internal fun hasSameDocumentPhotoSource(
+    storedFingerprint: String,
+    expectedFingerprint: String
+): Boolean {
+    val storedSeparator = storedFingerprint.indexOf('|')
+    val expectedSeparator = expectedFingerprint.indexOf('|')
+    if (storedSeparator < 0 || expectedSeparator < 0) return false
+    return storedFingerprint.substring(storedSeparator + 1) ==
+        expectedFingerprint.substring(expectedSeparator + 1)
+}
+
+internal fun isDocumentPhotoAnalysisCandidate(item: MediaItem): Boolean {
+    val mimeType = item.mimeType.orEmpty().lowercase()
+    if (mimeType == "image/gif" || mimeType == "image/vnd.wap.wbmp") return false
+    if (item.fileSizeBytes?.let { it in 1 until MIN_ANALYSIS_FILE_BYTES } == true) return false
+
+    val width = item.width ?: return true
+    val height = item.height ?: return true
+    if (width <= 0 || height <= 0) return true
+    val shortEdge = minOf(width, height)
+    val longEdge = maxOf(width, height)
+    if (shortEdge < MIN_ANALYSIS_SHORT_EDGE || longEdge < MIN_ANALYSIS_LONG_EDGE) return false
+    return longEdge.toFloat() / shortEdge.toFloat() <= MAX_ANALYSIS_ASPECT_RATIO
+}
+
+private const val MIN_ANALYSIS_FILE_BYTES = 24L * 1024L
+private const val MIN_ANALYSIS_SHORT_EDGE = 320
+private const val MIN_ANALYSIS_LONG_EDGE = 640
+private const val MAX_ANALYSIS_ASPECT_RATIO = 3.5f
 
 private class DocumentPhotoIndexDatabase(
     context: Context

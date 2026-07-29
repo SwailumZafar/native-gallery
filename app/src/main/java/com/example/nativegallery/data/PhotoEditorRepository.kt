@@ -22,11 +22,15 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
-enum class PhotoEditFilter {
-    Original,
-    Mono,
-    Warm,
-    Cool
+enum class PhotoEditFilter(val displayName: String) {
+    Original("Original"),
+    Vivid("Vivid"),
+    Mono("Mono"),
+    Noir("Noir"),
+    Warm("Warm"),
+    Cool("Cool"),
+    Sepia("Sepia"),
+    Fade("Fade")
 }
 
 data class NormalizedEditPoint(val x: Float, val y: Float)
@@ -181,7 +185,16 @@ class PhotoEditorRepository(context: Context) {
         if (filter == PhotoEditFilter.Original) return bitmap
         val colorMatrix = when (filter) {
             PhotoEditFilter.Original -> ColorMatrix()
+            PhotoEditFilter.Vivid -> ColorMatrix().apply { setSaturation(1.28f) }
             PhotoEditFilter.Mono -> ColorMatrix().apply { setSaturation(0f) }
+            PhotoEditFilter.Noir -> ColorMatrix(
+                floatArrayOf(
+                    0.28f, 0.93f, 0.09f, 0f, -18f,
+                    0.28f, 0.93f, 0.09f, 0f, -18f,
+                    0.28f, 0.93f, 0.09f, 0f, -18f,
+                    0f, 0f, 0f, 1f, 0f
+                )
+            )
             PhotoEditFilter.Warm -> ColorMatrix(
                 floatArrayOf(
                     1.08f, 0f, 0f, 0f, 8f,
@@ -195,6 +208,22 @@ class PhotoEditorRepository(context: Context) {
                     0.92f, 0f, 0f, 0f, 0f,
                     0f, 1.00f, 0f, 0f, 0f,
                     0f, 0f, 1.10f, 0f, 6f,
+                    0f, 0f, 0f, 1f, 0f
+                )
+            )
+            PhotoEditFilter.Sepia -> ColorMatrix(
+                floatArrayOf(
+                    0.393f, 0.769f, 0.189f, 0f, 0f,
+                    0.349f, 0.686f, 0.168f, 0f, 0f,
+                    0.272f, 0.534f, 0.131f, 0f, 0f,
+                    0f, 0f, 0f, 1f, 0f
+                )
+            )
+            PhotoEditFilter.Fade -> ColorMatrix(
+                floatArrayOf(
+                    0.88f, 0f, 0f, 0f, 16f,
+                    0f, 0.88f, 0f, 0f, 16f,
+                    0f, 0f, 0.88f, 0f, 16f,
                     0f, 0f, 0f, 1f, 0f
                 )
             )

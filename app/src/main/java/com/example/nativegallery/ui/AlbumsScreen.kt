@@ -6,9 +6,17 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,19 +34,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
@@ -54,9 +65,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,15 +85,20 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import com.example.nativegallery.data.AlbumArrangementPolicy
+import com.example.nativegallery.data.AlbumArrangementRepository
 import com.example.nativegallery.model.Album
 import com.example.nativegallery.model.AlbumLayoutMode
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.HeaderActionButton
 import com.example.nativegallery.ui.components.GalleryMotion
+import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.PremiumDropdownMenu
 import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
 import com.example.nativegallery.ui.components.PremiumOverflowButton
@@ -89,10 +108,17 @@ import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
+import com.example.nativegallery.ui.components.prefetchMediaThumbnails
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.max
+import kotlin.math.min
 
 enum class AlbumDetailGridMode {
     Compact,
-    Comfortable
+    Comfortable,
+    Spacious
 }
 
 enum class AlbumDetailSortMode {
@@ -103,10 +129,67 @@ enum class AlbumDetailSortMode {
 
 private class AlbumBoundsRef(var value: Rect = Rect.Zero)
 
+private const val AlbumDropOverlapFraction = 0.34f
+
+private fun Rect.translatedBy(offset: Offset): Rect = Rect(
+    left = left + offset.x,
+    top = top + offset.y,
+    right = right + offset.x,
+    bottom = bottom + offset.y
+)
+
+private fun hasSufficientAlbumDropOverlap(
+    draggedBounds: Rect,
+    targetBounds: Rect
+): Boolean {
+    val draggedArea = draggedBounds.width.coerceAtLeast(0f) * draggedBounds.height.coerceAtLeast(0f)
+    val targetArea = targetBounds.width.coerceAtLeast(0f) * targetBounds.height.coerceAtLeast(0f)
+    val comparisonArea = min(draggedArea, targetArea)
+    if (comparisonArea <= 0f) return false
+
+    val overlapWidth = (
+        min(draggedBounds.right, targetBounds.right) -
+            max(draggedBounds.left, targetBounds.left)
+        ).coerceAtLeast(0f)
+    val overlapHeight = (
+        min(draggedBounds.bottom, targetBounds.bottom) -
+            max(draggedBounds.top, targetBounds.top)
+        ).coerceAtLeast(0f)
+    val overlapFraction = (overlapWidth * overlapHeight) / comparisonArea
+    val center = draggedBounds.center
+    val centerInsideTarget =
+        center.x >= targetBounds.left &&
+            center.x <= targetBounds.right &&
+            center.y >= targetBounds.top &&
+            center.y <= targetBounds.bottom
+
+    return centerInsideTarget || overlapFraction >= AlbumDropOverlapFraction
+}
+
 private enum class AlbumDragSelectMode {
     Add,
     Remove
 }
+
+private class AlbumCardInteraction(
+    val enabled: Boolean,
+    val pinnedAlbumId: String?,
+    val draggedAlbumId: String?,
+    val dropTargetAlbumId: String?,
+    val dragOffset: Offset,
+    val dropTargetSwapOffset: Offset,
+    val draggedHoverScale: Offset,
+    val dropTargetHoverScale: Offset,
+    val contextAlbumId: String?,
+    val canDelete: (Album) -> Boolean,
+    val onPinToggle: (Album) -> Unit,
+    val onContextMenuRequest: (Album) -> Unit,
+    val onContextMenuDismiss: () -> Unit,
+    val onDeleteRequest: (Album) -> Unit,
+    val onDragStart: (Album) -> Unit,
+    val onDrag: (Offset) -> Unit,
+    val onDragEnd: () -> Unit
+)
 
 @Composable
 fun AlbumsScreen(
@@ -117,6 +200,8 @@ fun AlbumsScreen(
     onOpenLockedMedia: () -> Unit,
     onOpenRecentlyDeleted: () -> Unit,
     onCreateAlbum: (String) -> Unit = {},
+    onDeleteAlbum: (Album) -> Unit = {},
+    canDeleteAlbum: (Album) -> Boolean = { !it.isAllPhotos },
     onOpenSettings: () -> Unit = {},
     hiddenAlbumCount: Int = 0,
     hiddenItemCount: Int = 0,
@@ -139,14 +224,151 @@ fun AlbumsScreen(
     var sortAlphabetically by rememberSaveable { mutableStateOf(false) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var createAlbumName by rememberSaveable { mutableStateOf("") }
-
-    val sortedAlbums = if (sortAlphabetically) {
-        albums.sortedWith(compareBy<Album> { !it.isAllPhotos }.thenBy { it.name })
-    } else {
-        albums
+    val context = LocalContext.current.applicationContext
+    val arrangementRepository = remember(context) { AlbumArrangementRepository(context) }
+    var arrangementState by remember { mutableStateOf(arrangementRepository.load()) }
+    val availableAlbumIds = remember(albums) { albums.map(Album::id) }
+    val albumById = remember(albums) { albums.associateBy(Album::id) }
+    val sourceAlbumIds = remember(albums, sortAlphabetically) {
+        if (sortAlphabetically) {
+            albums.sortedBy { it.name.lowercase() }.map(Album::id)
+        } else {
+            availableAlbumIds
+        }
     }
-    val allPhotos = sortedAlbums.firstOrNull { it.isAllPhotos }
-    val regularAlbums = sortedAlbums.filterNot { it.isAllPhotos }
+    val effectiveArrangement = remember(arrangementState, sortAlphabetically) {
+        if (sortAlphabetically) {
+            arrangementState.copy(orderIds = emptyList())
+        } else {
+            arrangementState
+        }
+    }
+    val sortedAlbums = remember(sourceAlbumIds, effectiveArrangement, albumById) {
+        AlbumArrangementPolicy.arrangedIds(sourceAlbumIds, effectiveArrangement)
+            .mapNotNull(albumById::get)
+    }
+    val leadingAlbum = sortedAlbums.firstOrNull()
+    val remainingAlbums = sortedAlbums.drop(1)
+    val reorderEnabled = !sortAlphabetically && searchQuery.isBlank() && sortedAlbums.size > 1
+    val albumBounds = remember { mutableStateMapOf<String, Rect>() }
+    var draggedAlbumId by remember { mutableStateOf<String?>(null) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var dropTargetAlbumId by remember { mutableStateOf<String?>(null) }
+    var contextAlbumId by remember { mutableStateOf<String?>(null) }
+    var pendingDeleteAlbum by remember { mutableStateOf<Album?>(null) }
+
+    val draggedBounds = draggedAlbumId?.let(albumBounds::get)
+    val dropTargetBounds = dropTargetAlbumId?.let(albumBounds::get)
+    val dropTargetSwapOffset = if (
+        draggedBounds != null && dropTargetBounds != null && draggedAlbumId != dropTargetAlbumId
+    ) {
+        draggedBounds.center - dropTargetBounds.center
+    } else {
+        Offset.Zero
+    }
+    val draggedHoverScale = if (draggedBounds != null && dropTargetBounds != null) {
+        Offset(
+            x = (dropTargetBounds.width / draggedBounds.width).coerceIn(0.58f, 1.72f),
+            y = (dropTargetBounds.height / draggedBounds.height).coerceIn(0.72f, 1.38f)
+        )
+    } else {
+        Offset(1f, 1f)
+    }
+    val dropTargetHoverScale = if (draggedBounds != null && dropTargetBounds != null) {
+        Offset(
+            x = (draggedBounds.width / dropTargetBounds.width).coerceIn(0.58f, 1.72f),
+            y = (draggedBounds.height / dropTargetBounds.height).coerceIn(0.72f, 1.38f)
+        )
+    } else {
+        Offset(1f, 1f)
+    }
+
+    fun clearAlbumDrag() {
+        draggedAlbumId = null
+        dropTargetAlbumId = null
+        dragOffset = Offset.Zero
+    }
+
+    val cardInteraction = AlbumCardInteraction(
+        enabled = reorderEnabled,
+        pinnedAlbumId = arrangementState.pinnedAlbumId,
+        draggedAlbumId = draggedAlbumId,
+        dropTargetAlbumId = dropTargetAlbumId,
+        dragOffset = dragOffset,
+        dropTargetSwapOffset = dropTargetSwapOffset,
+        draggedHoverScale = draggedHoverScale,
+        dropTargetHoverScale = dropTargetHoverScale,
+        contextAlbumId = contextAlbumId,
+        canDelete = canDeleteAlbum,
+        onPinToggle = { album ->
+            sortAlphabetically = false
+            arrangementState = arrangementRepository.save(
+                AlbumArrangementPolicy.togglePin(
+                    availableIds = availableAlbumIds,
+                    state = arrangementState,
+                    albumId = album.id
+                )
+            )
+        },
+        onContextMenuRequest = { album -> contextAlbumId = album.id },
+        onContextMenuDismiss = { contextAlbumId = null },
+        onDeleteRequest = { album ->
+            contextAlbumId = null
+            if (canDeleteAlbum(album)) pendingDeleteAlbum = album
+        },
+        onDragStart = { album ->
+            if (reorderEnabled) {
+                draggedAlbumId = album.id
+                dragOffset = Offset.Zero
+                dropTargetAlbumId = album.id
+            }
+        },
+        onDrag = { delta ->
+            val draggedId = draggedAlbumId
+            val origin = draggedId?.let(albumBounds::get)
+            if (draggedId != null && origin != null) {
+                dragOffset += delta
+                if (dragOffset.getDistanceSquared() > 36f) {
+                    contextAlbumId = null
+                }
+                val draggedBounds = origin.translatedBy(dragOffset)
+                dropTargetAlbumId = sortedAlbums.asSequence()
+                    .filterNot { it.id == draggedId }
+                    .mapNotNull { album -> albumBounds[album.id]?.let { bounds -> album.id to bounds } }
+                    .filter { (_, bounds) ->
+                        hasSufficientAlbumDropOverlap(
+                            draggedBounds = draggedBounds,
+                            targetBounds = bounds
+                        )
+                    }
+                    .minByOrNull { (_, bounds) ->
+                        val distance = bounds.center - draggedBounds.center
+                        distance.getDistanceSquared()
+                    }
+                    ?.first
+                    ?: draggedId
+            }
+        },
+        onDragEnd = {
+            val movedId = draggedAlbumId
+            val targetId = dropTargetAlbumId
+            if (
+                movedId != null &&
+                targetId != null &&
+                movedId != targetId
+            ) {
+                arrangementState = arrangementRepository.save(
+                    AlbumArrangementPolicy.swap(
+                        availableIds = availableAlbumIds,
+                        state = arrangementState,
+                        movedId = movedId,
+                        targetId = targetId
+                    )
+                )
+            }
+            clearAlbumDrag()
+        }
+    )
 
     Box(modifier = Modifier.fillMaxSize()) {
     LazyColumn(
@@ -155,7 +377,7 @@ fun AlbumsScreen(
             start = 18.dp,
             top = 58.dp,
             end = 18.dp,
-            bottom = contentPadding.calculateBottomPadding() + 26.dp
+            bottom = contentPadding.calculateBottomPadding() + 6.dp
         )
     ) {
         item(key = "albums-header", contentType = "albums-header") {
@@ -245,32 +467,46 @@ fun AlbumsScreen(
                 )
             }
         } else if (layoutMode == AlbumLayoutMode.BigTiles) {
-            if (allPhotos != null) {
-                item(key = "album-hero-${allPhotos.id}", contentType = "album-hero") {
-                    AlbumHeroCard(
-                        album = allPhotos,
-                        height = heroHeight,
-                        activeTransitionAlbumId = activeTransitionAlbumId,
-                        onAlbumClick = onAlbumClick,
-                        onAlbumBoundsChanged = onAlbumBoundsChanged
-                    )
+            if (leadingAlbum != null) {
+                item(key = "album-hero", contentType = "album-hero") {
+                    key(leadingAlbum.id) {
+                        AlbumHeroCard(
+                            album = leadingAlbum,
+                            height = heroHeight,
+                            activeTransitionAlbumId = activeTransitionAlbumId,
+                            cardInteraction = cardInteraction,
+                            onAlbumClick = onAlbumClick,
+                            onAlbumBoundsChanged = { album, bounds ->
+                                albumBounds[album.id] = bounds
+                                onAlbumBoundsChanged(album, bounds)
+                            }
+                        )
+                    }
                     Spacer(Modifier.height(12.dp))
                 }
             }
             bigAlbumRows(
-                albums = regularAlbums,
+                albums = remainingAlbums,
                 columns = bigTileColumns,
                 activeTransitionAlbumId = activeTransitionAlbumId,
+                cardInteraction = cardInteraction,
                 onAlbumClick = onAlbumClick,
-                onAlbumBoundsChanged = onAlbumBoundsChanged
+                onAlbumBoundsChanged = { album, bounds ->
+                    albumBounds[album.id] = bounds
+                    onAlbumBoundsChanged(album, bounds)
+                }
             )
         } else {
             basicAlbumRows(
                 albums = sortedAlbums,
                 columns = basicTileColumns,
                 activeTransitionAlbumId = activeTransitionAlbumId,
+                cardInteraction = cardInteraction,
                 onAlbumClick = onAlbumClick,
-                onAlbumBoundsChanged = onAlbumBoundsChanged
+                onAlbumBoundsChanged = { album, bounds ->
+                    albumBounds[album.id] = bounds
+                    onAlbumBoundsChanged(album, bounds)
+                }
             )
         }
         if (!isLoading) {
@@ -318,6 +554,26 @@ fun AlbumsScreen(
                     Text("Cancel")
                 }
             }
+        )
+    }
+
+    pendingDeleteAlbum?.let { album ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteAlbum = null },
+            title = { Text("Delete ${album.name}?") },
+            text = { Text("The album’s photos and videos will move to Recently deleted.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDeleteAlbum = null
+                        onDeleteAlbum(album)
+                    }
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteAlbum = null }) { Text("Cancel") }
+            },
+            shape = RoundedCornerShape(18.dp)
         )
     }
 
@@ -448,41 +704,53 @@ private fun RecentlyDeletedPill(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp)
+            .height(76.dp)
             .bouncyClickable(onClick = onClick),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
-        shape = RoundedCornerShape(34.dp),
-        shadowElevation = 1.dp
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f),
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 0.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 22.dp),
+            modifier = Modifier.padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Surface(
+                modifier = Modifier.size(46.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.11f),
+                shape = RoundedCornerShape(15.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.width(13.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Recently deleted",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 15.sp,
+                        lineHeight = 19.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Review items before they are removed",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
             Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = "Open recently deleted",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(22.dp)
-            )
-            Spacer(Modifier.width(14.dp))
-            Text(
-                text = "Recently deleted",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 15.sp,
-                    lineHeight = 19.sp,
-                    fontWeight = FontWeight.SemiBold
-                ),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "View",
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 14.sp,
-                    lineHeight = 18.sp,
-                    fontWeight = FontWeight.SemiBold
-                ),
-                color = MaterialTheme.colorScheme.primary
             )
         }
     }
@@ -498,9 +766,10 @@ private fun LayoutSelector(
     Box {
         Surface(
             modifier = Modifier.clickable { onExpandedChange(true) },
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
             shape = RoundedCornerShape(22.dp),
-            shadowElevation = 0.dp
+            shadowElevation = 0.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
@@ -545,7 +814,7 @@ private fun LayoutSelector(
                     }
                 },
                 leadingIcon = {
-                    Icon(Icons.Filled.GridView, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Filled.GridView, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 },
                 trailingIcon = {
                     if (layoutMode == AlbumLayoutMode.BigTiles) Icon(Icons.Filled.Check, contentDescription = null)
@@ -563,7 +832,7 @@ private fun LayoutSelector(
                     }
                 },
                 leadingIcon = {
-                    Icon(Icons.Filled.Apps, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Filled.Apps, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 },
                 trailingIcon = {
                     if (layoutMode == AlbumLayoutMode.Basic) Icon(Icons.Filled.Check, contentDescription = null)
@@ -581,13 +850,14 @@ private fun LazyListScope.bigAlbumRows(
     albums: List<Album>,
     columns: Int,
     activeTransitionAlbumId: String?,
+    cardInteraction: AlbumCardInteraction,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     val safeColumns = columns.coerceAtLeast(1)
     val rowCount = (albums.size + safeColumns - 1) / safeColumns
     items(
         count = rowCount,
-        key = { rowIndex -> "big-album-row-$safeColumns-${albums[rowIndex * safeColumns].id}" },
+        key = { rowIndex -> "big-album-row-$safeColumns-$rowIndex" },
         contentType = { "big-album-row" }
     ) { rowIndex ->
         val startIndex = rowIndex * safeColumns
@@ -596,6 +866,7 @@ private fun LazyListScope.bigAlbumRows(
             albums = rowAlbums,
             columns = safeColumns,
             activeTransitionAlbumId = activeTransitionAlbumId,
+            cardInteraction = cardInteraction,
             onAlbumClick = onAlbumClick,
             onAlbumBoundsChanged = onAlbumBoundsChanged
         )
@@ -607,13 +878,14 @@ private fun LazyListScope.basicAlbumRows(
     albums: List<Album>,
     columns: Int,
     activeTransitionAlbumId: String?,
+    cardInteraction: AlbumCardInteraction,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     val safeColumns = columns.coerceAtLeast(1)
     val rowCount = (albums.size + safeColumns - 1) / safeColumns
     items(
         count = rowCount,
-        key = { rowIndex -> "basic-album-row-$safeColumns-${albums[rowIndex * safeColumns].id}" },
+        key = { rowIndex -> "basic-album-row-$safeColumns-$rowIndex" },
         contentType = { "basic-album-row" }
     ) { rowIndex ->
         val startIndex = rowIndex * safeColumns
@@ -622,6 +894,7 @@ private fun LazyListScope.basicAlbumRows(
             albums = rowAlbums,
             columns = safeColumns,
             activeTransitionAlbumId = activeTransitionAlbumId,
+            cardInteraction = cardInteraction,
             onAlbumClick = onAlbumClick,
             onAlbumBoundsChanged = onAlbumBoundsChanged
         )
@@ -634,6 +907,7 @@ private fun AlbumHeroCard(
     album: Album,
     height: androidx.compose.ui.unit.Dp,
     activeTransitionAlbumId: String?,
+    cardInteraction: AlbumCardInteraction,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     AlbumImageCard(
@@ -643,6 +917,7 @@ private fun AlbumHeroCard(
             .height(height),
         cornerRadius = 24.dp,
         activeTransitionAlbumId = activeTransitionAlbumId,
+        cardInteraction = cardInteraction,
         onAlbumClick = onAlbumClick,
         onAlbumBoundsChanged = onAlbumBoundsChanged
     )
@@ -653,6 +928,7 @@ private fun BigAlbumRow(
     albums: List<Album>,
     columns: Int,
     activeTransitionAlbumId: String?,
+    cardInteraction: AlbumCardInteraction,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -660,16 +936,19 @@ private fun BigAlbumRow(
         val cellWidth = (maxWidth - spacing * (columns - 1)) / columns
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
             albums.forEach { album ->
-                AlbumImageCard(
-                    album = album,
-                    modifier = Modifier
-                        .width(cellWidth)
-                        .height(cellWidth.coerceAtMost(176.dp)),
-                    cornerRadius = 22.dp,
-                    activeTransitionAlbumId = activeTransitionAlbumId,
-                    onAlbumClick = onAlbumClick,
-                    onAlbumBoundsChanged = onAlbumBoundsChanged
-                )
+                key(album.id) {
+                    AlbumImageCard(
+                        album = album,
+                        modifier = Modifier
+                            .width(cellWidth)
+                            .height(cellWidth.coerceAtMost(176.dp)),
+                        cornerRadius = 22.dp,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
+                        cardInteraction = cardInteraction,
+                        onAlbumClick = onAlbumClick,
+                        onAlbumBoundsChanged = onAlbumBoundsChanged
+                    )
+                }
             }
             repeat(columns - albums.size) {
                 Spacer(Modifier.width(cellWidth))
@@ -683,6 +962,7 @@ private fun BasicAlbumRow(
     albums: List<Album>,
     columns: Int,
     activeTransitionAlbumId: String?,
+    cardInteraction: AlbumCardInteraction,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -690,49 +970,62 @@ private fun BasicAlbumRow(
         val cellWidth = (maxWidth - spacing * (columns - 1)) / columns
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
             albums.forEach { album ->
-                val albumBounds = remember(album.id) { AlbumBoundsRef() }
-                Column(
-                    modifier = Modifier
-                        .width(cellWidth)
-                        .graphicsLayer { alpha = if (album.id == activeTransitionAlbumId) 0f else 1f }
-                        .bouncyClickable { onAlbumClick(album, albumBounds.value) }
-                ) {
-                    ResourceImage(
-                        imageRes = album.coverRes,
-                        imageUri = album.coverUri,
-                        contentDescription = album.name,
+                key(album.id) {
+                    val albumBounds = remember(album.id) { AlbumBoundsRef() }
+                    Column(
                         modifier = Modifier
-                            .size(cellWidth)
-                            .onGloballyPositioned { coordinates ->
-                                val bounds = coordinates.boundsInWindow()
-                                albumBounds.value = bounds
-                                onAlbumBoundsChanged(album, bounds)
-                            },
-                        cornerRadius = 18.dp,
-                        thumbnailSize = 384
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = album.name,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 14.sp,
-                            lineHeight = 18.sp,
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.onBackground,
-                        maxLines = 1
-                    )
-                    Text(
-                        text = album.itemCount.toString(),
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 11.5.sp,
-                            lineHeight = 15.sp,
-                            fontWeight = FontWeight.Medium
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                            .width(cellWidth)
+                            .albumReorderMotion(album, cardInteraction)
+                            .albumReorderGesture(album, cardInteraction)
+                            .graphicsLayer { alpha = if (album.id == activeTransitionAlbumId) 0f else 1f }
+                            .bouncyClickable { onAlbumClick(album, albumBounds.value) }
+                    ) {
+                        Box {
+                            ResourceImage(
+                                imageRes = album.coverRes,
+                                imageUri = album.coverUri,
+                                contentDescription = album.name,
+                                modifier = Modifier
+                                    .size(cellWidth)
+                                    .onGloballyPositioned { coordinates ->
+                                        val bounds = coordinates.boundsInWindow()
+                                        albumBounds.value = bounds
+                                        onAlbumBoundsChanged(album, bounds)
+                                    },
+                                cornerRadius = 18.dp,
+                                thumbnailSize = 384
+                            )
+                            AlbumContextMenu(
+                                album = album,
+                                interaction = cardInteraction,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(6.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = album.name,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 14.sp,
+                                lineHeight = 18.sp,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = album.itemCount.toString(),
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 11.5.sp,
+                                lineHeight = 15.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
             repeat(columns - albums.size) {
@@ -759,6 +1052,8 @@ fun AlbumDetailScreen(
     albumEnterProgress: Float = 1f,
     gridMode: AlbumDetailGridMode,
     onGridModeChange: (AlbumDetailGridMode) -> Unit,
+    sortMode: AlbumDetailSortMode,
+    onSortModeChange: (AlbumDetailSortMode) -> Unit,
     selectedMediaIds: Set<String> = emptySet(),
     onMediaLongClick: (MediaItem) -> Unit = {},
     onMediaSelectionToggle: (MediaItem) -> Unit = {},
@@ -767,23 +1062,34 @@ fun AlbumDetailScreen(
     onDeleteSelected: () -> Unit = {},
     onShareSelected: () -> Unit = {},
     onHideSelected: () -> Unit = {},
+    onMoveSelected: () -> Unit = {},
     onHideAlbum: (() -> Unit)? = null,
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit = { _, _ -> },
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
-    var sortMode by rememberSaveable(album.id) { mutableStateOf(AlbumDetailSortMode.Newest) }
     val sortedMediaItems = remember(mediaItems, sortMode) {
         sortAlbumMedia(mediaItems, sortMode)
     }
     val columns = when (gridMode) {
         AlbumDetailGridMode.Compact -> 4
         AlbumDetailGridMode.Comfortable -> 3
+        AlbumDetailGridMode.Spacious -> 2
     } + columnBoost.coerceAtLeast(0)
+    val context = LocalContext.current.applicationContext
+    val mediaGeneration = remember(sortedMediaItems) {
+        listOf(
+            sortedMediaItems.size.toString(),
+            sortedMediaItems.firstOrNull()?.id.orEmpty(),
+            sortedMediaItems.lastOrNull()?.id.orEmpty(),
+            sortedMediaItems.firstOrNull()?.sortTimestampMillis?.toString().orEmpty()
+        ).joinToString(separator = ":")
+    }
     val revealOffsetPx = with(LocalDensity.current) { 172.dp.roundToPx() }
     val tileBounds = remember(album.id) { mutableMapOf<String, Rect>() }
     val rootBounds = remember(album.id) { AlbumBoundsRef() }
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
     val isSelectionMode = selectedMediaIds.isNotEmpty()
+    var pinchPreviewScale by remember { mutableStateOf(1f) }
 
     fun rootPoint(localPoint: Offset): Offset = Offset(
         rootBounds.value.left + localPoint.x,
@@ -803,6 +1109,36 @@ fun AlbumDetailScreen(
         if (mediaIndex >= 0) {
             listState.scrollToItem(mediaIndex / columns, scrollOffset = -revealOffsetPx)
         }
+    }
+    LaunchedEffect(album.id, sortMode, columns, mediaGeneration) {
+        if (sortedMediaItems.isEmpty()) return@LaunchedEffect
+        delay(80)
+        prefetchMediaThumbnails(
+            context = context,
+            mediaItems = sortedMediaItems,
+            thumbnailSizes = listOf(384),
+            maxItems = minOf(sortedMediaItems.size, columns * 30)
+        )
+    }
+    LaunchedEffect(album.id, sortMode, columns, mediaGeneration, listState) {
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+        }
+            .distinctUntilChanged()
+            .collectLatest { lastVisibleRow ->
+                val startIndex = ((lastVisibleRow + 1) * columns)
+                    .coerceIn(0, sortedMediaItems.size)
+                val endIndex = (startIndex + columns * 14)
+                    .coerceAtMost(sortedMediaItems.size)
+                if (startIndex < endIndex) {
+                    prefetchMediaThumbnails(
+                        context = context,
+                        mediaItems = sortedMediaItems.subList(startIndex, endIndex),
+                        thumbnailSizes = listOf(384),
+                        maxItems = endIndex - startIndex
+                    )
+                }
+            }
     }
     val revealProgress = albumEnterProgress.coerceIn(0f, 1f)
     val gridTopPadding = 150.dp
@@ -853,11 +1189,52 @@ fun AlbumDetailScreen(
                     )
                 }
             }
+            .pointerInput(gridMode) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var cumulativeZoom = 1f
+                    var densityChanged = false
+                    try {
+                        var gestureActive = true
+                        while (gestureActive) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.count { it.pressed } >= 2) {
+                                cumulativeZoom *= event.calculateZoom()
+                                pinchPreviewScale = (1f + (cumulativeZoom - 1f) * 0.22f)
+                                    .coerceIn(0.94f, 1.06f)
+                                if (!densityChanged && cumulativeZoom >= 1.16f) {
+                                    val nextMode = when (gridMode) {
+                                        AlbumDetailGridMode.Compact -> AlbumDetailGridMode.Comfortable
+                                        AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Spacious
+                                        AlbumDetailGridMode.Spacious -> AlbumDetailGridMode.Spacious
+                                    }
+                                    if (nextMode != gridMode) onGridModeChange(nextMode)
+                                    densityChanged = true
+                                } else if (!densityChanged && cumulativeZoom <= 0.86f) {
+                                    val nextMode = when (gridMode) {
+                                        AlbumDetailGridMode.Spacious -> AlbumDetailGridMode.Comfortable
+                                        AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Compact
+                                        AlbumDetailGridMode.Compact -> AlbumDetailGridMode.Compact
+                                    }
+                                    if (nextMode != gridMode) onGridModeChange(nextMode)
+                                    densityChanged = true
+                                }
+                                event.changes.forEach { it.consume() }
+                            }
+                            gestureActive = event.changes.any { it.pressed }
+                        }
+                    } finally {
+                        pinchPreviewScale = 1f
+                    }
+                }
+            }
     ) {
         LazyColumn(
             state = listState,
             modifier = Modifier.graphicsLayer {
                 alpha = GalleryMotion.smoothstep(0.48f, 0.78f, revealProgress)
+                scaleX = pinchPreviewScale
+                scaleY = pinchPreviewScale
             },
             contentPadding = PaddingValues(
                 start = 8.dp,
@@ -913,7 +1290,7 @@ fun AlbumDetailScreen(
                 itemCount = sortedMediaItems.size,
                 sortMode = sortMode,
                 gridMode = gridMode,
-                onSortModeChange = { sortMode = it },
+                onSortModeChange = onSortModeChange,
                 onGridModeChange = onGridModeChange,
                 selectedCount = selectedMediaIds.size,
                 totalVisibleCount = sortedMediaItems.size,
@@ -924,7 +1301,7 @@ fun AlbumDetailScreen(
                 onHideSelected = onHideSelected,
                 onHideAlbum = onHideAlbum,
                 onBack = onBack,
-                modifier = Modifier.padding(start = 10.dp, top = 42.dp, end = 10.dp, bottom = 14.dp)
+                modifier = Modifier.padding(start = 10.dp, top = 48.dp, end = 10.dp, bottom = 14.dp)
             )
         }
         if (selectedMediaIds.isNotEmpty()) {
@@ -943,6 +1320,7 @@ fun AlbumDetailScreen(
                     onClear = onSelectionClear,
                     onSelectAll = onSelectAllVisible,
                     onShare = onShareSelected,
+                    onMove = onMoveSelected,
                     onDelete = onDeleteSelected,
                     onHide = onHideSelected
                 )
@@ -970,54 +1348,49 @@ fun AlbumDetailTransitionPreview(
     mediaItems: List<MediaItem>,
     contentPadding: PaddingValues,
     gridMode: AlbumDetailGridMode,
-    columnBoost: Int = 0
+    columnBoost: Int = 0,
+    sortMode: AlbumDetailSortMode = AlbumDetailSortMode.Newest,
+    initialFirstVisibleRow: Int = 0,
+    initialFirstVisibleRowOffset: Int = 0
 ) {
     val columns = when (gridMode) {
         AlbumDetailGridMode.Compact -> 4
         AlbumDetailGridMode.Comfortable -> 3
+        AlbumDetailGridMode.Spacious -> 2
     } + columnBoost.coerceAtLeast(0)
-    val spacing = 1.dp
-    val previewItems = remember(mediaItems, columns) { mediaItems.take(columns * 6) }
+    val sortedMediaItems = remember(mediaItems, sortMode) { sortAlbumMedia(mediaItems, sortMode) }
+    val rowCount = (sortedMediaItems.size + columns - 1) / columns
+    val previewListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = initialFirstVisibleRow.coerceIn(0, (rowCount - 1).coerceAtLeast(0)),
+        initialFirstVisibleItemScrollOffset = initialFirstVisibleRowOffset.coerceAtLeast(0)
+    )
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    start = 8.dp,
-                    top = 150.dp,
-                    end = 8.dp,
-                    bottom = contentPadding.calculateBottomPadding() + 34.dp
-                )
+        LazyColumn(
+            state = previewListState,
+            modifier = Modifier.fillMaxSize(),
+            userScrollEnabled = false,
+            contentPadding = PaddingValues(
+                start = 8.dp,
+                top = 150.dp,
+                end = 8.dp,
+                bottom = contentPadding.calculateBottomPadding() + 34.dp
+            )
         ) {
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-                Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
-                    repeat(6) { rowIndex ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                            repeat(columns) { columnIndex ->
-                                val mediaItem = previewItems.getOrNull(rowIndex * columns + columnIndex)
-                                if (mediaItem != null) {
-                                    ResourceImage(
-                                        imageRes = mediaItem.imageRes,
-                                        imageUri = mediaItem.contentUri,
-                                        contentDescription = mediaItem.title,
-                                        modifier = Modifier.size(cellSize),
-                                        cornerRadius = 0.dp,
-                                        thumbnailSize = 384
-                                    )
-                                } else {
-                                    Spacer(Modifier.size(cellSize))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            albumDetailRows(
+                mediaItems = sortedMediaItems,
+                columns = columns,
+                sharedElementPrefix = "album-transition-${album.id}",
+                selectedMediaIds = emptySet(),
+                onMediaBoundsChanged = { _, _ -> },
+                onMediaLongClick = {},
+                onMediaSelectionToggle = {},
+                onMediaClick = { _, _, _, _ -> }
+            )
         }
 
         Surface(
@@ -1030,39 +1403,23 @@ fun AlbumDetailTransitionPreview(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 10.dp, top = 42.dp, end = 10.dp, bottom = 14.dp)
+                    .padding(start = 10.dp, top = 48.dp, end = 10.dp, bottom = 14.dp)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                GalleryScreenHeader(
+                    title = album.name,
+                    onBack = {},
+                    leadingContentDescription = "",
+                    trailingContent = {
                         Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                            Icon(Icons.Filled.MoreVert, contentDescription = null)
                         }
-                        Text(
-                            text = album.name,
-                            modifier = Modifier.padding(start = 14.dp),
-                            maxLines = 1,
-                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp, lineHeight = 28.sp),
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
                     }
-                    Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = null)
-                    }
-                }
+                )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = "%1$,d items, %2\$s, %3\$s".format(
-                        mediaItems.size,
-                        AlbumDetailSortMode.Newest.label(),
+                        sortedMediaItems.size,
+                        sortMode.label(),
                         gridMode.label()
                     ),
                     modifier = Modifier.padding(horizontal = 10.dp),
@@ -1073,6 +1430,7 @@ fun AlbumDetailTransitionPreview(
         }
     }
 }
+
 @Composable
 private fun AlbumDetailHeader(
     album: Album,
@@ -1095,43 +1453,20 @@ private fun AlbumDetailHeader(
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 2.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = MaterialTheme.colorScheme.onBackground
+        GalleryScreenHeader(
+            title = album.name,
+            onBack = onBack,
+            trailingContent = {
+                Box {
+                    PremiumOverflowButton(
+                        expanded = menuExpanded,
+                        contentDescription = "Album options",
+                        onClick = { menuExpanded = true }
                     )
-                }
-                Text(
-                    text = album.name,
-                    modifier = Modifier.padding(start = 14.dp),
-                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp, lineHeight = 28.sp),
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1
-                )
-            }
-            Box {
-                PremiumOverflowButton(
-                    expanded = menuExpanded,
-                    contentDescription = "Album options",
-                    onClick = { menuExpanded = true }
-                )
-                PremiumDropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false }
-                ) {
+                    PremiumDropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false }
+                    ) {
                     PremiumDropdownMenuItem(
                         text = { Text("Select all") },
                         leadingIcon = { Icon(Icons.Filled.SelectAll, contentDescription = null) },
@@ -1194,6 +1529,17 @@ private fun AlbumDetailHeader(
                             menuExpanded = false
                         }
                     )
+                    PremiumDropdownMenuItem(
+                        text = { Text("Spacious grid") },
+                        leadingIcon = { Icon(Icons.Filled.Apps, contentDescription = null) },
+                        trailingIcon = {
+                            if (gridMode == AlbumDetailGridMode.Spacious) Icon(Icons.Filled.Check, contentDescription = null)
+                        },
+                        onClick = {
+                            onGridModeChange(AlbumDetailGridMode.Spacious)
+                            menuExpanded = false
+                        }
+                    )
                     if (onHideAlbum != null && !album.isAllPhotos) {
                         PremiumDropdownMenuItem(
                             text = { Text("Hide album") },
@@ -1204,9 +1550,10 @@ private fun AlbumDetailHeader(
                             }
                         )
                     }
+                    }
                 }
             }
-        }
+        )
         Spacer(Modifier.height(8.dp))
         Text(
             text = "%1$,d items, %2\$s, %3\$s".format(
@@ -1229,6 +1576,7 @@ private fun AlbumSelectionToolbar(
     onClear: () -> Unit,
     onSelectAll: () -> Unit,
     onShare: () -> Unit,
+    onMove: () -> Unit,
     onDelete: () -> Unit,
     onHide: () -> Unit
 ) {
@@ -1274,6 +1622,12 @@ private fun AlbumSelectionToolbar(
                     label = "Lock",
                     icon = Icons.Filled.Lock,
                     onClick = onHide,
+                    modifier = Modifier.weight(1f)
+                )
+                AlbumSelectionAction(
+                    label = "Move",
+                    icon = Icons.Filled.Folder,
+                    onClick = onMove,
                     modifier = Modifier.weight(1f)
                 )
                 AlbumSelectionAction(
@@ -1406,7 +1760,9 @@ private fun LazyListScope.albumDetailPreviewRows(
     val rowCount = (mediaItems.size + columns - 1) / columns
     items(
         count = rowCount,
-        key = { rowIndex -> "album-detail-preview-row-$columns-$rowIndex" },
+        key = { rowIndex ->
+            "album-detail-preview-row-$columns-${mediaItems[rowIndex * columns].id}"
+        },
         contentType = { "album-detail-preview-row" }
     ) { rowIndex ->
         val startIndex = rowIndex * columns
@@ -1564,12 +1920,15 @@ private fun AlbumImageCard(
     modifier: Modifier,
     cornerRadius: androidx.compose.ui.unit.Dp,
     activeTransitionAlbumId: String?,
+    cardInteraction: AlbumCardInteraction,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     val albumBounds = remember(album.id) { AlbumBoundsRef() }
 
     Box(
         modifier = modifier
+            .albumReorderMotion(album, cardInteraction)
+            .albumReorderGesture(album, cardInteraction)
             .onGloballyPositioned { coordinates ->
                 val bounds = coordinates.boundsInWindow()
                 albumBounds.value = bounds
@@ -1626,6 +1985,138 @@ private fun AlbumImageCard(
                 )
             )
         }
+        AlbumContextMenu(
+            album = album,
+            interaction = cardInteraction,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(8.dp)
+        )
+    }
+}
+
+@Composable
+private fun Modifier.albumReorderMotion(
+    album: Album,
+    interaction: AlbumCardInteraction
+): Modifier {
+    val isDragging = interaction.draggedAlbumId == album.id
+    val isDropTarget = interaction.dropTargetAlbumId == album.id && !isDragging
+    val animatedScaleX by animateFloatAsState(
+        targetValue = when {
+            isDragging -> interaction.draggedHoverScale.x * 1.035f
+            isDropTarget -> interaction.dropTargetHoverScale.x * 0.985f
+            else -> 1f
+        },
+        animationSpec = spring(
+            dampingRatio = 0.58f,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "album reorder scale x"
+    )
+    val animatedScaleY by animateFloatAsState(
+        targetValue = when {
+            isDragging -> interaction.draggedHoverScale.y * 1.035f
+            isDropTarget -> interaction.dropTargetHoverScale.y * 0.985f
+            else -> 1f
+        },
+        animationSpec = spring(
+            dampingRatio = 0.58f,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "album reorder scale y"
+    )
+    val swapX by animateFloatAsState(
+        targetValue = if (isDropTarget) interaction.dropTargetSwapOffset.x else 0f,
+        animationSpec = spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessLow),
+        label = "album swap x"
+    )
+    val swapY by animateFloatAsState(
+        targetValue = if (isDropTarget) interaction.dropTargetSwapOffset.y else 0f,
+        animationSpec = spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessLow),
+        label = "album swap y"
+    )
+    val targetJiggle by animateFloatAsState(
+        targetValue = if (isDropTarget) {
+            if (interaction.dropTargetSwapOffset.x >= 0f) 1.1f else -1.1f
+        } else {
+            0f
+        },
+        animationSpec = spring(dampingRatio = 0.42f, stiffness = Spring.StiffnessLow),
+        label = "album target jiggle"
+    )
+    return this
+        .zIndex(if (isDragging) 4f else 0f)
+        .graphicsLayer {
+            scaleX = animatedScaleX
+            scaleY = animatedScaleY
+            translationX = if (isDragging) interaction.dragOffset.x else swapX
+            translationY = if (isDragging) interaction.dragOffset.y else swapY
+            rotationZ = if (isDragging) {
+                (interaction.dragOffset.x / 180f).coerceIn(-2.2f, 2.2f)
+            } else {
+                targetJiggle
+            }
+            shadowElevation = if (isDragging) 18.dp.toPx() else 0f
+        }
+}
+
+@Composable
+private fun AlbumContextMenu(
+    album: Album,
+    interaction: AlbumCardInteraction,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier) {
+        PremiumDropdownMenu(
+            expanded = interaction.contextAlbumId == album.id,
+            onDismissRequest = interaction.onContextMenuDismiss
+        ) {
+            PremiumDropdownMenuItem(
+                text = { Text(if (interaction.pinnedAlbumId == album.id) "Unpin album" else "Pin album") },
+                leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
+                onClick = {
+                    interaction.onContextMenuDismiss()
+                    interaction.onPinToggle(album)
+                }
+            )
+            PremiumDropdownMenuItem(
+                text = { Text("Delete album") },
+                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                enabled = interaction.canDelete(album),
+                onClick = { interaction.onDeleteRequest(album) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun Modifier.albumReorderGesture(
+    album: Album,
+    interaction: AlbumCardInteraction
+): Modifier {
+    val latestInteraction by rememberUpdatedState(interaction)
+    return pointerInput(album.id) {
+        detectDragGesturesAfterLongPress(
+            onDragStart = {
+                latestInteraction.onContextMenuRequest(album)
+                if (latestInteraction.enabled) {
+                    latestInteraction.onDragStart(album)
+                }
+            },
+            onDragEnd = {
+                if (latestInteraction.enabled) latestInteraction.onDragEnd()
+            },
+            onDragCancel = {
+                if (latestInteraction.enabled) latestInteraction.onDragEnd()
+            },
+            onDrag = { change, dragAmount ->
+                if (latestInteraction.enabled) {
+                    change.consume()
+                    latestInteraction.onDrag(dragAmount)
+                }
+            }
+        )
     }
 }
 
@@ -1641,6 +2132,7 @@ private fun AlbumDetailGridMode.label(): String {
     return when (this) {
         AlbumDetailGridMode.Compact -> "Compact"
         AlbumDetailGridMode.Comfortable -> "Comfortable"
+        AlbumDetailGridMode.Spacious -> "Spacious"
     }
 }
 

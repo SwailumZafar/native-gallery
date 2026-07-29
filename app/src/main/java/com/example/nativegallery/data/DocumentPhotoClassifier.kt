@@ -49,13 +49,14 @@ fun classifyDocumentPhoto(
         .replace(whitespaceRegex, " ")
         .trim()
     val meaningfulCharacterCount = normalized.count { it.isLetterOrDigit() }
-    if (meaningfulCharacterCount < 20 || lineCount < 2) return null
+    if (meaningfulCharacterCount < 24 || lineCount < 2) return null
 
     val keywordText = normalized
         .replace(nonAlphaNumericRegex, " ")
         .replace(whitespaceRegex, " ")
         .trim()
     val paddedKeywordText = " $keywordText "
+    val wordCount = keywordText.split(' ').count { word -> word.length >= 2 }
     fun containsKeyword(keyword: String): Boolean =
         paddedKeywordText.contains(" $keyword ")
 
@@ -65,17 +66,31 @@ fun classifyDocumentPhoto(
     val strongest = scores.maxByOrNull { it.value }
     val strongestScore = strongest?.value ?: 0
     val keywordHitCount = scores.values.sum()
+    val hasStrongDocumentPhrase =
+        containsKeyword("receipt") ||
+            containsKeyword("invoice") ||
+            containsKeyword("application form") ||
+            containsKeyword("academic transcript") ||
+            containsKeyword("meeting minutes") ||
+            containsKeyword("lecture notes") ||
+            containsKeyword("dear sir") ||
+            containsKeyword("dear madam")
     val socialUiSignalCount = setOf(
         "follow", "followers", "reply", "write a comment", "reels", "likes", "send a chat"
     ).count(::containsKeyword)
-    if (socialUiSignalCount >= 2 && keywordHitCount < 2) return null
-
+    if (socialUiSignalCount >= 1 && keywordHitCount < 3 && !hasStrongDocumentPhrase) return null
     val hasDocumentStructure =
-        (meaningfulCharacterCount >= 45 && lineCount >= 4) ||
-            (meaningfulCharacterCount >= 80 && lineCount >= 3 && blockCount >= 1)
+        (
+            meaningfulCharacterCount >= 140 &&
+                wordCount >= 22 &&
+                lineCount >= 6 &&
+                blockCount >= 2
+            ) ||
+            (meaningfulCharacterCount >= 220 && wordCount >= 32 && lineCount >= 5)
     val hasDocumentVocabulary =
-        (keywordHitCount >= 2 && meaningfulCharacterCount >= 28) ||
-            (strongestScore >= 1 && meaningfulCharacterCount >= 55 && lineCount >= 3)
+        (strongestScore >= 2 && meaningfulCharacterCount >= 36 && lineCount >= 3) ||
+            (keywordHitCount >= 3 && meaningfulCharacterCount >= 32 && lineCount >= 3) ||
+            (hasStrongDocumentPhrase && meaningfulCharacterCount >= 32 && lineCount >= 3)
 
     if (!hasDocumentStructure && !hasDocumentVocabulary) return null
 

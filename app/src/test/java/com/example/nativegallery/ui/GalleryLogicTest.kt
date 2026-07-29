@@ -154,8 +154,47 @@ class GalleryLogicTest {
         assertEquals(8, policy.utilityGridColumns)
     }
 
-    private fun backAction(
-        destination: GalleryDestination,
+    @Test
+    fun separatingVerticalHinge_usesLargestSafePaneWithoutCrossingHinge() {
+        val leftPane = gallerySafePaneInsets(
+            rootWidthPx = 1800f,
+            rootHeightPx = 2400f,
+            foldLeftPx = 880f,
+            foldTopPx = 0f,
+            foldRightPx = 920f,
+            foldBottomPx = 2400f
+        )
+        assertEquals(920f, leftPane.end)
+        assertEquals(0f, leftPane.start)
+
+        val widerRightPane = gallerySafePaneInsets(
+            rootWidthPx = 1800f,
+            rootHeightPx = 2400f,
+            foldLeftPx = 600f,
+            foldTopPx = 0f,
+            foldRightPx = 640f,
+            foldBottomPx = 2400f
+        )
+        assertEquals(640f, widerRightPane.start)
+        assertEquals(0f, widerRightPane.end)
+    }
+
+    @Test
+    fun separatingHorizontalHinge_avoidsTabletopOcclusion() {
+        val insets = gallerySafePaneInsets(
+            rootWidthPx = 1800f,
+            rootHeightPx = 2400f,
+            foldLeftPx = 0f,
+            foldTopPx = 1180f,
+            foldRightPx = 1800f,
+            foldBottomPx = 1220f
+        )
+
+        assertEquals(1220f, insets.bottom)
+        assertEquals(0f, insets.top)
+    }
+
+    private fun backAction(        destination: GalleryDestination,
         selectedTab: GalleryTab = GalleryTab.Photos,
         viewerVisible: Boolean = false,
         viewerClosing: Boolean = false,

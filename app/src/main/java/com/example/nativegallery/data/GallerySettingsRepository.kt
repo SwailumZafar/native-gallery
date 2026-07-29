@@ -16,10 +16,13 @@ enum class GalleryThemeMode {
     Dark
 }
 
-enum class GalleryGridDensity(val photoColumns: Int) {
-    Compact(photoColumns = 4),
-    Comfortable(photoColumns = 3),
-    Spacious(photoColumns = 2)
+enum class GalleryGridDensity(
+    val photoColumns: Int,
+    val albumDetailColumns: Int
+) {
+    Compact(photoColumns = 4, albumDetailColumns = 4),
+    Comfortable(photoColumns = 3, albumDetailColumns = 3),
+    Spacious(photoColumns = 2, albumDetailColumns = 2)
 }
 
 class GallerySettingsRepository(context: Context) {

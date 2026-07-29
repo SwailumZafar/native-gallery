@@ -5,11 +5,13 @@ import android.os.Bundle
 import android.view.Display
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,9 +24,16 @@ import com.example.nativegallery.ui.theme.GalleryTheme
 
 class MainActivity : ComponentActivity() {
     private var performanceModeEnabled = true
+    @Volatile
+    private var galleryPresentationReady = false
+    private var launchPreDrawListener: ViewTreeObserver.OnPreDrawListener? = null
+    private val launchGateTimeout = Runnable { setGalleryPresentationReady(true) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) {
+            installDirectLaunchGate()
+        }
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
@@ -37,6 +46,13 @@ class MainActivity : ComponentActivity() {
                 GalleryThemeMode.Dark -> true
             }
 
+            SideEffect {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !darkTheme
+                    isAppearanceLightNavigationBars = !darkTheme
+                }
+            }
+
             LaunchedEffect(gallerySettings.performanceMode) {
                 applyPerformanceMode(gallerySettings.performanceMode)
             }
@@ -44,12 +60,41 @@ class MainActivity : ComponentActivity() {
             GalleryTheme(darkTheme = darkTheme) {
                 GalleryApp(
                     settings = gallerySettings,
+                    onInitialPresentationReady = ::setGalleryPresentationReady,
                     onSettingsChange = { nextSettings ->
                         gallerySettings = settingsRepository.save(nextSettings)
                     }
                 )
             }
         }
+    }
+
+    private fun installDirectLaunchGate() {
+        val listener = ViewTreeObserver.OnPreDrawListener { galleryPresentationReady }
+        launchPreDrawListener = listener
+        window.decorView.viewTreeObserver.addOnPreDrawListener(listener)
+        window.decorView.postDelayed(launchGateTimeout, LaunchGateTimeoutMillis)
+    }
+
+    private fun setGalleryPresentationReady(ready: Boolean) {
+        galleryPresentationReady = ready
+        if (!ready) return
+        window.decorView.removeCallbacks(launchGateTimeout)
+        launchPreDrawListener?.let { listener ->
+            val observer = window.decorView.viewTreeObserver
+            if (observer.isAlive) observer.removeOnPreDrawListener(listener)
+        }
+        launchPreDrawListener = null
+    }
+
+    override fun onDestroy() {
+        window.decorView.removeCallbacks(launchGateTimeout)
+        launchPreDrawListener?.let { listener ->
+            val observer = window.decorView.viewTreeObserver
+            if (observer.isAlive) observer.removeOnPreDrawListener(listener)
+        }
+        launchPreDrawListener = null
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -113,5 +158,9 @@ class MainActivity : ComponentActivity() {
                 requestFrameRate(view.getChildAt(index), frameRate)
             }
         }
+    }
+
+    private companion object {
+        const val LaunchGateTimeoutMillis = 180L
     }
 }

@@ -74,11 +74,45 @@ class MediaStoreGalleryRepository(
                 return@trace GallerySnapshot(emptyList(), emptyList())
             }
 
-            val rows = queryMedia(
+            val candidateLimit = limit + offset.coerceAtLeast(0)
+            val captureDatedRows = queryMedia(
                 mediaKinds = mediaKinds,
-                limit = limit,
-                offset = offset.coerceAtLeast(0)
+                limit = candidateLimit,
+                offset = 0,
+                preferredSortColumns = arrayOf(
+                    MediaStore.MediaColumns.DATE_TAKEN,
+                    MediaStore.MediaColumns.DATE_MODIFIED,
+                    MediaStore.MediaColumns.DATE_ADDED
+                )
             )
+            val modifiedDatedRows = queryMedia(
+                mediaKinds = mediaKinds,
+                limit = candidateLimit,
+                offset = 0,
+                preferredSortColumns = arrayOf(
+                    MediaStore.MediaColumns.DATE_MODIFIED,
+                    MediaStore.MediaColumns.DATE_ADDED,
+                    MediaStore.MediaColumns.DATE_TAKEN
+                )
+            )
+            val addedDatedRows = queryMedia(
+                mediaKinds = mediaKinds,
+                limit = candidateLimit,
+                offset = 0,
+                preferredSortColumns = arrayOf(
+                    MediaStore.MediaColumns.DATE_ADDED,
+                    MediaStore.MediaColumns.DATE_MODIFIED,
+                    MediaStore.MediaColumns.DATE_TAKEN
+                )
+            )
+            val rows = (captureDatedRows + modifiedDatedRows + addedDatedRows)
+                .distinctBy { it.mediaItem.id }
+                .sortedWith(
+                    compareByDescending<MediaStoreRow> { it.mediaItem.sortTimestampMillis }
+                        .thenByDescending { it.mediaItem.id }
+                )
+                .drop(offset.coerceAtLeast(0))
+                .take(limit)
             GallerySnapshot(
                 mediaItems = rows.map { it.mediaItem },
                 albums = buildAlbums(rows)
@@ -129,7 +163,8 @@ class MediaStoreGalleryRepository(
         mediaKinds: Set<MediaKind>,
         limit: Int? = null,
         offset: Int = 0,
-        onlyTrashed: Boolean = false
+        onlyTrashed: Boolean = false,
+        preferredSortColumns: Array<String>? = null
     ): List<MediaStoreRow> {
         val resolver = appContext.contentResolver
         val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -167,7 +202,12 @@ class MediaStoreGalleryRepository(
         val selection = (listOf(formatSelection.clause) +
             MediaStoreVisibilityPolicy.selectionClauses(onlyTrashed)).joinToString(separator = " AND ")
         val selectionArgs = formatSelection.args
-        val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC, ${MediaStore.MediaColumns.DATE_MODIFIED} DESC, ${MediaStore.MediaColumns.DATE_TAKEN} DESC"
+        val sortColumns = preferredSortColumns ?: arrayOf(
+            MediaStore.MediaColumns.DATE_TAKEN,
+            MediaStore.MediaColumns.DATE_MODIFIED,
+            MediaStore.MediaColumns.DATE_ADDED
+        )
+        val sortOrder = sortColumns.joinToString(separator = ", ") { "$it DESC" }
         val rows = mutableListOf<MediaStoreRow>()
         val dateFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.getDefault())
 
@@ -177,7 +217,7 @@ class MediaStoreGalleryRepository(
             projection = projection,
             selection = selection,
             selectionArgs = selectionArgs,
-            sortOrder = sortOrder,
+                sortOrder = sortOrder,
             onlyTrashed = onlyTrashed,
             limit = limit,
             offset = offset
@@ -327,15 +367,7 @@ class MediaStoreGalleryRepository(
                         if (onlyTrashed) MediaStore.MATCH_ONLY else MediaStore.MATCH_EXCLUDE
                     )
                 }
-                putStringArray(
-                    ContentResolver.QUERY_ARG_SORT_COLUMNS,
-                    arrayOf(
-                        MediaStore.MediaColumns.DATE_ADDED,
-                        MediaStore.MediaColumns.DATE_MODIFIED,
-                        MediaStore.MediaColumns.DATE_TAKEN
-                    )
-                )
-                putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+                putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
                 limit?.let { pageLimit ->
                     putInt(ContentResolver.QUERY_ARG_LIMIT, pageLimit)
                     putInt(ContentResolver.QUERY_ARG_OFFSET, offset.coerceAtLeast(0))

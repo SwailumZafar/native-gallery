@@ -44,6 +44,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -59,6 +60,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
@@ -83,6 +85,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
@@ -135,6 +138,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.window.layout.FoldingFeature
+import androidx.window.layout.WindowInfoTracker
 import com.example.nativegallery.data.DocumentPhotoRepository
 import com.example.nativegallery.data.FavoritesRepository
 import com.example.nativegallery.data.GalleryPrivacyFilter
@@ -145,9 +150,14 @@ import com.example.nativegallery.data.GallerySnapshot
 import com.example.nativegallery.data.HiddenAlbumsRepository
 import com.example.nativegallery.data.HiddenMediaRepository
 import com.example.nativegallery.data.HiddenSecurityRepository
+import com.example.nativegallery.data.LockedMediaOperations
+import com.example.nativegallery.data.LockedMediaOriginalRemovalResult
 import com.example.nativegallery.data.LockedMediaVaultProvider
 import com.example.nativegallery.data.LockedMediaVaultRepository
 import com.example.nativegallery.data.LockedMediaVaultSnapshot
+import com.example.nativegallery.data.MediaManagementAccessRepository
+import com.example.nativegallery.data.MediaManagementAccessState
+import com.example.nativegallery.data.MediaManagementAccessStatus
 import com.example.nativegallery.data.MediaPermissions
 import com.example.nativegallery.data.PhotoEditorRepository
 import com.example.nativegallery.data.RecentlyDeletedRepository
@@ -159,6 +169,7 @@ import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.model.RecentlyDeletedMedia
 import com.example.nativegallery.ui.components.GalleryImage
 import com.example.nativegallery.ui.components.GalleryMotion
+import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaAccessNotice
 import com.example.nativegallery.ui.components.MediaThumbnail
@@ -170,6 +181,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -200,10 +212,16 @@ private data class AlbumTransitionSpec(
     val key: Int,
     val album: Album,
     val tileBounds: Rect,
-    val mode: AlbumTransitionMode
+    val mode: AlbumTransitionMode,
+    val sortMode: AlbumDetailSortMode = AlbumDetailSortMode.Newest,
+    val firstVisibleRow: Int = 0,
+    val firstVisibleRowOffset: Int = 0
 )
 
 private const val FavoritesAlbumId = "favorites"
+private const val AlbumOpeningWarmRowCount = 16
+private const val InitialPresentationThumbnailCount = 6
+private const val InitialPresentationWarmupTimeoutMillis = 250L
 
 private data class MediaOpenTransitionSpec(
     val key: Int,
@@ -216,7 +234,7 @@ private data class MediaOpenTransitionSpec(
     val actionMode: ViewerActionMode
 )
 
-private enum class MediaStoreWriteMode {
+internal enum class MediaStoreWriteMode {
     Trash,
     RestoreFromTrash,
     DeleteForever,
@@ -224,12 +242,14 @@ private enum class MediaStoreWriteMode {
     MoveToAlbum
 }
 
-private data class PendingMediaStoreWriteAction(
+internal data class PendingMediaStoreWriteAction(
     val mode: MediaStoreWriteMode,
     val mediaItems: List<MediaItem>,
     val viewerDirection: Int = 1,
     val fromViewer: Boolean = false,
-    val targetAlbumName: String? = null
+    val targetAlbumName: String? = null,
+    val targetAlbumRelativePath: String? = null,
+    val returnToAlbumsAfterMove: Boolean = false
 )
 
 private data class PendingLockConfirmation(
@@ -255,9 +275,11 @@ private val GalleryMediaBoundsTransform = BoundsTransform { _, _ ->
 @Composable
 fun GalleryApp(
     settings: GallerySettings,
+    onInitialPresentationReady: (Boolean) -> Unit = {},
     onSettingsChange: (GallerySettings) -> Unit
 ) {
     val context = LocalContext.current
+    val separatingFoldBounds = rememberSeparatingFoldBounds(context)
     val viewerConfiguration = LocalConfiguration.current
     val viewerDensity = LocalDensity.current
     val viewerPhotoDecodeSize = remember(
@@ -284,8 +306,19 @@ fun GalleryApp(
     val mediaUiState by mediaViewModel.uiState.collectAsStateWithLifecycle()
     val navigationViewModel: GalleryNavigationViewModel = viewModel()
     val navigationUiState by navigationViewModel.uiState.collectAsStateWithLifecycle()
+    val viewerSessionViewModel: GalleryViewerSessionViewModel = viewModel()
+    val retainedViewerSession = remember(viewerSessionViewModel) { viewerSessionViewModel.session }
     val selectedTab = navigationUiState.selectedTab
     val destination = navigationUiState.destination
+    var mainNavigationChromeReady by remember { mutableStateOf(destination == GalleryDestination.Main) }
+    LaunchedEffect(destination) {
+        if (destination == GalleryDestination.Main) {
+            delay(GalleryMotion.SecondaryCloseMillis.toLong())
+            mainNavigationChromeReady = true
+        } else {
+            mainNavigationChromeReady = false
+        }
+    }
     val selectedAlbumId = navigationUiState.selectedAlbumId
     val hiddenRepository = remember(context) { HiddenAlbumsRepository(context) }
     val hiddenMediaRepository = remember(context) { HiddenMediaRepository(context) }
@@ -302,6 +335,15 @@ fun GalleryApp(
     val hasHiddenPin = lockedSecurityUiState.hasPin
     val hiddenAuthMessage = lockedSecurityUiState.authMessage
     val lockedVaultRepository = remember(context) { LockedMediaVaultRepository(context) }
+    val lockedMediaOperations = remember(lockedVaultRepository, hiddenMediaRepository) {
+        LockedMediaOperations(lockedVaultRepository, hiddenMediaRepository)
+    }
+    val mediaManagementAccessRepository = remember(context) {
+        MediaManagementAccessRepository(context)
+    }
+    var mediaManagementAccessStatus by remember {
+        mutableStateOf(mediaManagementAccessRepository.status())
+    }
     val documentPhotoRepository = remember(context) { DocumentPhotoRepository(context) }
     val documentPhotosViewModel: DocumentPhotosViewModel = viewModel(
         factory = remember(documentPhotoRepository) {
@@ -326,32 +368,42 @@ fun GalleryApp(
     val albumTileBounds = remember { mutableMapOf<String, Rect>() }
     val mediaTileBounds = remember { mutableMapOf<String, Rect>() }
     val albumDetailGridModes = remember { mutableStateMapOf<String, AlbumDetailGridMode>() }
+    val albumDetailSortModes = remember { mutableStateMapOf<String, AlbumDetailSortMode>() }
     val defaultAlbumGridMode = remember(settings.gridDensity) { settings.gridDensity.defaultAlbumGridMode() }
+    val launchAdaptivePolicy = remember(
+        viewerConfiguration.screenWidthDp,
+        viewerConfiguration.screenHeightDp
+    ) {
+        galleryAdaptivePolicy(
+            widthDp = viewerConfiguration.screenWidthDp.toFloat(),
+            heightDp = viewerConfiguration.screenHeightDp.toFloat()
+        )
+    }
 
     var editorViewerSession by remember { mutableStateOf<ViewerSessionSnapshot?>(null) }
     var albumLayoutMode by rememberSaveable { mutableStateOf(AlbumLayoutMode.BigTiles) }
     var gallerySearchQuery by rememberSaveable { mutableStateOf("") }
     var vaultRefreshKey by remember { mutableIntStateOf(0) }
-    var pendingMediaStoreWriteAction by remember { mutableStateOf<PendingMediaStoreWriteAction?>(null) }
+    var pendingMediaStoreWriteAction by viewerSessionViewModel.pendingMediaStoreWriteActionState
     var pendingLockConfirmation by remember { mutableStateOf<PendingLockConfirmation?>(null) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingMoveMediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var pendingAlbumName by rememberSaveable { mutableStateOf<String?>(null) }
     var albumCreationSelectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var editingMediaItem by remember { mutableStateOf<MediaItem?>(null) }
     val mediaAccess = mediaUiState.mediaAccess
     val mediaStoreSnapshot = mediaUiState.snapshot
-    val initialMediaSyncComplete = mediaUiState.initialSyncComplete
     val mediaStoreDeletedItems = mediaUiState.trashedMedia
-    var viewerMediaItem by remember { mutableStateOf<MediaItem?>(null) }
-    var viewerMediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var viewerVisible by remember { mutableStateOf(false) }
+    var viewerMediaItem by remember { mutableStateOf(retainedViewerSession?.mediaItem) }
+    var viewerMediaItems by remember { mutableStateOf(retainedViewerSession?.mediaItems.orEmpty()) }
+    var viewerVisible by remember { mutableStateOf(retainedViewerSession != null) }
     var viewerSharedElementKey by remember { mutableStateOf<Any?>(null) }
     var viewerSharedElementKeyPrefix by remember { mutableStateOf<String?>(null) }
-    var viewerActionMode by remember { mutableStateOf(ViewerActionMode.Normal) }
+    var viewerActionMode by remember { mutableStateOf(retainedViewerSession?.actionMode ?: ViewerActionMode.Normal) }
     var viewerReturnFallbackBounds by remember { mutableStateOf(Rect.Zero) }
     var viewerSourceMediaId by remember { mutableStateOf<String?>(null) }
-    var viewerSourceMediaIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var viewerSourceMediaIds by remember { mutableStateOf(retainedViewerSession?.mediaItems?.map { it.id }.orEmpty()) }
     var viewerSourceBounds by remember { mutableStateOf(Rect.Zero) }
     var viewerSourceGridColumns by remember { mutableIntStateOf(4) }
     var albumTransition by remember { mutableStateOf<AlbumTransitionSpec?>(null) }
@@ -367,6 +419,14 @@ fun GalleryApp(
     var viewerCloseInProgress by remember { mutableStateOf(false) }
     var viewerRevealMediaId by remember { mutableStateOf<String?>(null) }
     var transitionRootBoundsInWindow by remember { mutableStateOf(Rect.Zero) }
+    SideEffect {
+        viewerSessionViewModel.retain(
+            visible = viewerVisible,
+            mediaItem = viewerMediaItem,
+            mediaItems = viewerMediaItems,
+            actionMode = viewerActionMode
+        )
+    }
     val mainPagerState = rememberPagerState(
         initialPage = selectedTab.pageIndex(),
         pageCount = { 3 }
@@ -418,6 +478,12 @@ fun GalleryApp(
         mediaViewModel.updateAccess(MediaPermissions.currentAccess(context))
     }
 
+    val mediaManagementAccessLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        mediaManagementAccessStatus = mediaManagementAccessRepository.status()
+    }
+
     LaunchedEffect(initialPermissionPromptHandled, mediaAccess.hasAccess) {
         if (!initialPermissionPromptHandled) {
             initialPermissionPromptHandled = true
@@ -467,6 +533,7 @@ fun GalleryApp(
                     if (!initialResumeDelivered) {
                         initialResumeDelivered = true
                     } else {
+                        mediaManagementAccessStatus = mediaManagementAccessRepository.status()
                         val currentAccess = MediaPermissions.currentAccess(context)
                         mediaViewModel.updateAccess(currentAccess)
                         if (currentAccess.hasAccess) {
@@ -521,7 +588,11 @@ fun GalleryApp(
         }
     }
     val emptySnapshot = remember { GallerySnapshot(emptyList(), emptyList()) }
-    val isLoadingMedia = mediaAccess.hasAccess && (!initialMediaSyncComplete || mediaStoreSnapshot == null)
+    val isLoadingMedia = mediaAccess.hasAccess && mediaStoreSnapshot == null
+    val areAlbumsLoading = isLoadingMedia || (mediaAccess.hasAccess && !mediaUiState.initialSyncComplete)
+    var initialPresentationReady by remember { mutableStateOf(!initialMediaAccess.hasAccess) }
+    var navigationPagesWarmed by remember { mutableStateOf(false) }
+    SideEffect { onInitialPresentationReady(initialPresentationReady) }
     val activeSnapshot = when {
         isLoadingMedia -> emptySnapshot
         mediaAccess.hasAccess -> mediaStoreSnapshot ?: emptySnapshot
@@ -594,10 +665,41 @@ fun GalleryApp(
         GalleryPrivacyFilter.visibleMedia(availableMedia, hiddenAlbumIds, hiddenMediaIds)
     }
     val galleryFrontWarmupKey = remember(visibleMedia) {
-        visibleMedia.take(48).joinToString(separator = "|") { it.id }
+        visibleMedia.take(InitialPresentationThumbnailCount).joinToString(separator = "|") { it.id }
     }
-    LaunchedEffect(galleryFrontWarmupKey) {
-        if (visibleMedia.isNotEmpty()) {
+    LaunchedEffect(mediaAccess.hasAccess, isLoadingMedia, galleryFrontWarmupKey) {
+        when {
+            !mediaAccess.hasAccess -> initialPresentationReady = true
+            isLoadingMedia -> initialPresentationReady = false
+            initialPresentationReady -> Unit
+            else -> {
+                val firstViewportPhotos = visibleMedia
+                    .take(InitialPresentationThumbnailCount)
+                    .filterNot(MediaItem::isVideo)
+                if (firstViewportPhotos.isNotEmpty()) {
+                    withTimeoutOrNull(InitialPresentationWarmupTimeoutMillis) {
+                        prefetchMediaThumbnails(
+                            context = context.applicationContext,
+                            mediaItems = firstViewportPhotos,
+                            thumbnailSizes = listOf(384),
+                            maxItems = firstViewportPhotos.size,
+                            pinInMemory = true
+                        )
+                    }
+                }
+                initialPresentationReady = true
+            }
+        }
+    }
+    LaunchedEffect(initialPresentationReady) {
+        if (initialPresentationReady && !navigationPagesWarmed) {
+            // Keep cold-start composition lean, then precompose all three primary tabs so a direct
+            // Photos-to-Menu tap does not pay the full Menu composition cost.
+            delay(350L)
+            navigationPagesWarmed = true
+        }
+    }
+    LaunchedEffect(galleryFrontWarmupKey, initialPresentationReady) {        if (initialPresentationReady && visibleMedia.isNotEmpty()) {
             prefetchMediaThumbnails(
                 context = context.applicationContext,
                 mediaItems = visibleMedia,
@@ -627,6 +729,17 @@ fun GalleryApp(
             albums = baseVisibleAlbums,
             favoriteAlbum = favoriteAlbum(favoriteMedia)
         )
+    }
+    val moveTargetAlbums = remember(visibleAlbums, visibleMediaByAlbum) {
+        visibleAlbums
+            .asSequence()
+            .filterNot { it.isAllPhotos || it.id == FavoritesAlbumId }
+            .mapNotNull { album ->
+                visibleMediaByAlbum[album.id]
+                    ?.firstNotNullOfOrNull { it.relativePath?.takeIf(String::isNotBlank) }
+                    ?.let { relativePath -> album to relativePath }
+            }
+            .toList()
     }
     val visibleAlbumIds = remember(visibleAlbums) { visibleAlbums.map { it.id } }
     val albumNameById = remember(visibleAlbums) { visibleAlbums.associate { it.id to it.name } }
@@ -874,19 +987,21 @@ fun GalleryApp(
         if (mediaItems.isEmpty()) return
         lockedSecurityViewModel.clearMessage()
         prefetchScope.launch {
-            val importedMediaIds = withContext(Dispatchers.IO) {
-                mediaItems.mapNotNull { mediaItem ->
-                    mediaItem.id.takeIf { lockedVaultRepository.importMedia(mediaItem) }
-                }
-            }.toSet()
+            val importExecution = withContext(Dispatchers.IO) {
+                lockedMediaOperations.importIntoVault(mediaItems)
+            }
+            val importedMediaIds = importExecution.outcome.importedIds
             if (importedMediaIds.isEmpty()) return@launch
+            importExecution.updatedHiddenMediaIds?.let { hiddenMediaIds = it }
             vaultRefreshKey += 1
 
             val importedItems = mediaItems.filter { importedMediaIds.contains(it.id) }
-            val updatedHiddenMediaIds = withContext(Dispatchers.IO) {
-                hiddenMediaRepository.setMediaHidden(importedMediaIds, true)
+            if (importExecution.outcome.failedIds.isNotEmpty()) {
+                lockedSecurityViewModel.showMessage(
+                    "%1$,d item(s) could not be copied into Locked Media."
+                        .format(importExecution.outcome.failedIds.size)
+                )
             }
-            hiddenMediaIds = updatedHiddenMediaIds
             onLocked()
             launchMediaStoreWrite(
                 PendingMediaStoreWriteAction(
@@ -1031,6 +1146,15 @@ fun GalleryApp(
         if (albumTransition != null) return
         val tileBounds = bounds.takeIf { it != Rect.Zero } ?: albumTileBounds[album.id]
         val openingMedia = mediaForAlbumFast(album, visibleMedia, visibleMediaByAlbum, favoriteMedia)
+        val openingColumns = when (albumDetailGridModes[album.id] ?: defaultAlbumGridMode) {
+            AlbumDetailGridMode.Compact -> 4
+            AlbumDetailGridMode.Comfortable -> 3
+            AlbumDetailGridMode.Spacious -> 2
+        } + launchAdaptivePolicy.albumDetailColumnBoost
+        val openingWarmItemCount = (openingColumns * AlbumOpeningWarmRowCount).coerceAtMost(128)
+        val firstViewportMedia = openingMedia
+            .take(openingWarmItemCount)
+            .filterNot(MediaItem::usesDeferredVideoThumbnail)
         navigationViewModel.selectAlbumForOpening(album.id)
         selectedMediaIds = emptySet()
 
@@ -1046,14 +1170,15 @@ fun GalleryApp(
                 key = openingKey,
                 album = album,
                 tileBounds = tileBounds,
-                mode = AlbumTransitionMode.Opening
+                mode = AlbumTransitionMode.Opening,
+                sortMode = albumDetailSortModes[album.id] ?: AlbumDetailSortMode.Newest
             )
             prefetchScope.launch {
                 prefetchMediaThumbnails(
                     context = context.applicationContext,
-                    mediaItems = openingMedia,
+                    mediaItems = firstViewportMedia,
                     thumbnailSizes = listOf(384),
-                    maxItems = 24,
+                    maxItems = firstViewportMedia.size,
                     pinInMemory = true
                 )
                 if (albumTransitionKey == openingKey) {
@@ -1062,7 +1187,16 @@ fun GalleryApp(
             }
             return
         }
-        navigationViewModel.showAlbumDetail()
+        prefetchScope.launch {
+            prefetchMediaThumbnails(
+                context = context.applicationContext,
+                mediaItems = firstViewportMedia,
+                thumbnailSizes = listOf(384),
+                maxItems = firstViewportMedia.size,
+                pinInMemory = true
+            )
+            navigationViewModel.showAlbumDetail()
+        }
     }
 
     fun closeAlbumDetail() {
@@ -1076,7 +1210,10 @@ fun GalleryApp(
                 key = albumTransitionKey,
                 album = closingAlbum,
                 tileBounds = closingBounds,
-                mode = AlbumTransitionMode.Closing
+                mode = AlbumTransitionMode.Closing,
+                sortMode = albumDetailSortModes[closingAlbum.id] ?: AlbumDetailSortMode.Newest,
+                firstVisibleRow = albumDetailListState.firstVisibleItemIndex,
+                firstVisibleRowOffset = albumDetailListState.firstVisibleItemScrollOffset
             )
         }
         navigationViewModel.closeAlbumDetail()
@@ -1103,10 +1240,7 @@ fun GalleryApp(
         if (destination == GalleryDestination.Main) {
             val targetPage = selectedTab.pageIndex()
             if (mainPagerState.currentPage != targetPage) {
-                mainPagerState.animateScrollToPage(
-                    page = targetPage,
-                    animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow)
-                )
+                mainPagerState.scrollToPage(targetPage)
             }
         }
     }
@@ -1174,13 +1308,13 @@ fun GalleryApp(
         } else {
             mediaItem
         }).takeIf { it.contentUri != null }
-        if (warmupItem != null) {
+        if (warmupItem != null && !warmupItem.isVideo) {
             prefetchScope.launch {
                 prefetchMediaThumbnails(
                     context = context.applicationContext,
                     mediaItems = listOf(warmupItem),
                     thumbnailSizes = listOf(
-                        if (actionMode == ViewerActionMode.Locked || warmupItem.isVideo) 512
+                        if (actionMode == ViewerActionMode.Locked) 512
                         else viewerPhotoDecodeSize
                     ),
                     maxItems = 1,
@@ -1366,14 +1500,20 @@ fun GalleryApp(
             val albumName = action.targetAlbumName.orEmpty()
             prefetchScope.launch {
                 val moved = withContext(Dispatchers.IO) {
-                    mediaStoreWriteRepository.moveToAlbum(action.mediaItems, albumName)
+                    mediaStoreWriteRepository.moveToAlbum(
+                        mediaItems = action.mediaItems,
+                        albumName = albumName,
+                        targetRelativePath = action.targetAlbumRelativePath
+                    )
                 }
                 mediaViewModel.finishAppMediaStoreWrite()
                 if (moved) {
                     pendingAlbumName = null
                     albumCreationSelectedIds = emptySet()
                     selectedMediaIds = emptySet()
-                    navigationViewModel.openTab(GalleryTab.Albums)
+                    if (action.returnToAlbumsAfterMove) {
+                        navigationViewModel.openTab(GalleryTab.Albums)
+                    }
                 }
                 mediaViewModel.requestFullRefresh()
             }
@@ -1420,6 +1560,35 @@ fun GalleryApp(
         }
     }
 
+    fun rollbackCancelledLockedMedia(action: PendingMediaStoreWriteAction) {
+        if (action.mode != MediaStoreWriteMode.DeleteLockedOriginals) return
+        prefetchScope.launch {
+            val execution = withContext(Dispatchers.IO) {
+                lockedMediaOperations.resolveOriginalRemoval(
+                    importedIds = action.mediaItems.mapTo(linkedSetOf()) { it.id },
+                    result = LockedMediaOriginalRemovalResult.CancelledOrFailed
+                )
+            }
+            execution.updatedHiddenMediaIds?.let { hiddenMediaIds = it }
+            if (execution.resolution.rollbackIds.isNotEmpty()) {
+                vaultRefreshKey += 1
+            }
+            val rollbackCount = execution.resolution.rollbackIds.size
+            val committedCount = execution.resolution.committedIds.size
+            lockedSecurityViewModel.showMessage(
+                when {
+                    rollbackCount > 0 && committedCount > 0 ->
+                        "%1$,d item(s) were not moved; %2$,d remain safely locked."
+                            .format(rollbackCount, committedCount)
+                    rollbackCount > 0 ->
+                        "Original removal was cancelled, so those items were not moved to Locked Media."
+                    else ->
+                        "The public original was already gone, so the encrypted copy remains in Locked Media."
+                }
+            )
+            mediaViewModel.requestQuickRefresh()
+        }
+    }
     fun completeMediaStoreFallback(action: PendingMediaStoreWriteAction) {
         prefetchScope.launch {
             when (action.mode) {
@@ -1433,18 +1602,29 @@ fun GalleryApp(
                     completeMediaStoreWrite(action)
                 }
                 MediaStoreWriteMode.DeleteForever -> {
-                    withContext(Dispatchers.IO) {
+                    val deleted = withContext(Dispatchers.IO) {
                         mediaStoreWriteRepository.deleteDirectly(action.mediaItems)
                     }
                     mediaViewModel.finishAppMediaStoreWrite()
-                    completeMediaStoreWrite(action)
+                    if (deleted) {
+                        completeMediaStoreWrite(action)
+                    } else {
+                        lockedSecurityViewModel.showMessage(
+                            "Android did not allow those items to be deleted. Nothing was removed."
+                        )
+                        mediaViewModel.requestFullRefresh()
+                    }
                 }
                 MediaStoreWriteMode.DeleteLockedOriginals -> {
-                    withContext(Dispatchers.IO) {
+                    val originalsRemoved = withContext(Dispatchers.IO) {
                         mediaStoreWriteRepository.deleteDirectly(action.mediaItems)
                     }
                     mediaViewModel.finishAppMediaStoreWrite()
-                    mediaViewModel.requestQuickRefresh()
+                    if (originalsRemoved) {
+                        completeMediaStoreWrite(action)
+                    } else {
+                        rollbackCancelledLockedMedia(action)
+                    }
                 }
                 MediaStoreWriteMode.MoveToAlbum -> {
                     completeMediaStoreWrite(action)
@@ -1453,27 +1633,6 @@ fun GalleryApp(
         }
     }
 
-    fun rollbackCancelledLockedMedia(action: PendingMediaStoreWriteAction) {
-        if (action.mode != MediaStoreWriteMode.DeleteLockedOriginals) return
-        prefetchScope.launch {
-            val rollbackIds = withContext(Dispatchers.IO) {
-                action.mediaItems
-                    .filter { lockedVaultRepository.originalMediaExists(it.id) }
-                    .map { it.id }
-                    .toSet()
-            }
-            if (rollbackIds.isEmpty()) return@launch
-            hiddenMediaIds = hiddenMediaRepository.setMediaHidden(rollbackIds, false)
-            withContext(Dispatchers.IO) {
-                rollbackIds.forEach(lockedVaultRepository::delete)
-            }
-            vaultRefreshKey += 1
-            lockedSecurityViewModel.showMessage(
-                "Original removal was cancelled, so those items were not moved to Locked Media."
-            )
-            mediaViewModel.requestQuickRefresh()
-        }
-    }
     val mediaStoreWriteLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
@@ -1621,6 +1780,12 @@ fun GalleryApp(
 
     fun clearMediaSelection() {
         selectedMediaIds = emptySet()
+    }
+
+    fun chooseAlbumForSelectedMedia() {
+        if (selectedMediaItems.isNotEmpty()) {
+            pendingMoveMediaItems = selectedMediaItems
+        }
     }
 
     fun deleteSelectedMedia() {
@@ -1853,12 +2018,30 @@ fun GalleryApp(
         val density = LocalDensity.current
         val rootWidthPx = with(density) { maxWidth.toPx() }
         val rootHeightPx = with(density) { maxHeight.toPx() }
-        val adaptivePolicy = remember(maxWidth, maxHeight) {
-            galleryAdaptivePolicy(maxWidth.value, maxHeight.value)
+        val foldSafeInsetsPx = remember(rootWidthPx, rootHeightPx, separatingFoldBounds) {
+            separatingFoldBounds?.let { foldBounds ->
+                gallerySafePaneInsets(
+                    rootWidthPx = rootWidthPx,
+                    rootHeightPx = rootHeightPx,
+                    foldLeftPx = foldBounds.left.toFloat(),
+                    foldTopPx = foldBounds.top.toFloat(),
+                    foldRightPx = foldBounds.right.toFloat(),
+                    foldBottomPx = foldBounds.bottom.toFloat()
+                )
+            } ?: GallerySafePaneInsetsPx()
+        }
+        val foldStartPadding = with(density) { foldSafeInsetsPx.start.toDp() }
+        val foldTopPadding = with(density) { foldSafeInsetsPx.top.toDp() }
+        val foldEndPadding = with(density) { foldSafeInsetsPx.end.toDp() }
+        val foldBottomPadding = with(density) { foldSafeInsetsPx.bottom.toDp() }
+        val safeContentWidth = (maxWidth - foldStartPadding - foldEndPadding).coerceAtLeast(1.dp)
+        val safeContentHeight = (maxHeight - foldTopPadding - foldBottomPadding).coerceAtLeast(1.dp)
+        val adaptivePolicy = remember(safeContentWidth, safeContentHeight) {
+            galleryAdaptivePolicy(safeContentWidth.value, safeContentHeight.value)
         }
         val adaptivePhotoColumns = (
             settings.gridDensity.photoColumns + adaptivePolicy.photoColumnBoost
-        ).coerceIn(3, 10)
+        ).coerceIn(2, 10)
         val adaptiveHeroHeight = when (adaptivePolicy.widthClass) {
             GalleryWindowWidthClass.Compact -> 176.dp
             GalleryWindowWidthClass.Medium -> 196.dp
@@ -1867,6 +2050,12 @@ fun GalleryApp(
 
         SharedTransitionLayout(
             modifier = Modifier
+                .padding(
+                    start = foldStartPadding,
+                    top = foldTopPadding,
+                    end = foldEndPadding,
+                    bottom = foldBottomPadding
+                )
                 .fillMaxSize()
                 .graphicsLayer {
                     val gestureAction = predictiveBackGestureAction
@@ -1908,6 +2097,7 @@ fun GalleryApp(
                     bottomBar = {
                         if (
                             destination == GalleryDestination.Main &&
+                            mainNavigationChromeReady &&
                             selectedMediaIds.isEmpty() &&
                             !viewerVisible &&
                             navigationTransitionIdle &&
@@ -1928,6 +2118,7 @@ fun GalleryApp(
                     Row(modifier = Modifier.fillMaxSize()) {
                         if (
                             destination == GalleryDestination.Main &&
+                            mainNavigationChromeReady &&
                             selectedMediaIds.isEmpty() &&
                             !viewerVisible &&
                             navigationTransitionIdle &&
@@ -2003,7 +2194,7 @@ fun GalleryApp(
                                 HorizontalPager(
                                     state = mainPagerState,
                                     modifier = Modifier.fillMaxSize(),
-                                    beyondViewportPageCount = 2,
+                                    beyondViewportPageCount = if (navigationPagesWarmed) 2 else 0,
                                     userScrollEnabled = navigationTransitionIdle,
                                     flingBehavior = tabFlingBehavior,
                                     key = { page -> pageToGalleryTab(page).name }
@@ -2021,6 +2212,17 @@ fun GalleryApp(
                                                 searchQuery = gallerySearchQuery,
                                                 onSearchQueryChange = { gallerySearchQuery = it },
                                                 gridColumns = adaptivePhotoColumns,
+                                                onGridColumnsChange = { requestedColumns ->
+                                                    val requestedBaseColumns = (
+                                                        requestedColumns - adaptivePolicy.photoColumnBoost
+                                                        ).coerceIn(2, 4)
+                                                    val nextDensity = GalleryGridDensity.entries.minBy { density ->
+                                                        kotlin.math.abs(density.photoColumns - requestedBaseColumns)
+                                                    }
+                                                    if (nextDensity != settings.gridDensity) {
+                                                        onSettingsChange(settings.copy(gridDensity = nextDensity))
+                                                    }
+                                                },
                                                 listState = photosListState,
                                                 revealMediaId = viewerRevealMediaId,
                                                 selectedMediaIds = selectedMediaIds,
@@ -2031,6 +2233,7 @@ fun GalleryApp(
                                                 onDeleteSelected = ::deleteSelectedMedia,
                                                 onShareSelected = ::shareSelectedMedia,
                                                 onHideSelected = ::hideSelectedMedia,
+                                                onMoveSelected = ::chooseAlbumForSelectedMedia,
                                                 onRefresh = mediaViewModel::requestQuickRefresh,
                                                 onOpenSettings = { showSettingsDialog = true },
                                                 onMediaBoundsChanged = { mediaItem, bounds ->
@@ -2061,6 +2264,25 @@ fun GalleryApp(
                                                 onOpenLockedMedia = ::openLockedMedia,
                                                 onOpenRecentlyDeleted = ::openRecentlyDeleted,
                                                 onCreateAlbum = ::startAlbumCreator,
+                                                onDeleteAlbum = { album ->
+                                                    val albumMedia = mediaForAlbumFast(
+                                                        album,
+                                                        visibleMedia,
+                                                        visibleMediaByAlbum,
+                                                        favoriteMedia
+                                                    )
+                                                    if (albumMedia.isNotEmpty()) {
+                                                        launchMediaStoreWrite(
+                                                            PendingMediaStoreWriteAction(
+                                                                mode = MediaStoreWriteMode.Trash,
+                                                                mediaItems = albumMedia
+                                                            )
+                                                        )
+                                                    }
+                                                },
+                                                canDeleteAlbum = { album ->
+                                                    !album.isAllPhotos && album.id != FavoritesAlbumId
+                                                },
                                                 onOpenSettings = { showSettingsDialog = true },
                                                 hiddenAlbumCount = hiddenAlbumCount,
                                                 hiddenItemCount = hiddenAlbumItemCount,
@@ -2075,12 +2297,15 @@ fun GalleryApp(
                                                 listState = albumsListState,
                                                 activeTransitionAlbumId = albumTransition
                                                     ?.takeIf {
-                                                        it.mode == AlbumTransitionMode.Opening &&
-                                                            albumTransitionCommittedKey == it.key
+                                                        it.mode == AlbumTransitionMode.Closing ||
+                                                            (
+                                                                it.mode == AlbumTransitionMode.Opening &&
+                                                                    albumTransitionCommittedKey == it.key
+                                                                )
                                                     }
                                                     ?.album?.id,
                                                 mediaAccessNotice = mediaAccessNotice,
-                                                isLoading = isLoadingMedia,
+                                                isLoading = areAlbumsLoading,
                                                 searchQuery = gallerySearchQuery,
                                                 onSearchQueryChange = { gallerySearchQuery = it },
                                                 bigTileColumns = adaptivePolicy.bigAlbumColumns,
@@ -2118,6 +2343,8 @@ fun GalleryApp(
                                         albumEnterProgress = 1f,
                                         gridMode = albumDetailGridModes[selectedAlbum.id] ?: defaultAlbumGridMode,
                                         onGridModeChange = { gridMode -> albumDetailGridModes[selectedAlbum.id] = gridMode },
+                                        sortMode = albumDetailSortModes[selectedAlbum.id] ?: AlbumDetailSortMode.Newest,
+                                        onSortModeChange = { sortMode -> albumDetailSortModes[selectedAlbum.id] = sortMode },
                                         selectedMediaIds = selectedMediaIds,
                                         onMediaLongClick = ::toggleMediaSelection,
                                         onMediaSelectionToggle = ::toggleMediaSelection,
@@ -2126,6 +2353,7 @@ fun GalleryApp(
                                         onDeleteSelected = ::deleteSelectedMedia,
                                         onShareSelected = ::shareSelectedMedia,
                                         onHideSelected = ::hideSelectedMedia,
+                                        onMoveSelected = ::chooseAlbumForSelectedMedia,
                                         onHideAlbum = { hideAlbumAndReturn(selectedAlbum) },
                                         onMediaBoundsChanged = { mediaItem, bounds ->
                                             if (bounds.isUsableTransitionBounds()) {
@@ -2136,6 +2364,7 @@ fun GalleryApp(
                                             val selectedGridColumns = when (albumDetailGridModes[selectedAlbum.id] ?: defaultAlbumGridMode) {
                                                 AlbumDetailGridMode.Compact -> 4
                                                 AlbumDetailGridMode.Comfortable -> 3
+                                                AlbumDetailGridMode.Spacious -> 2
                                             } + adaptivePolicy.albumDetailColumnBoost
                                             startViewerOpen(
                                                 mediaItem = mediaItem,
@@ -2253,7 +2482,8 @@ fun GalleryApp(
                                                     PendingMediaStoreWriteAction(
                                                         mode = MediaStoreWriteMode.MoveToAlbum,
                                                         mediaItems = selectedItems,
-                                                        targetAlbumName = albumName
+                                                        targetAlbumName = albumName,
+                                                        returnToAlbumsAfterMove = true
                                                     )
                                                 )
                                             }
@@ -2330,7 +2560,10 @@ fun GalleryApp(
                         mediaItems = if (overlayAlbum.id == selectedAlbumId) selectedAlbumMedia else mediaForAlbumFast(overlayAlbum, visibleMedia, visibleMediaByAlbum, favoriteMedia),
                         contentPadding = PaddingValues(),
                         gridMode = albumDetailGridModes[overlayAlbum.id] ?: defaultAlbumGridMode,
-                        columnBoost = adaptivePolicy.albumDetailColumnBoost
+                        columnBoost = adaptivePolicy.albumDetailColumnBoost,
+                        sortMode = albumTransition?.sortMode ?: AlbumDetailSortMode.Newest,
+                        initialFirstVisibleRow = albumTransition?.firstVisibleRow ?: 0,
+                        initialFirstVisibleRowOffset = albumTransition?.firstVisibleRowOffset ?: 0
                     )
                 }
                 ReferenceMediaOpenOverlay(
@@ -2451,25 +2684,199 @@ fun GalleryApp(
             if (showSettingsDialog) {
                 GallerySettingsDialog(
                     settings = settings,
+                    mediaManagementAccessStatus = mediaManagementAccessStatus,
+                    onRequestMediaManagementAccess = {
+                        mediaManagementAccessRepository.requestAccessIntent()?.let {
+                            mediaManagementAccessLauncher.launch(it)
+                        }
+                    },
                     onSettingsChange = onSettingsChange,
                     onDismiss = { showSettingsDialog = false }
                 )
             }
+
+            if (pendingMoveMediaItems.isNotEmpty()) {
+                MoveToAlbumDialog(
+                    itemCount = pendingMoveMediaItems.size,
+                    targetAlbums = moveTargetAlbums,
+                    onDismiss = { pendingMoveMediaItems = emptyList() },
+                    onTargetSelected = { album, targetRelativePath ->
+                        val normalizedTarget = targetRelativePath.trimEnd('/', '\\')
+                        val movingItems = pendingMoveMediaItems.filterNot { mediaItem ->
+                            mediaItem.relativePath
+                                ?.trimEnd('/', '\\')
+                                ?.equals(normalizedTarget, ignoreCase = true) == true
+                        }
+                        pendingMoveMediaItems = emptyList()
+                        if (movingItems.isEmpty()) {
+                            selectedMediaIds = emptySet()
+                        } else {
+                            launchMediaStoreWrite(
+                                PendingMediaStoreWriteAction(
+                                    mode = MediaStoreWriteMode.MoveToAlbum,
+                                    mediaItems = movingItems,
+                                    targetAlbumName = album.name,
+                                    targetAlbumRelativePath = targetRelativePath
+                                )
+                            )
+                        }
+                    }
+                )
+            }
+
         }
     }
+}
+
+private fun MediaItem.usesDeferredVideoThumbnail(): Boolean {
+    return isVideo && (
+        mimeType?.contains("matroska", ignoreCase = true) == true ||
+            title.endsWith(".mkv", ignoreCase = true)
+        )
+}
+
+@Composable
+private fun MoveToAlbumDialog(
+    itemCount: Int,
+    targetAlbums: List<Pair<Album, String>>,
+    onDismiss: () -> Unit,
+    onTargetSelected: (Album, String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    modifier = Modifier.size(44.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Filled.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.size(23.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "Move to album",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Text(
+                        text = "%1$,d selected".format(itemCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        text = {
+            if (targetAlbums.isEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Text(
+                        text = "Create another album before moving these items.",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 390.dp)) {
+                    items(targetAlbums, key = { (album, _) -> album.id }) { (album, relativePath) ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 4.dp)
+                                .bouncyClickable { onTargetSelected(album, relativePath) },
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                GalleryImage(
+                                    imageRes = album.coverRes,
+                                    imageUri = album.coverUri,
+                                    contentDescription = "",
+                                    modifier = Modifier.size(52.dp),
+                                    cornerRadius = 13.dp,
+                                    thumbnailSize = 160
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = album.name,
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = "%1$,d items".format(album.itemCount),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Surface(
+                                    modifier = Modifier.size(32.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Filled.ChevronRight,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", fontWeight = FontWeight.SemiBold) }
+        },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(24.dp)
+    )
 }
 
 @Composable
 private fun GallerySettingsDialog(
     settings: GallerySettings,
+    mediaManagementAccessStatus: MediaManagementAccessStatus,
+    onRequestMediaManagementAccess: () -> Unit,
     onSettingsChange: (GallerySettings) -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Settings") },
+        title = {
+            Text(
+                text = "Settings",
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
+            )
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 SettingsSectionTitle("Theme")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     GalleryThemeMode.entries.forEach { mode ->
@@ -2494,6 +2901,16 @@ private fun GallerySettingsDialog(
                     }
                 }
 
+                if (
+                    mediaManagementAccessStatus.state == MediaManagementAccessState.Granted ||
+                    mediaManagementAccessStatus.state == MediaManagementAccessState.Requestable
+                ) {
+                    SettingsSectionTitle("Media changes")
+                    MediaManagementSettingsRow(
+                        status = mediaManagementAccessStatus,
+                        onRequestAccess = onRequestMediaManagementAccess
+                    )
+                }
                 SettingsSectionTitle("Video")
                 SettingsSwitchRow(
                     label = "Autoplay videos",
@@ -2519,18 +2936,75 @@ private fun GallerySettingsDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Done")
+                Text("Done", fontWeight = FontWeight.SemiBold)
             }
-        }
+        },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(24.dp)
     )
 }
 
 @Composable
+private fun MediaManagementSettingsRow(
+    status: MediaManagementAccessStatus,
+    onRequestAccess: () -> Unit
+) {
+    val granted = status.isGranted
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (granted) {
+            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.68f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(
+            1.dp,
+            if (granted) MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f)
+            else MaterialTheme.colorScheme.outlineVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, top = 11.dp, end = 8.dp, bottom = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "One-tap media changes",
+                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = if (granted) {
+                        "Enabled. Locking, moving, and deleting can skip repeated Android confirmations."
+                    } else {
+                        "Optional Android access that reduces confirmation screens when changing media."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (granted) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = "One-tap media changes enabled",
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(24.dp)
+                )
+            } else {
+                TextButton(onClick = onRequestAccess) {
+                    Text("Enable", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+@Composable
 private fun SettingsSectionTitle(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-        color = MaterialTheme.colorScheme.primary
+        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+        color = MaterialTheme.colorScheme.onSurface
     )
 }
 
@@ -2543,8 +3017,12 @@ private fun SettingsChoiceChip(
 ) {
     Surface(
         modifier = modifier.bouncyClickable(onClick = onClick),
-        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(18.dp)
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant
+        )
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -2554,7 +3032,7 @@ private fun SettingsChoiceChip(
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
             )
         }
     }
@@ -2575,7 +3053,11 @@ private fun SettingsChoiceRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(text = label, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
             Text(
                 text = description,
                 style = MaterialTheme.typography.bodySmall,
@@ -2586,7 +3068,7 @@ private fun SettingsChoiceRow(
             Icon(
                 imageVector = Icons.Filled.Check,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
+                tint = MaterialTheme.colorScheme.secondary
             )
         }
     }
@@ -2604,7 +3086,11 @@ private fun SettingsSwitchRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(text = label, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
             Text(
                 text = description,
                 style = MaterialTheme.typography.bodySmall,
@@ -2634,8 +3120,8 @@ private fun GalleryGridDensity.label(): String {
 private fun GalleryGridDensity.defaultAlbumGridMode(): AlbumDetailGridMode {
     return when (this) {
         GalleryGridDensity.Compact -> AlbumDetailGridMode.Compact
-        GalleryGridDensity.Comfortable,
-        GalleryGridDensity.Spacious -> AlbumDetailGridMode.Comfortable
+        GalleryGridDensity.Comfortable -> AlbumDetailGridMode.Comfortable
+        GalleryGridDensity.Spacious -> AlbumDetailGridMode.Spacious
     }
 }
 @Composable
@@ -2671,11 +3157,7 @@ private fun GalleryMenuScreen(
         ) {
         Text(
             text = "Menu",
-            style = MaterialTheme.typography.headlineLarge.copy(
-                fontSize = 36.sp,
-                lineHeight = 42.sp,
-                fontWeight = FontWeight.ExtraBold
-            ),
+            style = MaterialTheme.typography.headlineLarge,
             color = MaterialTheme.colorScheme.onBackground
         )
         Spacer(Modifier.height(8.dp))
@@ -2792,7 +3274,7 @@ private fun GalleryCleanupScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = horizontalPadding,
-                top = 40.dp,
+                top = 48.dp,
                 end = horizontalPadding,
                 bottom = 40.dp
             ),
@@ -2800,17 +3282,10 @@ private fun GalleryCleanupScreen(
         ) {
         item(key = "cleanup_header") {
             Column {
-                TextButton(onClick = onBack) { Text("Back") }
-                Text(
-                    text = "Cleanup",
-                    style = MaterialTheme.typography.headlineLarge.copy(fontSize = 34.sp, fontWeight = FontWeight.ExtraBold),
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "Review candidates before Android moves anything to trash.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                GalleryScreenHeader(
+                    title = "Cleanup",
+                    subtitle = "Review candidates before Android moves anything to trash.",
+                    onBack = onBack
                 )
                 Spacer(Modifier.height(12.dp))
             }
@@ -3112,7 +3587,7 @@ private fun GalleryMenuRow(
                 imageVector = Icons.Filled.ChevronRight,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.56f),
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
         if (showDivider) {
@@ -3123,6 +3598,27 @@ private fun GalleryMenuRow(
         }
     }
 }
+@Composable
+private fun rememberSeparatingFoldBounds(context: Context): android.graphics.Rect? {
+    val activity = remember(context) { context.findActivity() } ?: return null
+    val foldBoundsFlow = remember(context, activity) {
+        WindowInfoTracker.getOrCreate(context)
+            .windowLayoutInfo(activity)
+            .map { layoutInfo ->
+                layoutInfo.displayFeatures
+                    .filterIsInstance<FoldingFeature>()
+                    .firstOrNull { feature ->
+                        feature.isSeparating ||
+                            feature.occlusionType == FoldingFeature.OcclusionType.FULL
+                    }
+                    ?.bounds
+                    ?.let { bounds -> android.graphics.Rect(bounds) }
+            }
+    }
+    val foldBounds by foldBoundsFlow.collectAsStateWithLifecycle(initialValue = null)
+    return foldBounds
+}
+
 private tailrec fun Context.findActivity(): Activity? {
     return when (this) {
         is Activity -> this
@@ -3668,12 +4164,12 @@ private fun GalleryBottomBar(
 ) {
     val containerShape = RoundedCornerShape(50.dp)
     val tabShape = RoundedCornerShape(40.dp)
-    val tabWidth = 86.dp
-    val tabHeight = 56.dp
-    val tabGap = 4.dp
+    val tabWidth = 78.dp
+    val tabHeight = 48.dp
+    val tabGap = 2.dp
     val contentWidth = tabWidth * 3 + tabGap * 2
     val density = LocalDensity.current
-    val hideDistancePx = with(density) { 112.dp.toPx() }
+    val hideDistancePx = with(density) { 88.dp.toPx() }
     val visibilityProgress by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
         animationSpec = tween(210, easing = FastOutSlowInEasing),
@@ -3684,7 +4180,7 @@ private fun GalleryBottomBar(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(bottom = 24.dp)
+            .padding(bottom = 4.dp)
             .graphicsLayer {
                 alpha = visibilityProgress
                 translationY = hideDistancePx * (1f - visibilityProgress)
@@ -3693,7 +4189,7 @@ private fun GalleryBottomBar(
     ) {
         Surface(
                 modifier = Modifier
-                    .widthIn(min = 240.dp)
+                    .widthIn(min = 220.dp)
                     .clip(containerShape),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                 shape = containerShape,
@@ -3702,7 +4198,7 @@ private fun GalleryBottomBar(
             ) {
                 Box(
                     modifier = Modifier
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
                         .width(contentWidth)
                         .height(tabHeight)
                 ) {
@@ -3710,7 +4206,7 @@ private fun GalleryBottomBar(
                     val tabStepPx = with(density) { (tabWidth + tabGap).toPx() }
                     val indicatorProgress by animateFloatAsState(
                         targetValue = selectedTab.pageIndex().toFloat(),
-                        animationSpec = spring(dampingRatio = GalleryMotion.BottomNavIndicatorDamping, stiffness = GalleryMotion.BottomNavIndicatorStiffness),
+                        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
                         label = "bottom nav pill progress"
                     )
 
@@ -3832,7 +4328,7 @@ private fun GalleryNavigationItem(
                 pressStiffness = GalleryMotion.BottomNavPressStiffness,
                 onClick = onClick
             )
-            .padding(horizontal = 22.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -3840,7 +4336,7 @@ private fun GalleryNavigationItem(
             imageVector = icon,
             contentDescription = label,
             tint = color,
-            modifier = Modifier.size(22.dp)
+            modifier = Modifier.size(20.dp)
         )
         Spacer(Modifier.height(1.dp))
         Text(

@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -25,7 +24,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -46,10 +44,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.nativegallery.data.DocumentPhotoCategory
 import com.example.nativegallery.data.DocumentPhotoMatch
 import com.example.nativegallery.model.MediaItem
+import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.SearchPill
 
@@ -117,7 +115,7 @@ fun DocumentPhotosScreen(
                 .then(gridWidthModifier),
             contentPadding = PaddingValues(
                 start = 8.dp,
-                top = 34.dp,
+                top = 48.dp,
                 end = 8.dp,
                 bottom = contentPadding.calculateBottomPadding() + 28.dp
             ),
@@ -133,39 +131,23 @@ fun DocumentPhotosScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Document photos",
-                                style = MaterialTheme.typography.headlineLarge.copy(
-                                    fontSize = 31.sp,
-                                    lineHeight = 37.sp,
-                                    fontWeight = FontWeight.Bold
+                    GalleryScreenHeader(
+                        title = "Document photos",
+                        subtitle = "Bills, menus, letters, forms and text-heavy pictures",
+                        onBack = onBack,
+                        trailingContent = {
+                            IconButton(
+                                onClick = onRescan,
+                                enabled = !scanning
+                            ) {
+                                Icon(
+                                    Icons.Filled.Refresh,
+                                    contentDescription = "Scan document photos again",
+                                    tint = MaterialTheme.colorScheme.primary
                                 )
-                            )
-                            Text(
-                                text = "Bills, menus, letters, forms and text-heavy pictures",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            }
                         }
-                        IconButton(
-                            onClick = onRescan,
-                            enabled = !scanning
-                        ) {
-                            Icon(
-                                Icons.Filled.Refresh,
-                                contentDescription = "Scan document photos again",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
+                    )
                     Spacer(Modifier.height(20.dp))
                     SearchPill(
                         placeholder = "Search text inside document photos",

@@ -54,7 +54,7 @@ fun PremiumDropdownMenu(
         shadowElevation = 10.dp,
         border = BorderStroke(
             1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f)
+            MaterialTheme.colorScheme.outlineVariant
         ),
         modifier = modifier
             .widthIn(min = 216.dp, max = 304.dp)
@@ -82,11 +82,11 @@ fun PremiumDropdownMenuItem(
         contentPadding = PaddingValues(horizontal = 16.dp),
         colors = MenuDefaults.itemColors(
             textColor = MaterialTheme.colorScheme.onSurface,
-            leadingIconColor = MaterialTheme.colorScheme.primary,
-            trailingIconColor = MaterialTheme.colorScheme.primary,
+            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            trailingIconColor = MaterialTheme.colorScheme.onSurface,
             disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-            disabledLeadingIconColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.34f),
-            disabledTrailingIconColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.34f)
+            disabledLeadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f),
+            disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.34f)
         )
     )
 }

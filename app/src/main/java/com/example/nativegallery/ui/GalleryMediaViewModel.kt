@@ -199,7 +199,7 @@ internal class GalleryMediaViewModel(
             } else {
                 current.copy(
                     snapshot = mergedSnapshot,
-                    initialSyncComplete = true
+                    initialSyncComplete = current.initialSyncComplete
                 )
             }
         }

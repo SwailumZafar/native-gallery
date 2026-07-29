@@ -60,4 +60,16 @@ class PhotoEditorCropTest {
         assertEquals(16f / 9f, resultingAspect, 0.0001f)
         assertEquals(0.5f, (wideCropFromPortrait.top + wideCropFromPortrait.bottom) / 2f, 0.0001f)
     }
+
+    @Test
+    fun photoFilters_exposeStableUniquePreviewLabels() {
+        val filters = PhotoEditFilter.entries
+
+        assertEquals(8, filters.size)
+        assertEquals(
+            listOf("Original", "Vivid", "Mono", "Noir", "Warm", "Cool", "Sepia", "Fade"),
+            filters.map { it.displayName }
+        )
+        assertEquals(filters.size, filters.map { it.displayName }.toSet().size)
+    }
 }

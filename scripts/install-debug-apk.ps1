@@ -42,4 +42,4 @@ Write-Host "Installing debug APK..."
 Invoke-NativeChecked $adb @deviceArgs install -r -d $apk
 
 Write-Host "Launching Native Gallery..."
-Invoke-NativeChecked $adb @deviceArgs shell monkey -p com.example.nativegallery 1
+Invoke-NativeChecked $adb @deviceArgs shell monkey -p com.swailumzafar.nativegallery 1

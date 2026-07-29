@@ -2,12 +2,14 @@ package com.example.nativegallery.ui
 
 import android.net.Uri
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,11 +18,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -29,8 +30,8 @@ import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -64,6 +65,7 @@ import com.example.nativegallery.data.PhotoEditorRepository
 import com.example.nativegallery.data.normalizedCropRectForAspect
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryImage
+import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
@@ -161,43 +163,40 @@ fun PhotoEditorScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        Row(
+        GalleryScreenHeader(
+            title = "Edit photo",
+            subtitle = mediaItem.title,
+            onBack = { if (cropMode) leaveCropMode() else onBack() },
+            leadingContentDescription = "Close editor",
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
                     start = 8.dp,
-                    top = if (useCompactLayout) 10.dp else 42.dp,
+                    top = if (useCompactLayout) 10.dp else 48.dp,
                     end = 12.dp,
                     bottom = if (useCompactLayout) 4.dp else 10.dp
                 ),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = { if (cropMode) leaveCropMode() else onBack() }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close editor")
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Edit photo", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text(mediaItem.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            }
-            TextButton(
-                enabled = history.isNotEmpty() && !isSaving && !cropMode,
-                onClick = {
-                    val previous = history.lastOrNull() ?: return@TextButton
-                    recipe = previous
-                    history = history.dropLast(1)
+            trailingContent = {
+                TextButton(
+                    enabled = history.isNotEmpty() && !isSaving && !cropMode,
+                    onClick = {
+                        val previous = history.lastOrNull() ?: return@TextButton
+                        recipe = previous
+                        history = history.dropLast(1)
+                    }
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo")
+                    if (!useCompactLayout) Text("Undo")
                 }
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null)
-                if (!useCompactLayout) Text("Undo")
-            }
-            if (useCompactLayout) {
-                TextButton(enabled = !isSaving, onClick = ::saveCopy) {
-                    Text(if (isSaving) "Saving..." else "Save")
+                if (useCompactLayout) {
+                    TextButton(enabled = !isSaving, onClick = ::saveCopy) {
+                        Text(if (isSaving) "Saving..." else "Save")
+                    }
                 }
             }
-        }
+        )
 
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
@@ -206,13 +205,28 @@ fun PhotoEditorScreen(
                 .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
+            val rotationIsQuarterTurn = ((recipe.rotationDegrees / 90) and 1) == 1
+            val baseFrame = fittedImageRect(maxWidth.value, maxHeight.value, baseSourceAspect)
+            val rotatedFrame = fittedImageRect(maxWidth.value, maxHeight.value, sourceAspect)
+            val rotationScale = if (rotationIsQuarterTurn) {
+                minOf(
+                    rotatedFrame.width / baseFrame.height.coerceAtLeast(0.001f),
+                    rotatedFrame.height / baseFrame.width.coerceAtLeast(0.001f)
+                )
+            } else {
+                1f
+            }
             GalleryImage(
                 imageRes = mediaItem.imageRes,
                 imageUri = mediaItem.contentUri,
                 contentDescription = mediaItem.title,
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { rotationZ = recipe.rotationDegrees.toFloat() },
+                    .graphicsLayer {
+                        rotationZ = recipe.rotationDegrees.toFloat()
+                        scaleX = rotationScale
+                        scaleY = rotationScale
+                    },
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Fit,
                 thumbnailSize = 2048,
@@ -360,10 +374,11 @@ fun PhotoEditorScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 PhotoEditFilter.entries.forEach { filter ->
-                    FilterChip(
+                    FilterPreview(
+                        mediaItem = mediaItem,
+                        filter = filter,
                         selected = recipe.filter == filter,
-                        onClick = { commit(recipe.copy(filter = filter)) },
-                        label = { Text(filter.name) }
+                        onClick = { commit(recipe.copy(filter = filter)) }
                     )
                 }
             }
@@ -444,6 +459,63 @@ fun PhotoEditorScreen(
 }
 
 @Composable
+private fun FilterPreview(
+    mediaItem: MediaItem,
+    filter: PhotoEditFilter,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val borderColor = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+    }
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.width(82.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+        },
+        border = BorderStroke(if (selected) 2.dp else 1.dp, borderColor)
+    ) {
+        Column(
+            modifier = Modifier.padding(5.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            GalleryImage(
+                imageRes = mediaItem.imageRes,
+                imageUri = mediaItem.contentUri,
+                contentDescription = filter.displayName + " filter preview",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(62.dp),
+                cornerRadius = 13.dp,
+                contentScale = ContentScale.Crop,
+                thumbnailSize = 160,
+                loadQuality = ImageLoadQuality.Thumbnail,
+                backgroundColor = Color.Black,
+                colorFilter = editorColorFilter(filter)
+            )
+            Text(
+                text = filter.displayName,
+                modifier = Modifier.padding(vertical = 6.dp),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
 private fun CropOverlay(
     sourceAspect: Float,
     cropRect: NormalizedCropRect,
@@ -453,8 +525,9 @@ private fun CropOverlay(
     val latestCropRect by rememberUpdatedState(cropRect)
     val latestOnCropRectChange by rememberUpdatedState(onCropRectChange)
     val handleRadiusPx = with(LocalDensity.current) { 30.dp.toPx() }
-    val borderWidthPx = with(LocalDensity.current) { 2.dp.toPx() }
-    val handleLengthPx = with(LocalDensity.current) { 20.dp.toPx() }
+    val borderWidthPx = with(LocalDensity.current) { 3.dp.toPx() }
+    val gridWidthPx = with(LocalDensity.current) { 1.25.dp.toPx() }
+    val handleLengthPx = with(LocalDensity.current) { 24.dp.toPx() }
 
     Canvas(
         modifier = Modifier
@@ -495,6 +568,8 @@ private fun CropOverlay(
     ) {
         val imageFrame = fittedImageRect(size.width, size.height, sourceAspect)
         val cropFrame = cropRectToFrame(cropRect, imageFrame)
+        val outlineInset = (borderWidthPx + gridWidthPx * 2f) / 2f
+        val outlineFrame = insetCropOutlineFrame(cropFrame, imageFrame, outlineInset)
         val scrim = Color.Black.copy(alpha = if (interactive) 0.58f else 0.72f)
 
         drawRect(scrim, topLeft = imageFrame.topLeft, size = androidx.compose.ui.geometry.Size(imageFrame.width, cropFrame.top - imageFrame.top))
@@ -502,9 +577,15 @@ private fun CropOverlay(
         drawRect(scrim, topLeft = Offset(imageFrame.left, cropFrame.top), size = androidx.compose.ui.geometry.Size(cropFrame.left - imageFrame.left, cropFrame.height))
         drawRect(scrim, topLeft = Offset(cropFrame.right, cropFrame.top), size = androidx.compose.ui.geometry.Size(imageFrame.right - cropFrame.right, cropFrame.height))
         drawRect(
+            color = Color.Black.copy(alpha = 0.72f),
+            topLeft = outlineFrame.topLeft,
+            size = androidx.compose.ui.geometry.Size(outlineFrame.width, outlineFrame.height),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = borderWidthPx + gridWidthPx * 2f)
+        )
+        drawRect(
             color = Color.White.copy(alpha = 0.94f),
-            topLeft = cropFrame.topLeft,
-            size = androidx.compose.ui.geometry.Size(cropFrame.width, cropFrame.height),
+            topLeft = outlineFrame.topLeft,
+            size = androidx.compose.ui.geometry.Size(outlineFrame.width, outlineFrame.height),
             style = androidx.compose.ui.graphics.drawscope.Stroke(width = borderWidthPx)
         )
 
@@ -512,19 +593,19 @@ private fun CropOverlay(
             for (division in 1..2) {
                 val fraction = division / 3f
                 drawLine(
-                    color = Color.White.copy(alpha = 0.42f),
-                    start = Offset(cropFrame.left + cropFrame.width * fraction, cropFrame.top),
-                    end = Offset(cropFrame.left + cropFrame.width * fraction, cropFrame.bottom),
-                    strokeWidth = 1f
+                    color = Color.White.copy(alpha = 0.72f),
+                    start = Offset(outlineFrame.left + outlineFrame.width * fraction, outlineFrame.top),
+                    end = Offset(outlineFrame.left + outlineFrame.width * fraction, outlineFrame.bottom),
+                    strokeWidth = gridWidthPx
                 )
                 drawLine(
-                    color = Color.White.copy(alpha = 0.42f),
-                    start = Offset(cropFrame.left, cropFrame.top + cropFrame.height * fraction),
-                    end = Offset(cropFrame.right, cropFrame.top + cropFrame.height * fraction),
-                    strokeWidth = 1f
+                    color = Color.White.copy(alpha = 0.72f),
+                    start = Offset(outlineFrame.left, outlineFrame.top + outlineFrame.height * fraction),
+                    end = Offset(outlineFrame.right, outlineFrame.top + outlineFrame.height * fraction),
+                    strokeWidth = gridWidthPx
                 )
             }
-            drawCropCorners(cropFrame, handleLengthPx, borderWidthPx * 1.8f)
+            drawCropCorners(outlineFrame, handleLengthPx, borderWidthPx * 1.65f)
         }
     }
 }
@@ -556,6 +637,16 @@ private fun cropRectToFrame(cropRect: NormalizedCropRect, imageFrame: Rect): Rec
         top = imageFrame.top + safe.top * imageFrame.height,
         right = imageFrame.left + safe.right * imageFrame.width,
         bottom = imageFrame.top + safe.bottom * imageFrame.height
+    )
+}
+
+private fun insetCropOutlineFrame(frame: Rect, imageFrame: Rect, inset: Float): Rect {
+    val safeInset = inset.coerceAtLeast(0f)
+    return Rect(
+        left = frame.left.coerceAtLeast(imageFrame.left + safeInset),
+        top = frame.top.coerceAtLeast(imageFrame.top + safeInset),
+        right = frame.right.coerceAtMost(imageFrame.right - safeInset),
+        bottom = frame.bottom.coerceAtMost(imageFrame.bottom - safeInset)
     )
 }
 
@@ -659,7 +750,16 @@ private fun EditorToolButton(
 private fun editorColorFilter(filter: PhotoEditFilter): ColorFilter? {
     val matrix = when (filter) {
         PhotoEditFilter.Original -> return null
+        PhotoEditFilter.Vivid -> ColorMatrix().apply { setToSaturation(1.28f) }
         PhotoEditFilter.Mono -> ColorMatrix().apply { setToSaturation(0f) }
+        PhotoEditFilter.Noir -> ColorMatrix(
+            floatArrayOf(
+                0.28f, 0.93f, 0.09f, 0f, -18f,
+                0.28f, 0.93f, 0.09f, 0f, -18f,
+                0.28f, 0.93f, 0.09f, 0f, -18f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
         PhotoEditFilter.Warm -> ColorMatrix(
             floatArrayOf(
                 1.08f, 0f, 0f, 0f, 0f,
@@ -673,6 +773,22 @@ private fun editorColorFilter(filter: PhotoEditFilter): ColorFilter? {
                 0.92f, 0f, 0f, 0f, 0f,
                 0f, 1.00f, 0f, 0f, 0f,
                 0f, 0f, 1.10f, 0f, 0f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
+        PhotoEditFilter.Sepia -> ColorMatrix(
+            floatArrayOf(
+                0.393f, 0.769f, 0.189f, 0f, 0f,
+                0.349f, 0.686f, 0.168f, 0f, 0f,
+                0.272f, 0.534f, 0.131f, 0f, 0f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
+        PhotoEditFilter.Fade -> ColorMatrix(
+            floatArrayOf(
+                0.88f, 0f, 0f, 0f, 16f,
+                0f, 0.88f, 0f, 0f, 16f,
+                0f, 0f, 0.88f, 0f, 16f,
                 0f, 0f, 0f, 1f, 0f
             )
         )

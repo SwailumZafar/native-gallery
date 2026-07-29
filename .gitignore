@@ -1,4 +1,4 @@
-﻿.gradle/
+.gradle/
 build/
 */build/
 local.properties
@@ -8,6 +8,8 @@ local.properties
 captures/
 *.apk
 *.aab
+*.jks
+*.keystore
 tools/
 qa-screenshots/
 verification-*.log

@@ -6,6 +6,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.media.AudioManager
 import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.TextureView
@@ -43,6 +44,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -126,12 +128,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.nativegallery.R
 import androidx.compose.ui.zIndex
 import com.example.nativegallery.model.MediaItem
@@ -156,6 +162,7 @@ private val ViewerEnterEasing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
 private val ViewerExitEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 private val ViewerPhotoBackground = Color(0xFF111111)
 private val ViewerPhotoStageBackground = Color.Transparent
+private const val DEFAULT_AUDIBLE_MEDIA_VOLUME = 0.35f
 
 enum class ViewerActionMode {
     Normal,
@@ -257,6 +264,22 @@ fun PhotoViewerOverlay(
     val currentPageForState = pagerState.settledPage.coerceIn(0, viewerItems.lastIndex)
     val currentItem = viewerItems.getOrNull(currentPageForState) ?: mediaItem
     val currentItemHasVideoPlayer = currentItem.isVideo && currentItem.contentUri != null
+    val compactLandscape = remember(
+        configuration.screenWidthDp,
+        configuration.screenHeightDp
+    ) {
+        isViewerCompactLandscape(
+            screenWidthDp = configuration.screenWidthDp,
+            screenHeightDp = configuration.screenHeightDp
+        )
+    }
+    val showViewerFilmstrip = shouldShowViewerFilmstrip(
+        itemCount = viewerItems.size,
+        isVideo = currentItem.isVideo,
+        compactLandscape = compactLandscape
+    )
+    val bottomActionContentHeight = viewerBottomActionContentHeightDp(showViewerFilmstrip).dp
+
     val activity = remember(context) { context.findViewerActivity() }
     val originalWindowBrightness = remember(activity) {
         activity?.window?.attributes?.screenBrightness ?: -1f
@@ -266,8 +289,21 @@ fun PhotoViewerOverlay(
     }
     val videoBrightnessState = remember { mutableFloatStateOf(initialVideoBrightness) }
     val brightnessOverrideEnabled = remember { mutableStateOf(false) }
-    val videoPlaybackVolumeState = remember(startVideosMuted) { mutableFloatStateOf(if (startVideosMuted) 0f else 1f) }
-    val lastAudibleVolumeState = remember { mutableFloatStateOf(1f) }
+    val audioManager = remember(context) {
+        context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
+    val systemMediaVolume = remember(audioManager) {
+        normalizedMediaVolume(
+            currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC),
+            maximumVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        )
+    }
+    val videoPlaybackVolumeState = remember(startVideosMuted, systemMediaVolume) {
+        mutableFloatStateOf(if (startVideosMuted) 0f else systemMediaVolume)
+    }
+    val lastAudibleVolumeState = remember(systemMediaVolume) {
+        mutableFloatStateOf(systemMediaVolume.coerceAtLeast(DEFAULT_AUDIBLE_MEDIA_VOLUME))
+    }
     var activeMediaPlaced by remember(currentItem.id) { mutableStateOf(false) }
 
     DisposableEffect(activity, originalWindowBrightness) {
@@ -510,6 +546,15 @@ fun PhotoViewerOverlay(
             state = pagerState,
             modifier = Modifier
                 .fillMaxSize()
+                .then(
+                    if (controlsVisible) {
+                        Modifier
+                            .navigationBarsPadding()
+                            .padding(bottom = bottomActionContentHeight)
+                    } else {
+                        Modifier
+                    }
+                )
                 .graphicsLayer {
                     val pullProgress = viewerDismissProgress(displayedDragOffset, dismissThresholdPx)
                     val pullScale = viewerDismissScale(displayedDragOffset, dismissThresholdPx)
@@ -530,11 +575,13 @@ fun PhotoViewerOverlay(
                 mediaItem = pageItem,
                 isActive = page == currentPageForState,
                 controlsVisible = controlsVisible,
+                compactLandscape = compactLandscape,
                 activePhotoDecodeSize = activePhotoDecodeSize,
                 videoBrightnessState = videoBrightnessState,
                 brightnessOverrideEnabled = brightnessOverrideEnabled,
                 videoPlaybackVolumeState = videoPlaybackVolumeState,
                 autoplayVideos = autoplayVideos,
+                initiallyMuted = startVideosMuted,
                 lastAudibleVolumeState = lastAudibleVolumeState,
                 sharedTransitionScope = sharedTransitionScope,
                 animatedVisibilityScope = animatedVisibilityScope,
@@ -590,11 +637,23 @@ fun PhotoViewerOverlay(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(
+                        color = Color(0xFF181818),
+                        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = Color.White.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+                    )
                     .navigationBarsPadding()
-                    .padding(bottom = 12.dp),
+                    .padding(
+                        top = if (showViewerFilmstrip) 6.dp else 4.dp,
+                        bottom = if (showViewerFilmstrip) 6.dp else 4.dp
+                    ),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (viewerItems.size > 1 && !currentItem.isVideo) {
+                if (showViewerFilmstrip) {
                     ViewerFilmstrip(
                         mediaItems = viewerItems,
                         selectedIndex = pagerState.currentPage,
@@ -602,7 +661,7 @@ fun PhotoViewerOverlay(
                             scope.launch { pagerState.animateScrollToPage(index) }
                         }
                     )
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(6.dp))
                 }
                 ViewerActionBar(
                     actionMode = actionMode,
@@ -654,7 +713,8 @@ fun PhotoViewerOverlay(
 private fun ViewerTopBar(onClose: () -> Unit) {
     Surface(
         modifier = Modifier
-            .padding(start = 12.dp, top = 42.dp)
+            .statusBarsPadding()
+            .padding(start = 12.dp, top = 4.dp)
             .size(44.dp),
         color = Color.Black.copy(alpha = 0.42f),
         shape = CircleShape,
@@ -717,6 +777,27 @@ internal fun viewerFilmstripWindow(
     val startIndex = (safeSelectedIndex - visibleCount / 2)
         .coerceIn(0, itemCount - visibleCount)
     return startIndex until (startIndex + visibleCount)
+}
+
+
+internal fun isViewerCompactLandscape(screenWidthDp: Int, screenHeightDp: Int): Boolean {
+    return screenWidthDp > screenHeightDp && screenHeightDp <= 480
+}
+
+internal fun shouldShowViewerFilmstrip(
+    itemCount: Int,
+    isVideo: Boolean,
+    compactLandscape: Boolean
+): Boolean = itemCount > 1 && !isVideo && !compactLandscape
+
+internal fun viewerBottomActionContentHeightDp(showFilmstrip: Boolean): Int {
+    return if (showFilmstrip) 122 else 62
+}
+
+internal fun viewerVideoControlMaxWidthDp(screenWidthDp: Int): Int = when {
+    screenWidthDp >= 840 -> 640
+    screenWidthDp >= 600 -> 560
+    else -> (screenWidthDp - 24).coerceAtLeast(280)
 }
 
 @Composable
@@ -1014,11 +1095,13 @@ private fun ZoomableViewerMedia(
     mediaItem: MediaItem,
     isActive: Boolean,
     controlsVisible: Boolean,
+    compactLandscape: Boolean,
     activePhotoDecodeSize: Int,
     videoBrightnessState: MutableFloatState,
     brightnessOverrideEnabled: MutableState<Boolean>,
     videoPlaybackVolumeState: MutableFloatState,
     autoplayVideos: Boolean,
+    initiallyMuted: Boolean,
     lastAudibleVolumeState: MutableFloatState,
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
@@ -1039,10 +1122,12 @@ private fun ZoomableViewerMedia(
                 mediaItem = mediaItem,
                 isActive = true,
                 controlsVisible = controlsVisible,
+                compactLandscape = compactLandscape,
                 brightnessState = videoBrightnessState,
                 brightnessOverrideEnabled = brightnessOverrideEnabled,
                 playbackVolumeState = videoPlaybackVolumeState,
                 autoplay = autoplayVideos,
+                initiallyMuted = initiallyMuted,
                 lastAudibleVolumeState = lastAudibleVolumeState,
                 sharedTransitionScope = sharedTransitionScope,
                 animatedVisibilityScope = animatedVisibilityScope,
@@ -1234,6 +1319,7 @@ private fun ViewerVideoPlayer(
     mediaItem: MediaItem,
     isActive: Boolean,
     controlsVisible: Boolean,
+    compactLandscape: Boolean,
     brightnessState: MutableFloatState,
     autoplay: Boolean,
     brightnessOverrideEnabled: MutableState<Boolean>,
@@ -1244,10 +1330,17 @@ private fun ViewerVideoPlayer(
     sharedBoundsTransform: BoundsTransform? = null,
     sharedElementKeyPrefix: String? = null,
     isSharedTransitionReady: Boolean,
+    initiallyMuted: Boolean,
     onActiveMediaPlaced: () -> Unit,
     onToggleControls: () -> Unit
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val controlMaxWidth = viewerVideoControlMaxWidthDp(configuration.screenWidthDp).dp
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val audioManager = remember(context) {
+        context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
     val uri = mediaItem.contentUri ?: return
     var isPrepared by remember(uri) { mutableStateOf(false) }
     var isPlaying by remember(uri) { mutableStateOf(false) }
@@ -1263,6 +1356,12 @@ private fun ViewerVideoPlayer(
     var isScrubbing by remember(uri) { mutableStateOf(false) }
     var pendingSeekPositionMs by remember(uri) { mutableStateOf<Int?>(null) }
     var pendingSeekRetryCount by remember(uri) { mutableIntStateOf(0) }
+    var hasUserAdjustedVolume by remember(uri) { mutableStateOf(false) }
+    var foregroundPlaybackAllowed by remember(uri) {
+        mutableStateOf(
+            autoplay && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        )
+    }
     val rootView = LocalView.current
     val density = LocalDensity.current
     val sideGestureZonePx = with(density) { 60.dp.toPx() }
@@ -1297,8 +1396,13 @@ private fun ViewerVideoPlayer(
                     }
                     .build()
                 setMediaItem(playerMediaItem)
-                volume = playbackVolume
-                playWhenReady = isActive && autoplay
+                setAudioAttributes(AudioAttributes.DEFAULT, true)
+                setHandleAudioBecomingNoisy(true)
+                volume = localPlayerGain(playbackVolume, systemVolumeApplied = true)
+                playWhenReady =
+                    isActive &&
+                        autoplay &&
+                        lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
                 prepare()
         }
     }
@@ -1321,11 +1425,16 @@ private fun ViewerVideoPlayer(
 
     fun updatePlaybackVolume(targetVolume: Float) {
         val boundedVolume = targetVolume.coerceIn(0f, 1f)
+        hasUserAdjustedVolume = true
         if (boundedVolume > 0.01f) {
             lastAudibleVolumeState.floatValue = boundedVolume
         }
         playbackVolumeState.floatValue = boundedVolume
-        player.volume = boundedVolume
+        applyVideoPlaybackVolume(
+            audioManager = audioManager,
+            player = player,
+            targetVolume = boundedVolume
+        )
     }
 
     fun updateVideoBrightness(targetBrightness: Float) {
@@ -1443,7 +1552,34 @@ private fun ViewerVideoPlayer(
     }
 
     LaunchedEffect(playbackVolume, player) {
-        player.volume = playbackVolume
+        if (initiallyMuted && !hasUserAdjustedVolume && playbackVolume <= 0.01f) {
+            player.volume = 0f
+        } else {
+            applyVideoPlaybackVolume(
+                audioManager = audioManager,
+                player = player,
+                targetVolume = playbackVolume
+            )
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, player) {
+        val observer = LifecycleEventObserver { owner, _ ->
+            if (!owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                foregroundPlaybackAllowed = false
+                player.playWhenReady = false
+                player.pause()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            foregroundPlaybackAllowed = false
+            player.playWhenReady = false
+            player.pause()
+        }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     DisposableEffect(isActive, isPrepared, isPlaying, rootView) {
@@ -1457,12 +1593,23 @@ private fun ViewerVideoPlayer(
             }
         }
     }
-    LaunchedEffect(isActive, isPrepared, autoplay) {
+    LaunchedEffect(
+        isActive,
+        isPrepared,
+        foregroundPlaybackAllowed,
+        lifecycleOwner.lifecycle.currentState
+    ) {
         if (!isPrepared) return@LaunchedEffect
 
-        if (isActive && autoplay && !player.isPlaying) {
+        val shouldPlay = shouldVideoPlaybackRun(
+            isActive = isActive,
+            isPrepared = isPrepared,
+            foregroundPlaybackAllowed = foregroundPlaybackAllowed,
+            lifecycleResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        )
+        if (shouldPlay && !player.isPlaying) {
             player.play()
-        } else if (!isActive && player.isPlaying) {
+        } else if (!shouldPlay && player.isPlaying) {
             player.pause()
         }
     }
@@ -1598,6 +1745,18 @@ private fun ViewerVideoPlayer(
                                 if (!shouldActivateVideoSideGesture(totalDrag, touchSlop)) continue
                                 sideGestureActivated = true
                                 lastY = change.position.y
+                                if (sideControl == VideoSideControl.Volume) {
+                                    updatePlaybackVolume(
+                                        normalizedMediaVolume(
+                                            currentVolume = audioManager.getStreamVolume(
+                                                AudioManager.STREAM_MUSIC
+                                            ),
+                                            maximumVolume = audioManager.getStreamMaxVolume(
+                                                AudioManager.STREAM_MUSIC
+                                            )
+                                        )
+                                    )
+                                }
                                 showSideControl(sideControl)
                                 change.consume()
                                 continue
@@ -1674,6 +1833,7 @@ private fun ViewerVideoPlayer(
             exit = fadeOut(animationSpec = tween(100))
         ) {
             VerticalVideoControl(
+                compact = compactLandscape,
                 value = videoBrightness,
                 onValueChange = { value -> updateVideoBrightness(value) },
                 icon = Icons.Filled.Brightness6,
@@ -1691,6 +1851,7 @@ private fun ViewerVideoPlayer(
             exit = fadeOut(animationSpec = tween(100))
         ) {
             VerticalVideoControl(
+                compact = compactLandscape,
                 value = playbackVolume,
                 onValueChange = { value -> updatePlaybackVolume(value) },
                 icon = if (isMuted) {
@@ -1712,6 +1873,7 @@ private fun ViewerVideoPlayer(
         ) {
             Column(
                 modifier = Modifier
+                    .widthIn(max = controlMaxWidth)
                     .fillMaxWidth()
                     .background(
                         Brush.verticalGradient(
@@ -1722,9 +1884,50 @@ private fun ViewerVideoPlayer(
                             )
                         )
                     )
-                    .navigationBarsPadding()
-                    .padding(start = 22.dp, top = 42.dp, end = 22.dp, bottom = 86.dp)
+                    .padding(
+                        start = if (compactLandscape) 8.dp else 18.dp,
+                        end = if (compactLandscape) 8.dp else 18.dp,
+                        top = if (compactLandscape) 4.dp else 10.dp,
+                        bottom = if (compactLandscape) 4.dp else 10.dp
+                    )
             ) {
+                if (compactLandscape) {
+                    CompactVideoControlDeck(
+                        positionMs = positionMs,
+                        durationMs = durationMs,
+                        onPositionChange = { value ->
+                            isScrubbing = true
+                            positionMs = value.roundToInt()
+                        },
+                        onPositionChangeFinished = {
+                            seekToPosition(positionMs)
+                            isScrubbing = false
+                        },
+                        isMuted = isMuted,
+                        onToggleMute = {
+                            if (isMuted) {
+                                updatePlaybackVolume(lastAudibleVolumeState.floatValue)
+                            } else {
+                                lastAudibleVolumeState.floatValue = playbackVolume
+                                updatePlaybackVolume(0f)
+                            }
+                        },
+                        isPlaying = isPlaying,
+                        onPlayPause = {
+                            if (player.isPlaying) {
+                                foregroundPlaybackAllowed = false
+                                player.pause()
+                            } else if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                                foregroundPlaybackAllowed = true
+                                player.play()
+                            }
+                        },
+                        onRewind = { seekBy(-10_000) },
+                        onForward = { seekBy(10_000) },
+                        videoFillFrame = videoFillFrame,
+                        onToggleFill = { videoFillFrame = !videoFillFrame }
+                    )
+                } else {
                 Slider(
                     value = positionMs.coerceIn(0, durationMs.coerceAtLeast(1)).toFloat(),
                     onValueChange = { value ->
@@ -1794,9 +1997,16 @@ private fun ViewerVideoPlayer(
                         containerAlpha = 0.48f,
                         onClick = {
                             if (player.isPlaying) {
+                                foregroundPlaybackAllowed = false
                                 player.pause()
                             } else {
-                                player.play()
+                                if (
+                                    lifecycleOwner.lifecycle.currentState
+                                        .isAtLeast(Lifecycle.State.RESUMED)
+                                ) {
+                                    foregroundPlaybackAllowed = true
+                                    player.play()
+                                }
                             }
                         }
                     )
@@ -1816,6 +2026,7 @@ private fun ViewerVideoPlayer(
                         onClick = { videoFillFrame = !videoFillFrame }
                     )
                 }
+                }
         }
     }
 }
@@ -1823,11 +2034,90 @@ private fun ViewerVideoPlayer(
 }
 
 @Composable
+private fun CompactVideoControlDeck(
+    positionMs: Int,
+    durationMs: Int,
+    onPositionChange: (Float) -> Unit,
+    onPositionChangeFinished: () -> Unit,
+    isMuted: Boolean,
+    onToggleMute: () -> Unit,
+    isPlaying: Boolean,
+    onPlayPause: () -> Unit,
+    onRewind: () -> Unit,
+    onForward: () -> Unit,
+    videoFillFrame: Boolean,
+    onToggleFill: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "${formatPlaybackTime(positionMs)} / ${formatPlaybackTime(durationMs)}",
+            color = Color.White.copy(alpha = 0.84f),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+            maxLines = 1
+        )
+        Slider(
+            value = positionMs.coerceIn(0, durationMs.coerceAtLeast(1)).toFloat(),
+            onValueChange = onPositionChange,
+            onValueChangeFinished = onPositionChangeFinished,
+            modifier = Modifier.weight(1f),
+            valueRange = 0f..durationMs.coerceAtLeast(1).toFloat(),
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = Color.White,
+                inactiveTrackColor = Color.White.copy(alpha = 0.28f)
+            )
+        )
+        VideoControlButton(
+            icon = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+            contentDescription = if (isMuted) "Unmute video" else "Mute video",
+            size = 48.dp,
+            iconSize = 19.dp,
+            containerAlpha = if (isMuted) 0.56f else 0.34f,
+            onClick = onToggleMute
+        )
+        VideoControlButton(
+            icon = Icons.Filled.Replay10,
+            contentDescription = "Rewind 10 seconds",
+            size = 48.dp,
+            iconSize = 20.dp,
+            onClick = onRewind
+        )
+        VideoControlButton(
+            icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+            contentDescription = if (isPlaying) "Pause video" else "Play video",
+            size = 48.dp,
+            iconSize = 24.dp,
+            containerAlpha = 0.48f,
+            onClick = onPlayPause
+        )
+        VideoControlButton(
+            icon = Icons.Filled.Forward10,
+            contentDescription = "Forward 10 seconds",
+            size = 48.dp,
+            iconSize = 20.dp,
+            onClick = onForward
+        )
+        VideoControlButton(
+            icon = Icons.Filled.AspectRatio,
+            contentDescription = if (videoFillFrame) "Fit video" else "Fill screen",
+            size = 48.dp,
+            iconSize = 19.dp,
+            containerAlpha = if (videoFillFrame) 0.56f else 0.34f,
+            onClick = onToggleFill
+        )
+    }
+}
+@Composable
 private fun VerticalVideoControl(
     value: Float,
     onValueChange: (Float) -> Unit,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
+    compact: Boolean,
     modifier: Modifier = Modifier
 ) {
     val controlledValue = value.coerceIn(0f, 1f)
@@ -1835,7 +2125,7 @@ private fun VerticalVideoControl(
 
     Surface(
         modifier = modifier
-            .size(width = 48.dp, height = 188.dp)
+            .size(width = 48.dp, height = if (compact) 148.dp else 188.dp)
             .semantics(mergeDescendants = true) {
                 this.contentDescription = contentDescription
                 progressBarRangeInfo = ProgressBarRangeInfo(controlledValue, 0f..1f)
@@ -1873,7 +2163,7 @@ private fun VerticalVideoControl(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 14.dp),
+                .padding(horizontal = 12.dp, vertical = if (compact) 10.dp else 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
@@ -1882,10 +2172,10 @@ private fun VerticalVideoControl(
                 tint = Color.White,
                 modifier = Modifier.size(20.dp)
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(if (compact) 6.dp else 12.dp))
             Box(
                 modifier = Modifier
-                    .height(128.dp)
+                    .height(if (compact) 96.dp else 128.dp)
                     .width(5.dp)
                     .background(Color.White.copy(alpha = 0.26f), CircleShape)
             ) {
@@ -2055,6 +2345,61 @@ internal fun shouldActivateVideoSideGesture(totalDrag: Offset, touchSlop: Float)
     val minimumVerticalTravel = touchSlop.coerceAtLeast(1f) * 2.25f
     return abs(totalDrag.y) >= minimumVerticalTravel &&
         abs(totalDrag.y) > abs(totalDrag.x) * 1.35f
+}
+
+internal fun normalizedMediaVolume(currentVolume: Int, maximumVolume: Int): Float {
+    if (maximumVolume <= 0) return 1f
+    return currentVolume.toFloat().div(maximumVolume).coerceIn(0f, 1f)
+}
+
+internal fun mediaStreamVolumeLevel(targetVolume: Float, maximumVolume: Int): Int {
+    if (maximumVolume <= 0) return 0
+    return (targetVolume.coerceIn(0f, 1f) * maximumVolume)
+        .roundToInt()
+        .coerceIn(0, maximumVolume)
+}
+
+internal fun localPlayerGain(targetVolume: Float, systemVolumeApplied: Boolean): Float {
+    val boundedVolume = targetVolume.coerceIn(0f, 1f)
+    return when {
+        boundedVolume <= 0.01f -> 0f
+        systemVolumeApplied -> 1f
+        else -> boundedVolume
+    }
+}
+
+internal fun shouldVideoPlaybackRun(
+    isActive: Boolean,
+    isPrepared: Boolean,
+    foregroundPlaybackAllowed: Boolean,
+    lifecycleResumed: Boolean
+): Boolean = isActive &&
+    isPrepared &&
+    foregroundPlaybackAllowed &&
+    lifecycleResumed
+
+private fun applyVideoPlaybackVolume(
+    audioManager: AudioManager,
+    player: Player,
+    targetVolume: Float
+) {
+    val boundedVolume = targetVolume.coerceIn(0f, 1f)
+    val maximumVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+    val requestedLevel = mediaStreamVolumeLevel(boundedVolume, maximumVolume)
+    val updateSucceeded = if (audioManager.isVolumeFixed) {
+        false
+    } else {
+        runCatching {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, requestedLevel, 0)
+        }.isSuccess
+    }
+    val appliedLevel = runCatching {
+        audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+    }.getOrDefault(-1)
+    player.volume = localPlayerGain(
+        targetVolume = boundedVolume,
+        systemVolumeApplied = updateSucceeded && appliedLevel == requestedLevel
+    )
 }
 
 internal fun isVideoSeekAcknowledged(

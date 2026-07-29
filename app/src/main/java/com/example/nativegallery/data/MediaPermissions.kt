@@ -53,7 +53,11 @@ object MediaPermissions {
                 ReadMediaImages,
                 ReadMediaVideo
             )
-            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            sdkInt >= Build.VERSION_CODES.Q -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            else -> arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
         }
     }
 

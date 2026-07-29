@@ -11,6 +11,17 @@ class MediaPermissionsTest {
     @Test
     fun requestPermissions_matchAndroidStorageModels() {
         assertArrayEquals(
+            arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ),
+            MediaPermissions.requestPermissionsForSdk(28)
+        )
+        assertArrayEquals(
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+            MediaPermissions.requestPermissionsForSdk(29)
+        )
+        assertArrayEquals(
             arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
             MediaPermissions.requestPermissionsForSdk(32)
         )
