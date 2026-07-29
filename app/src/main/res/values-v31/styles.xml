@@ -5,8 +5,13 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
         <item name="android:windowBackground">#F3F4F2</item>
         <item name="android:navigationBarColor">#F3F4F2</item>
         <item name="android:statusBarColor">#F3F4F2</item>
+        <item name="android:windowSplashScreenBackground">#F3F4F2</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_blank</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 </resources>

@@ -1,8 +1,9 @@
-.gradle/
+﻿.gradle/
 build/
 */build/
 local.properties
 .idea/
+.cursor/
 *.iml
 captures/
 *.apk
@@ -11,3 +12,13 @@ tools/
 qa-screenshots/
 verification-*.log
 .kotlin/
+
+# Local design references and generated audit artifacts
+.codex/
+Approved Design/
+Refrence Pictures/
+Refrence Videos/
+audit-captures/
+tmp/
+video-frames-*/
+commonMain/
