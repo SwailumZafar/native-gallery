@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-07-30
+Last updated: 2026-08-02
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -41,6 +41,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-19 follow-up: added MKV seek acknowledgement coverage; the suite now has 67 passing tests.
   - 2026-07-22 slice: added album arrangement/pinning/swap/codec, stricter document classification/prefilter/cache migration, editor-filter, video-volume, and background-playback policy coverage; the suite now has 81 passing tests.
   - 2026-07-30 slice: added media-management, two-phase vault rollback, viewer-session rotation, adaptive-viewer, fold-safe-pane, and legacy permission tests; the local suite now has 98 passing tests. Instrumentation coverage now exercises encrypted vault round trips, navigation, recreation, compact landscape, and three-button insets.
+  - 2026-08-02 slice: added locked-restore confirmation/full-quality warmup and Photos fling/decode policy coverage; the local suite now has 114 passing tests. Debug lint, debug APK assembly, and instrumentation-test APK assembly all pass.
 - [ ] Gradually move screen state and business logic out of `GalleryApp.kt` into ViewModels and testable state holders.
   - 2026-07-15 slice: extracted viewer delete selection and Photos lazy-list indexing into `GalleryLogic.kt`.
   - 2026-07-15 slice: extracted normalized media/album search documents and matching into `GallerySearchIndex.kt`.
@@ -59,6 +60,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-18 slice: Locked Media now loads one background inventory/preview snapshot, avoids per-item filesystem checks in composition, batches legacy preview migration into one refresh, uses per-file provider locks, and keeps vault preference/restore/delete I/O off the main thread.
   - 2026-07-19 slice: document-photo OCR runs sequentially off the UI thread, caches positive and negative results by media fingerprint, publishes progress in batches, and cancels while the screen/viewer is not active.
   - 2026-07-22 slice: first presentation waits for the newest MediaStore page and a timeout-bounded 12-thumbnail warmup; the complete album list stays in a loading state until full reconciliation so partial rows never reflow after opening. Album Detail warms 30 rows without blocking and stays 14 rows ahead while scrolling; Document Photos reuses unchanged version-2 OCR text under the stricter classifier rather than rescanning the entire library.
+  - 2026-08-02 slice: cold start now queries 72 newest items before presentation, yields 220 ms before full reconciliation, and keeps uncached thumbnail decode/publication out of active Photos flings while still rendering memory-cache hits immediately.
 - [x] Move large-library search indexing and expensive interaction lookup off the main UI path. Completed 2026-07-15.
   - 2026-07-15 slice: search indexing and query execution now run on `Dispatchers.Default`; remaining expensive interaction lookups stay queued.
   - 2026-07-15 slice: encrypted-vault inventory reads now run on `Dispatchers.IO` instead of during composition.
@@ -72,6 +74,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-17 slice: PINs now use versioned 210,000-iteration PBKDF2-HMAC-SHA256 credentials with constant-time verification and transparent legacy migration; new vault keys are explicit 256-bit device-unlocked Keystore keys and missing keys fail closed over existing encrypted files.
   - 2026-07-17 slice: restored photos/videos must be non-empty, readable, and successfully published in MediaStore before the encrypted vault copy can be removed.
   - 2026-07-17 slice: cancelling Android original-removal approval rolls items with readable originals back out of Locked Media instead of presenting them as protected; encrypted copies are retained when the original is actually gone.
+  - 2026-08-02 slice: restore from Locked Media now requires an explicit Native Gallery confirmation, preserves bulk selection on cancel, and prepares authenticated full-quality originals in the app-private session cache while the encrypted 512 px preview handles viewer transition startup.
 - [x] Complete predictive back and adaptive tablet, landscape, and separating-hinge layouts. Completed 2026-07-30.
   - 2026-07-15 slice: added progress-aware predictive back for viewer and secondary destinations, native back-to-home from Photos, nested crop cancellation, and a tested centralized back router.
   - 2026-07-15 slice: added current-window adaptive classes, a navigation rail from 600 dp, denser media and album grids, compact landscape editor/menu behavior, and four policy tests.
@@ -104,18 +107,18 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Latest pushed baseline before the 2026-07-30 hardening pass: 3e916d7 Clean repository assets and add project setup
-GitHub sync: baseline commit 3e916d7 is on origin/main; the completed hardening pass must be committed and pushed after final verification
+Latest pushed implementation baseline: 8de211f Stabilize gallery scrolling and locked media restore
+GitHub sync: implementation commit 8de211f and this handoff are synchronized on origin/main
 Repository visibility: private
 ```
 
 Recent saved work:
 
 ```text
-ddf557a Complete gallery media reliability and performance fixes
-eabed37 Clarify handoff sync status
-3d83580 Update gallery handoff and GitHub status
-a70ae8c Harden gallery media and viewer behavior
+8de211f Stabilize gallery scrolling and locked media restore
+b69c43b Improve gallery scrolling and media actions
+ab217ac Refine gallery motion and viewer controls
+12bb5a9 Restore gallery navigation and viewer chrome
 ```
 
 Repository project-file status:
@@ -130,6 +133,41 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-08-02 Scrolling, Viewer Return, Selection, and Locked Restore Pass
+
+Completed 2026-08-02 and pushed in implementation commit 8de211f:
+
+- Replaced the tall two-row media-selection surface with one shared 64 dp, fully rounded action capsule in Photos and Album Detail. It retains cancel, count, select all, share, lock, move, and delete actions.
+- Removed Photos-wide recomposition on scroll-state changes. Normal grid tiles no longer publish global bounds continuously; exact bounds are collected on click and during explicit viewer reveal/selection only.
+- During an active Photos fling, cached thumbnails continue to render but new disk/provider work and bitmap-state publication are deferred until settling. This keeps late image/video loads from disturbing frame delivery.
+- Viewer open/close timing is now slightly faster (330 ms open and 260 ms close). Closing-target reveal waits are bounded more tightly, and starting a Photos fling cancels a stale close overlay so it cannot float above the moving grid.
+- Cold start uses a smaller 72-item newest-page query and lets the first useful Photos frame render before full-library reconciliation competes for I/O.
+- Removed the shared black rectangle behind video playback controls, retained readable individual control treatment, and reduced the unchanged Material seeker's reserved height from 36 dp to 32 dp.
+- Added a Native Gallery confirmation before restoring one or multiple Locked Media items. This dialog is app-owned; Android's separate media-write/removal permission UI may still appear for operations that require it unless media-management special access is enabled.
+- Locked photo viewing now prepares the encrypted original immediately and warms at least a 1024 px full-quality decode while the 512 px encrypted preview remains limited to transition startup. Up to two photos are warmed after authenticated Locked Media entry; plaintext session files remain app-private and are cleared on exit/process start.
+- Album opening/closing motion was deliberately left unchanged because the current animation was approved.
+
+Verification:
+
+- :app:compileDebugKotlin: BUILD SUCCESSFUL
+- :app:testDebugUnitTest: BUILD SUCCESSFUL, 114 tests, 0 failures, 0 errors, 0 skipped
+- :app:lintDebug: BUILD SUCCESSFUL
+- :app:assembleDebug: BUILD SUCCESSFUL
+- :app:assembleDebugAndroidTest: BUILD SUCCESSFUL
+- git diff --check: clean except expected CRLF conversion notices
+
+Latest APK:
+
+    F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+    Size: 65,597,388 bytes
+    Last write: 2026-08-02 01:58:08 Asia/Karachi
+    SHA-256: DB7DA094AEB0707CA1A43EA4F1AEBA26A26C68CB4537193118A5D397DED51A46
+
+Physical-device status:
+
+- ADB returned no attached devices before and after restarting the ADB bridge. The APK was not installed and no emulator was used.
+- Still verify on the target phone: sustained 120 Hz Photos flings with uncached rows, immediate scroll after viewer close, selection capsule spacing on narrow screens, locked first-open quality, restore confirmation, and video seeker/control readability.
 
 ## 2026-07-30 Release Hardening, Adaptive Viewer, and Startup Pass
 
