@@ -33,7 +33,9 @@ data class LockedMediaVaultSnapshot(
     val mediaItems: List<MediaItem> = emptyList(),
     val missingPreviewIds: Set<String> = emptySet()
 ) {
-    val mediaById: Map<String, MediaItem> by lazy(LazyThreadSafetyMode.NONE) { mediaItems.associateBy { it.id } }
+    // Build this where the snapshot is loaded (the IO dispatcher), rather than on the first UI
+    // read. A large vault should not make the next composition pay for indexing every item.
+    val mediaById: Map<String, MediaItem> = mediaItems.associateBy { it.id }
 }
 
 class LockedMediaVaultRepository(context: Context) {
@@ -44,7 +46,28 @@ class LockedMediaVaultRepository(context: Context) {
         Context.MODE_PRIVATE
     )
 
+    private val cachedSecretKey: SecretKey by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        loadOrCreateSecretKey()
+    }
+
     fun importMedia(mediaItem: MediaItem): Boolean {
+        val imported = copyIntoVault(mediaItem)
+        if (imported) saveMetadataBatch(listOf(mediaItem))
+        return imported
+    }
+
+    /**
+     * Encrypts a group of items while reusing the repository key and committing metadata once.
+     * This method is synchronous by design and must be called on an IO dispatcher.
+     */
+    fun importMediaBatch(mediaItems: List<MediaItem>): Set<String> {
+        val uniqueItems = mediaItems.distinctBy(MediaItem::id)
+        val importedItems = uniqueItems.filter(::copyIntoVault)
+        if (importedItems.isNotEmpty()) saveMetadataBatch(importedItems)
+        return importedItems.mapTo(linkedSetOf(), MediaItem::id)
+    }
+
+    private fun copyIntoVault(mediaItem: MediaItem): Boolean {
         val sourceUri = mediaItem.contentUri ?: return false
         val targetFile = encryptedFileForId(mediaItem.id)
         val fullCopyReady = if (targetFile.exists() && targetFile.length() > MinimumEncryptedFileBytes) {
@@ -60,7 +83,6 @@ class LockedMediaVaultRepository(context: Context) {
 
         // A failed preview must never invalidate the protected full copy.
         runCatching { ensureEncryptedPreviewFromSource(mediaItem) }
-        saveMetadata(mediaItem)
         return true
     }
 
@@ -346,8 +368,9 @@ class LockedMediaVaultRepository(context: Context) {
         return if (mediaItem.isVideo) {
             VideoFrameDecoder.decode(appContext, uri, PreviewSize)
         } else {
-            appContext.contentResolver.openInputStream(uri)?.use { stream -> BitmapFactory.decodeStream(stream) }
-                ?.scaledPreview()
+            decodeSampledBitmap(
+                openStream = { appContext.contentResolver.openInputStream(uri) }
+            )
         }
     }
 
@@ -355,8 +378,27 @@ class LockedMediaVaultRepository(context: Context) {
         return if (isVideo) {
             VideoFrameDecoder.decode(file, PreviewSize)
         } else {
-            BitmapFactory.decodeFile(file.absolutePath)?.scaledPreview()
+            decodeSampledBitmap(openStream = file::inputStream)
         }
+    }
+
+    private fun decodeSampledBitmap(openStream: () -> InputStream?): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        runCatching {
+            openStream()?.use { stream -> BitmapFactory.decodeStream(stream, null, bounds) }
+        }.getOrNull()
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = LockedMediaVaultPolicy.previewSampleSize(
+                width = bounds.outWidth,
+                height = bounds.outHeight,
+                targetSize = PreviewSize
+            )
+        }
+        return runCatching {
+            openStream()?.use { stream -> BitmapFactory.decodeStream(stream, null, options) }
+        }.getOrNull()?.scaledPreview()
     }
 
     private fun Bitmap.scaledPreview(): Bitmap {
@@ -407,9 +449,22 @@ class LockedMediaVaultRepository(context: Context) {
             .build()
     }
 
-    private fun saveMetadata(mediaItem: MediaItem) {
-        val token = fileToken(mediaItem.id)
-        val metadata = JSONObject()
+    private fun saveMetadataBatch(mediaItems: List<MediaItem>) {
+        if (mediaItems.isEmpty()) return
+        val tokens = metadataTokens().toMutableSet()
+        val editor = metadataPreferences.edit()
+        mediaItems.forEach { mediaItem ->
+            val token = fileToken(mediaItem.id)
+            tokens += token
+            editor.putString(metadataKey(token), encodeMetadata(mediaItem))
+        }
+        editor
+            .putStringSet(MetadataTokensKey, tokens)
+            .apply()
+    }
+
+    private fun encodeMetadata(mediaItem: MediaItem): String {
+        return JSONObject()
             .put("id", mediaItem.id)
             .put("albumId", mediaItem.albumId)
             .put("type", mediaItem.type.name)
@@ -425,12 +480,7 @@ class LockedMediaVaultRepository(context: Context) {
             .put("height", mediaItem.height ?: -1)
             .put("relativePath", mediaItem.relativePath.orEmpty())
             .put("sortTimestampMillis", mediaItem.sortTimestampMillis)
-
-        val tokens = metadataTokens() + token
-        metadataPreferences.edit()
-            .putString(metadataKey(token), metadata.toString())
-            .putStringSet(MetadataTokensKey, tokens)
-            .apply()
+            .toString()
     }
 
     private fun decodeMetadata(encoded: String): MediaItem? {
@@ -496,6 +546,10 @@ class LockedMediaVaultRepository(context: Context) {
     }
 
     private fun secretKey(): SecretKey {
+        return cachedSecretKey
+    }
+
+    private fun loadOrCreateSecretKey(): SecretKey {
         val keyStore = KeyStore.getInstance(AndroidKeyStore).apply { load(null) }
         val existingEntry = keyStore.getEntry(KeyAlias, null) as? KeyStore.SecretKeyEntry
         if (existingEntry != null) return existingEntry.secretKey

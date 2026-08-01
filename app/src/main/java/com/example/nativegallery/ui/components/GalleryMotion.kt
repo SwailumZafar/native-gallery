@@ -15,8 +15,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 
 object GalleryMotion {
     const val SharedBoundsMillis = 420
-    const val AlbumOpenMillis = 420
-    const val AlbumCloseMillis = 400
+    const val AlbumOpenMillis = 220
+    const val AlbumCloseMillis = 120
     const val ViewerHeroOpenMillis = 360
     const val ViewerHeroCloseMillis = 300
     const val SecondaryOpenMillis = 260

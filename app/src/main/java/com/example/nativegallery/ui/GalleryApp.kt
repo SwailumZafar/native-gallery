@@ -41,6 +41,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -115,6 +117,8 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -133,7 +137,11 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -142,6 +150,7 @@ import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
 import com.example.nativegallery.data.DocumentPhotoRepository
 import com.example.nativegallery.data.FavoritesRepository
+import com.example.nativegallery.R
 import com.example.nativegallery.data.GalleryPrivacyFilter
 import com.example.nativegallery.data.GalleryGridDensity
 import com.example.nativegallery.data.GallerySettings
@@ -184,7 +193,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -219,9 +227,9 @@ private data class AlbumTransitionSpec(
 )
 
 private const val FavoritesAlbumId = "favorites"
-private const val AlbumOpeningWarmRowCount = 16
+private const val AlbumOpeningWarmRowCount = 3
 private const val InitialPresentationThumbnailCount = 6
-private const val InitialPresentationWarmupTimeoutMillis = 250L
+private const val InitialPresentationPrefetchCount = 12
 
 private data class MediaOpenTransitionSpec(
     val key: Int,
@@ -387,6 +395,7 @@ fun GalleryApp(
     var pendingMediaStoreWriteAction by viewerSessionViewModel.pendingMediaStoreWriteActionState
     var pendingLockConfirmation by remember { mutableStateOf<PendingLockConfirmation?>(null) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
+    var showMediaManagementExplanation by rememberSaveable { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingMoveMediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var pendingAlbumName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -408,7 +417,6 @@ fun GalleryApp(
     var viewerSourceGridColumns by remember { mutableIntStateOf(4) }
     var albumTransition by remember { mutableStateOf<AlbumTransitionSpec?>(null) }
     var albumTransitionKey by remember { mutableIntStateOf(0) }
-    var albumWarmupReadyKey by remember { mutableIntStateOf(-1) }
     var albumTransitionCommittedKey by remember { mutableIntStateOf(-1) }
     var albumTransitionAwaitingDestinationKey by remember { mutableIntStateOf(-1) }
     var mediaOpenTransition by remember { mutableStateOf<MediaOpenTransitionSpec?>(null) }
@@ -667,44 +675,30 @@ fun GalleryApp(
     val galleryFrontWarmupKey = remember(visibleMedia) {
         visibleMedia.take(InitialPresentationThumbnailCount).joinToString(separator = "|") { it.id }
     }
-    LaunchedEffect(mediaAccess.hasAccess, isLoadingMedia, galleryFrontWarmupKey) {
+    LaunchedEffect(mediaAccess.hasAccess, isLoadingMedia) {
         when {
             !mediaAccess.hasAccess -> initialPresentationReady = true
             isLoadingMedia -> initialPresentationReady = false
-            initialPresentationReady -> Unit
-            else -> {
-                val firstViewportPhotos = visibleMedia
-                    .take(InitialPresentationThumbnailCount)
-                    .filterNot(MediaItem::isVideo)
-                if (firstViewportPhotos.isNotEmpty()) {
-                    withTimeoutOrNull(InitialPresentationWarmupTimeoutMillis) {
-                        prefetchMediaThumbnails(
-                            context = context.applicationContext,
-                            mediaItems = firstViewportPhotos,
-                            thumbnailSizes = listOf(384),
-                            maxItems = firstViewportPhotos.size,
-                            pinInMemory = true
-                        )
-                    }
-                }
-                initialPresentationReady = true
-            }
+            else -> initialPresentationReady = true
         }
     }
     LaunchedEffect(initialPresentationReady) {
         if (initialPresentationReady && !navigationPagesWarmed) {
             // Keep cold-start composition lean, then precompose all three primary tabs so a direct
             // Photos-to-Menu tap does not pay the full Menu composition cost.
-            delay(350L)
+            delay(80L)
             navigationPagesWarmed = true
         }
     }
-    LaunchedEffect(galleryFrontWarmupKey, initialPresentationReady) {        if (initialPresentationReady && visibleMedia.isNotEmpty()) {
+    LaunchedEffect(galleryFrontWarmupKey, initialPresentationReady) {
+        if (initialPresentationReady && visibleMedia.isNotEmpty()) {
+            // Let the first composed frame and navigation precomposition win scheduling priority.
+            delay(180L)
             prefetchMediaThumbnails(
                 context = context.applicationContext,
-                mediaItems = visibleMedia,
+                mediaItems = visibleMedia.take(InitialPresentationPrefetchCount),
                 thumbnailSizes = listOf(384),
-                maxItems = 48,
+                maxItems = InitialPresentationPrefetchCount,
                 pinInMemory = true
             )
         }
@@ -841,7 +835,10 @@ fun GalleryApp(
         }
     }
 
-    LaunchedEffect(visibleMediaIds, destination, viewerMediaItem?.id, viewerActionMode) {
+    val visibleMediaMembershipAuthoritative = mediaUiState.initialSyncComplete && mediaStoreSnapshot != null
+
+    LaunchedEffect(visibleMediaIds, destination, viewerMediaItem?.id, viewerActionMode, visibleMediaMembershipAuthoritative) {
+        if (!visibleMediaMembershipAuthoritative) return@LaunchedEffect
         if (selectedMediaIds.any { it !in visibleMediaIdSet }) {
             selectedMediaIds = selectedMediaIds.intersect(visibleMediaIdSet)
         }
@@ -982,6 +979,7 @@ fun GalleryApp(
         }
         if (migratedAny) vaultRefreshKey += 1
     }
+    lateinit var launchSystemMediaStoreWrite: (PendingMediaStoreWriteAction) -> Unit
     lateinit var launchMediaStoreWrite: (PendingMediaStoreWriteAction) -> Unit
     fun lockMediaItems(mediaItems: List<MediaItem>, onLocked: () -> Unit = {}) {
         if (mediaItems.isEmpty()) return
@@ -1151,7 +1149,7 @@ fun GalleryApp(
             AlbumDetailGridMode.Comfortable -> 3
             AlbumDetailGridMode.Spacious -> 2
         } + launchAdaptivePolicy.albumDetailColumnBoost
-        val openingWarmItemCount = (openingColumns * AlbumOpeningWarmRowCount).coerceAtMost(128)
+        val openingWarmItemCount = (openingColumns * AlbumOpeningWarmRowCount).coerceAtMost(24)
         val firstViewportMedia = openingMedia
             .take(openingWarmItemCount)
             .filterNot(MediaItem::usesDeferredVideoThumbnail)
@@ -1163,7 +1161,6 @@ fun GalleryApp(
             albumTileBounds[album.id] = tileBounds
             albumTransitionKey += 1
             val openingKey = albumTransitionKey
-            albumWarmupReadyKey = -1
             albumTransitionCommittedKey = -1
             albumTransitionAwaitingDestinationKey = -1
             albumTransition = AlbumTransitionSpec(
@@ -1181,9 +1178,6 @@ fun GalleryApp(
                     maxItems = firstViewportMedia.size,
                     pinInMemory = true
                 )
-                if (albumTransitionKey == openingKey) {
-                    albumWarmupReadyKey = openingKey
-                }
             }
             return
         }
@@ -1201,11 +1195,13 @@ fun GalleryApp(
 
     fun closeAlbumDetail() {
         if (albumTransition != null) return
-        val closingAlbum = selectedAlbum
-        val closingBounds = selectedAlbumId?.let { albumTileBounds[it] }
         selectedMediaIds = emptySet()
+        val closingAlbum = selectedAlbum
+        val closingBounds = selectedAlbumId?.let(albumTileBounds::get)
         if (closingAlbum != null && closingBounds?.isUsableTransitionBounds() == true) {
             albumTransitionKey += 1
+            albumTransitionCommittedKey = -1
+            albumTransitionAwaitingDestinationKey = -1
             albumTransition = AlbumTransitionSpec(
                 key = albumTransitionKey,
                 album = closingAlbum,
@@ -1215,6 +1211,9 @@ fun GalleryApp(
                 firstVisibleRow = albumDetailListState.firstVisibleItemIndex,
                 firstVisibleRowOffset = albumDetailListState.firstVisibleItemScrollOffset
             )
+        } else {
+            albumTransitionCommittedKey = -1
+            albumTransitionAwaitingDestinationKey = -1
         }
         navigationViewModel.closeAlbumDetail()
     }
@@ -1249,6 +1248,18 @@ fun GalleryApp(
         snapshotFlow { mainPagerState.settledPage }.collect { page ->
             navigationViewModel.syncPagerTab(pageToGalleryTab(page))
         }
+    }
+
+    fun selectMainTab(tab: GalleryTab) {
+        selectedMediaIds = emptySet()
+        bottomNavigationVisible = true
+        val targetPage = tab.pageIndex()
+        if (mainPagerState.currentPage != targetPage || mainPagerState.targetPage != targetPage) {
+            // This is non-suspending, so one tap cancels an in-flight swipe and schedules the
+            // requested page for the next remeasure instead of waiting on a launched coroutine.
+            mainPagerState.requestScrollToPage(targetPage)
+        }
+        navigationViewModel.openTab(tab)
     }
 
     fun finishViewerOpen(
@@ -1633,6 +1644,30 @@ fun GalleryApp(
         }
     }
 
+    fun completeOneTapMediaStoreWrite(action: PendingMediaStoreWriteAction) {
+        if (action.mode == MediaStoreWriteMode.MoveToAlbum) {
+            completeMediaStoreWrite(action)
+            return
+        }
+        prefetchScope.launch {
+            val succeeded = withContext(Dispatchers.IO) {
+                when (action.mode) {
+                    MediaStoreWriteMode.Trash -> mediaStoreWriteRepository.setTrashedDirectly(action.mediaItems, true)
+                    MediaStoreWriteMode.RestoreFromTrash -> mediaStoreWriteRepository.setTrashedDirectly(action.mediaItems, false)
+                    MediaStoreWriteMode.DeleteForever,
+                    MediaStoreWriteMode.DeleteLockedOriginals -> mediaStoreWriteRepository.deleteDirectly(action.mediaItems)
+                    MediaStoreWriteMode.MoveToAlbum -> true
+                }
+            }
+            if (succeeded) {
+                mediaViewModel.finishAppMediaStoreWrite()
+                completeMediaStoreWrite(action)
+            } else {
+                launchSystemMediaStoreWrite(action)
+            }
+        }
+    }
+
     val mediaStoreWriteLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
@@ -1646,7 +1681,7 @@ fun GalleryApp(
         }
     }
 
-    launchMediaStoreWrite = { action ->
+    launchSystemMediaStoreWrite = { action ->
         val request = when (action.mode) {
             MediaStoreWriteMode.Trash -> mediaStoreWriteRepository.createTrashRequest(action.mediaItems, trashed = true)
             MediaStoreWriteMode.RestoreFromTrash -> mediaStoreWriteRepository.createTrashRequest(action.mediaItems, trashed = false)
@@ -1654,13 +1689,20 @@ fun GalleryApp(
             MediaStoreWriteMode.DeleteLockedOriginals -> mediaStoreWriteRepository.createDeleteRequest(action.mediaItems)
             MediaStoreWriteMode.MoveToAlbum -> mediaStoreWriteRepository.createWriteRequest(action.mediaItems)
         }
-
-        mediaViewModel.beginAppMediaStoreWrite()
         if (request != null) {
             pendingMediaStoreWriteAction = action
             mediaStoreWriteLauncher.launch(request)
         } else {
             completeMediaStoreFallback(action)
+        }
+    }
+
+    launchMediaStoreWrite = { action ->
+        mediaViewModel.beginAppMediaStoreWrite()
+        if (mediaManagementAccessStatus.isGranted) {
+            completeOneTapMediaStoreWrite(action)
+        } else {
+            launchSystemMediaStoreWrite(action)
         }
     }
     fun hideMedia(mediaItem: MediaItem, direction: Int) {
@@ -2106,11 +2148,7 @@ fun GalleryApp(
                             GalleryBottomBar(
                                 selectedTab = selectedTab,
                                 visible = bottomNavigationVisible,
-                                onTabSelected = { tab ->
-                                    selectedMediaIds = emptySet()
-                                    bottomNavigationVisible = true
-                                    navigationViewModel.openTab(tab)
-                                }
+                                onTabSelected = ::selectMainTab
                             )
                         }
                     }
@@ -2126,10 +2164,7 @@ fun GalleryApp(
                         ) {
                             GalleryNavigationRail(
                                 selectedTab = selectedTab,
-                                onTabSelected = { tab ->
-                                    selectedMediaIds = emptySet()
-                                    navigationViewModel.openTab(tab)
-                                }
+                                onTabSelected = ::selectMainTab
                             )
                         }
                         Box(
@@ -2530,7 +2565,6 @@ fun GalleryApp(
 
                 PositionAwareAlbumTransitionOverlay(
                     transition = albumTransition,
-                    contentReady = albumTransition?.key == albumWarmupReadyKey,
                     committed = albumTransition?.let {
                         it.mode != AlbumTransitionMode.Opening ||
                             albumTransitionCommittedKey == it.key
@@ -2685,13 +2719,39 @@ fun GalleryApp(
                 GallerySettingsDialog(
                     settings = settings,
                     mediaManagementAccessStatus = mediaManagementAccessStatus,
-                    onRequestMediaManagementAccess = {
-                        mediaManagementAccessRepository.requestAccessIntent()?.let {
-                            mediaManagementAccessLauncher.launch(it)
-                        }
-                    },
+                    onRequestMediaManagementAccess = { showMediaManagementExplanation = true },
                     onSettingsChange = onSettingsChange,
                     onDismiss = { showSettingsDialog = false }
+                )
+            }
+
+            if (showMediaManagementExplanation) {
+                AlertDialog(
+                    onDismissRequest = { showMediaManagementExplanation = false },
+                    title = { Text("Enable one-tap media changes?") },
+                    text = {
+                        Text(
+                            "Android requires one one-time switch. On the next screen, turn on 'Allow app to manage media', then return. Native Gallery can then move, trash, restore, and delete media without the large confirmation block. This is optional and can be revoked in Android Settings."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showMediaManagementExplanation = false
+                                mediaManagementAccessRepository.requestAccessIntent()?.let {
+                                    mediaManagementAccessLauncher.launch(it)
+                                }
+                            }
+                        ) {
+                            Text("Continue to Android Settings", fontWeight = FontWeight.SemiBold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showMediaManagementExplanation = false }) {
+                            Text("Not now")
+                        }
+                    },
+                    shape = RoundedCornerShape(20.dp)
                 )
             }
 
@@ -2978,7 +3038,7 @@ private fun MediaManagementSettingsRow(
                     text = if (granted) {
                         "Enabled. Locking, moving, and deleting can skip repeated Android confirmations."
                     } else {
-                        "Optional Android access that reduces confirmation screens when changing media."
+                        "Turn on Android's media-management switch once to remove repeated confirmation blocks."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -2993,7 +3053,7 @@ private fun MediaManagementSettingsRow(
                 )
             } else {
                 TextButton(onClick = onRequestAccess) {
-                    Text("Enable", fontWeight = FontWeight.SemiBold)
+                    Text("Set up", fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -3016,7 +3076,9 @@ private fun SettingsChoiceChip(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        modifier = modifier.bouncyClickable(onClick = onClick),
+        modifier = modifier
+            .semantics { this.selected = selected }
+            .bouncyClickable(onClick = onClick),
         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(18.dp),
         border = BorderStroke(
@@ -3048,6 +3110,7 @@ private fun SettingsChoiceRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .semantics(mergeDescendants = true) { this.selected = selected }
             .bouncyClickable(onClick = onClick)
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -3082,7 +3145,11 @@ private fun SettingsSwitchRow(
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) { }
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -3097,7 +3164,7 @@ private fun SettingsSwitchRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
@@ -3136,6 +3203,11 @@ private fun GalleryMenuScreen(
     onOpenCleanup: () -> Unit
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    val context = LocalContext.current
+    val versionName = remember(context) {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
+            .getOrNull().orEmpty()
+    }
         val sidePadding = if (
             maxContentWidth != androidx.compose.ui.unit.Dp.Unspecified && maxWidth > maxContentWidth
         ) {
@@ -3224,7 +3296,7 @@ private fun GalleryMenuScreen(
         }
         Spacer(Modifier.height(26.dp))
         Text(
-            text = "NativeGallery",
+            text = stringResource(R.string.app_name),
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontSize = 14.sp,
                 lineHeight = 18.sp,
@@ -3234,7 +3306,7 @@ private fun GalleryMenuScreen(
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            text = "v0.1.0",
+            text = "v$versionName",
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontSize = 12.sp,
                 lineHeight = 16.sp,
@@ -3773,7 +3845,6 @@ private fun mediaForAlbum(
 @Composable
 private fun PositionAwareAlbumTransitionOverlay(
     transition: AlbumTransitionSpec?,
-    contentReady: Boolean,
     committed: Boolean,
     rootWidthPx: Float,
     rootHeightPx: Float,
@@ -3803,7 +3874,6 @@ private fun PositionAwareAlbumTransitionOverlay(
     val progress = remember(transition.key) {
         Animatable(if (transition.mode == AlbumTransitionMode.Closing) 1f else 0f)
     }
-    val latestContentReady by rememberUpdatedState(contentReady)
 
     LaunchedEffect(transition.key) {
         val targetValue = if (transition.mode == AlbumTransitionMode.Closing) 0f else 1f
@@ -3818,11 +3888,6 @@ private fun PositionAwareAlbumTransitionOverlay(
                 easing = FastOutSlowInEasing
             )
         )
-        if (transition.mode == AlbumTransitionMode.Opening && !latestContentReady) {
-            withTimeoutOrNull(180L) {
-                snapshotFlow { latestContentReady }.first { it }
-            }
-        }
         onFinished(transition)
     }
 
@@ -3851,7 +3916,15 @@ private fun PositionAwareAlbumTransitionOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .pointerInput(transition.key) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { it.consume() }
+                    }
+                }
+            }
             .background(Color.Black.copy(alpha = scrimAlpha))
+            .testTag("AlbumTransitionOverlay")
     ) {
         Box(
             modifier = Modifier
@@ -4169,7 +4242,7 @@ private fun GalleryBottomBar(
     val tabGap = 2.dp
     val contentWidth = tabWidth * 3 + tabGap * 2
     val density = LocalDensity.current
-    val hideDistancePx = with(density) { 88.dp.toPx() }
+    val hideDistancePx = with(density) { 72.dp.toPx() }
     val visibilityProgress by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
         animationSpec = tween(210, easing = FastOutSlowInEasing),
@@ -4180,7 +4253,6 @@ private fun GalleryBottomBar(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(bottom = 4.dp)
             .graphicsLayer {
                 alpha = visibilityProgress
                 translationY = hideDistancePx * (1f - visibilityProgress)
@@ -4198,7 +4270,7 @@ private fun GalleryBottomBar(
             ) {
                 Box(
                     modifier = Modifier
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                        .padding(horizontal = 4.dp)
                         .width(contentWidth)
                         .height(tabHeight)
                 ) {
@@ -4206,7 +4278,7 @@ private fun GalleryBottomBar(
                     val tabStepPx = with(density) { (tabWidth + tabGap).toPx() }
                     val indicatorProgress by animateFloatAsState(
                         targetValue = selectedTab.pageIndex().toFloat(),
-                        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
+                        animationSpec = tween(durationMillis = 90, easing = FastOutSlowInEasing),
                         label = "bottom nav pill progress"
                     )
 
@@ -4316,18 +4388,13 @@ private fun GalleryNavigationItem(
     val inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
     val color by animateColorAsState(
         targetValue = if (selected) activeColor else inactiveColor,
-        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing),
         label = "bottom nav item color"
     )
 
     Column(
         modifier = modifier
-            .bouncyClickable(
-                pressedScale = GalleryMotion.BottomNavPressedScale,
-                pressDampingRatio = GalleryMotion.BottomNavPressDamping,
-                pressStiffness = GalleryMotion.BottomNavPressStiffness,
-                onClick = onClick
-            )
+            .clickable(onClickLabel = label, role = Role.Tab, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center

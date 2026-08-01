@@ -48,4 +48,14 @@ class LockedMediaVaultPolicyTest {
         assertEquals(20, LockedMediaVaultPolicy.prefetchLimit(4))
         assertEquals(24, LockedMediaVaultPolicy.prefetchLimit(8))
     }
+
+    @Test
+    fun previewSamplingKeepsDecodeNearTargetWithoutUpscaling() {
+        assertEquals(1, LockedMediaVaultPolicy.previewSampleSize(0, 0, 512))
+        assertEquals(1, LockedMediaVaultPolicy.previewSampleSize(800, 600, 512))
+        assertEquals(2, LockedMediaVaultPolicy.previewSampleSize(1024, 768, 512))
+        assertEquals(4, LockedMediaVaultPolicy.previewSampleSize(4000, 3000, 512))
+        assertEquals(8, LockedMediaVaultPolicy.previewSampleSize(8000, 6000, 512))
+        assertEquals(1, LockedMediaVaultPolicy.previewSampleSize(8000, 6000, 0))
+    }
 }

@@ -15,7 +15,15 @@ import android.provider.MediaStore
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
@@ -24,6 +32,8 @@ import com.example.nativegallery.MainActivity
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import org.junit.Assume.assumeTrue
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -56,6 +66,10 @@ class GalleryConfigurationInstrumentedTest {
         composeRule.waitUntil(ConfigurationTimeoutMillis) {
             composeRule.onAllNodesWithContentDescription("Close media").fetchSemanticsNodes().isNotEmpty()
         }
+        val mediaCopiesAfterOpen = composeRule
+            .onAllNodesWithContentDescription(fixtureRule.displayName)
+            .fetchSemanticsNodes()
+            .size
 
         composeRule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         val landscapeApplied = runCatching {
@@ -66,8 +80,80 @@ class GalleryConfigurationInstrumentedTest {
         assumeTrue("The test device does not support runtime orientation changes", landscapeApplied)
 
         composeRule.onNodeWithContentDescription("Close media").assertIsDisplayed()
+
+        composeRule.activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        val portraitRestored = runCatching {
+            composeRule.waitUntil(ConfigurationTimeoutMillis) {
+                composeRule.activity.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+            }
+        }.isSuccess
+        assumeTrue("The test device could not restore portrait orientation", portraitRestored)
+
+        composeRule.onNodeWithContentDescription("Close media").assertIsDisplayed()
+        composeRule.onNodeWithTag(ViewerMediaStageTestTag).assertIsDisplayed()
+        val mediaCopiesAfterRoundTrip = composeRule
+            .onAllNodesWithContentDescription(fixtureRule.displayName)
+            .fetchSemanticsNodes()
+            .size
+        assert(mediaCopiesAfterOpen > 0) { "The open viewer must render the selected photo" }
+        assert(mediaCopiesAfterRoundTrip == mediaCopiesAfterOpen) {
+            "Landscape-to-portrait must not leave a duplicate photo layer: " +
+                "before=$mediaCopiesAfterOpen after=$mediaCopiesAfterRoundTrip"
+        }
+        assert(
+            composeRule.onAllNodesWithTag(ViewerMediaStageTestTag)
+                .fetchSemanticsNodes().size == 1
+        ) { "Landscape-to-portrait must keep exactly one viewer media stage" }
+        assertTrue("The open viewer must render the selected photo", mediaCopiesAfterOpen > 0)
+        assertEquals(
+            "Landscape-to-portrait must not leave a duplicate photo layer",
+            mediaCopiesAfterOpen,
+            mediaCopiesAfterRoundTrip
+        )
+        assertTrue(
+            "Landscape-to-portrait must keep exactly one viewer media stage",
+            composeRule.onAllNodesWithTag(ViewerMediaStageTestTag).fetchSemanticsNodes().size == 1
+        )
     }
 
+    @Test
+    fun closingAlbumThenFastScrollingDoesNotLeaveTransitionOverlay() {
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithContentDescription(fixtureRule.displayName)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithText("Albums").performClick()
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithContentDescription(FixtureAlbumName)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+
+        composeRule.onNodeWithContentDescription(FixtureAlbumName).performClick()
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithContentDescription("Back").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription("Back").performClick()
+
+        composeRule.onRoot().performTouchInput { swipeUp(durationMillis = 80L) }
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithTag(AlbumTransitionOverlayTestTag)
+                .fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithText("Search albums").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        composeRule.onRoot().performTouchInput {
+            swipeUp(durationMillis = 80L)
+            swipeDown(durationMillis = 80L)
+        }
+        composeRule.waitForIdle()
+        assertTrue(
+            "The album transition overlay must not reappear after return scrolling",
+            composeRule.onAllNodesWithTag(AlbumTransitionOverlayTestTag).fetchSemanticsNodes().isEmpty()
+        )
+        composeRule.onNodeWithText("Search albums").assertIsDisplayed()
+    }
     private class AppOwnedPhotoFixtureRule : TestRule {
         lateinit var displayName: String
             private set
@@ -161,5 +247,7 @@ class GalleryConfigurationInstrumentedTest {
         const val ConfigurationTimeoutMillis = 15_000L
         const val PermissionPromptPreferences = "native_gallery_permission_prompt"
         const val InitialPromptHandled = "initial_prompt_handled"
+        const val FixtureAlbumName = "NativeGalleryAndroidTests"
+        const val AlbumTransitionOverlayTestTag = "AlbumTransitionOverlay"
     }
 }

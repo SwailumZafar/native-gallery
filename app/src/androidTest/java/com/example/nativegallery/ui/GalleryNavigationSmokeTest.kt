@@ -41,6 +41,23 @@ class GalleryNavigationSmokeTest {
         composeRule.onNodeWithText("Search photos and videos").assertIsDisplayed()
     }
 
+    @Test
+    fun eachBottomNavigationDestinationRespondsToOneTap() {
+        composeRule.waitForText("Search photos and videos")
+
+        composeRule.onNodeWithText("Menu").performClick()
+        composeRule.waitForText("Gallery settings and tools")
+        composeRule.onNodeWithText("Gallery settings and tools").assertIsDisplayed()
+
+        composeRule.onNodeWithText("Albums").performClick()
+        composeRule.waitForText("Search albums")
+        composeRule.onNodeWithText("Search albums").assertIsDisplayed()
+
+        composeRule.onNodeWithText("Photos").performClick()
+        composeRule.waitForText("Search photos and videos")
+        composeRule.onNodeWithText("Search photos and videos").assertIsDisplayed()
+    }
+
     private fun androidx.compose.ui.test.junit4.AndroidComposeTestRule<*, *>.waitForText(text: String) {
         waitUntil(timeoutMillis = NavigationTimeoutMillis) {
             onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()

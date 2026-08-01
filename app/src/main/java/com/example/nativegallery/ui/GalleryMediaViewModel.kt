@@ -95,10 +95,14 @@ internal class GalleryMediaViewModel(
             return
         }
         scheduledRefresh = viewModelScope.launch {
-            refreshMutex.withLock {
-                refreshLatestPage(access)
-                refreshFullLibrary(access)
+            val presentingFromCache = _uiState.value.snapshot != null
+            refreshMutex.withLock { refreshLatestPage(access) }
+            if (!presentingFromCache) {
+                // Give Compose a frame to present the first page before the full-library query
+                // competes with visible thumbnail decoding on a cold process start.
+                delay(ColdStartFullRefreshYieldMillis)
             }
+            refreshMutex.withLock { refreshFullLibrary(access) }
         }
     }
 
@@ -249,6 +253,10 @@ internal class GalleryMediaViewModel(
 
     private fun isCurrentAccess(access: MediaAccessState): Boolean {
         return access.hasAccess && access == _uiState.value.mediaAccess
+    }
+
+    private companion object {
+        const val ColdStartFullRefreshYieldMillis = 48L
     }
 }
 

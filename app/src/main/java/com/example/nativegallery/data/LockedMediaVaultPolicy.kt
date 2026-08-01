@@ -38,6 +38,19 @@ internal object LockedMediaVaultPolicy {
         return "$cleanTitle.$extension"
     }
 
+    fun previewSampleSize(width: Int, height: Int, targetSize: Int): Int {
+        if (width <= 0 || height <= 0 || targetSize <= 0) return 1
+        val largestSide = maxOf(width, height)
+        var sampleSize = 1
+        while (
+            sampleSize <= Int.MAX_VALUE / 2 &&
+            largestSide / (sampleSize * 2) >= targetSize
+        ) {
+            sampleSize *= 2
+        }
+        return sampleSize
+    }
+
     fun prefetchLimit(gridColumns: Int): Int {
         return (gridColumns.coerceAtLeast(2) * 5).coerceAtMost(24)
     }

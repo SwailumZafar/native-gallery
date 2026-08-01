@@ -161,6 +161,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        const val LaunchGateTimeoutMillis = 180L
+        const val LaunchGateTimeoutMillis = 80L
     }
 }

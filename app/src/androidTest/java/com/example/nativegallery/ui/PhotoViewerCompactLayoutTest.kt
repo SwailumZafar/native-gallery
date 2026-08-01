@@ -54,6 +54,14 @@ class PhotoViewerCompactLayoutTest {
         }
 
         val viewport = composeRule.onNodeWithTag(ViewportTag).fetchSemanticsNode().boundsInRoot
+        val mediaStage = composeRule.onNodeWithTag(ViewerMediaStageTestTag).fetchSemanticsNode().boundsInRoot
+        val actionSection = composeRule.onNodeWithTag(ViewerActionSectionTestTag).fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "The media stage must end before the separate action section begins",
+            mediaStage.bottom <= actionSection.top
+        )
+        assertTrue("The action section should span the viewer width", actionSection.width >= viewport.width * 0.95f)
+
         ViewerActions.forEach { action ->
             composeRule.onNodeWithContentDescription(action).assertIsDisplayed()
             val actionBounds = composeRule

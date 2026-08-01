@@ -112,8 +112,9 @@ class PhotoViewerPolicyTest {
                 compactLandscape = false
             )
         )
-        assertEquals(62, viewerBottomActionContentHeightDp(showFilmstrip = false))
+        assertEquals(66, viewerBottomActionContentHeightDp(showFilmstrip = false))
         assertEquals(122, viewerBottomActionContentHeightDp(showFilmstrip = true))
+        assertEquals(0, viewerBeyondViewportPageCount())
     }
 
     @Test
@@ -121,5 +122,19 @@ class PhotoViewerPolicyTest {
         assertEquals(336, viewerVideoControlMaxWidthDp(screenWidthDp = 360))
         assertEquals(560, viewerVideoControlMaxWidthDp(screenWidthDp = 700))
         assertEquals(640, viewerVideoControlMaxWidthDp(screenWidthDp = 1200))
+    }
+
+    @Test
+    fun pinchOutNeverScalesBelowTheViewerDismissBoundary() {
+        assertEquals(0.82f, viewerPinchScale(currentScale = 1f, zoomDelta = 0.1f), 0.001f)
+        assertEquals(0.82f, viewerPinchScale(currentScale = 0.82f, zoomDelta = 0.5f), 0.001f)
+        assertEquals(5f, viewerPinchScale(currentScale = 4f, zoomDelta = 2f), 0.001f)
+    }
+
+    @Test
+    fun doubleTapZoomTogglesBetweenFitAndZoomed() {
+        assertEquals(2.8f, viewerDoubleTapTargetScale(currentScale = 1f), 0.001f)
+        assertEquals(1f, viewerDoubleTapTargetScale(currentScale = 2.8f), 0.001f)
+        assertEquals(1f, viewerDoubleTapTargetScale(currentScale = 1.06f), 0.001f)
     }
 }

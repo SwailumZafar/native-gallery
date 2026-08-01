@@ -724,7 +724,7 @@ private fun rememberContentUriBitmap(
                     return@LaunchedEffect
                 }
             }
-            loadCachedBitmap(context, imageUri, thumbnailSize, loadQuality, isVideo)?.let { loadedBitmap ->
+            loadPersistedThumbnail(context, imageUri, thumbnailSize, loadQuality)?.let { loadedBitmap ->
                 bitmap = loadedBitmap
             }
             return@LaunchedEffect
@@ -761,6 +761,21 @@ private suspend fun loadCachedBitmap(
             loaded?.let { ThumbnailDiskCache.put(context, cacheKey, it) }
         }
         loaded
+    }
+}
+
+private suspend fun loadPersistedThumbnail(
+    context: Context,
+    imageUri: Uri,
+    thumbnailSize: Int,
+    loadQuality: ImageLoadQuality
+): Bitmap? {
+    if (loadQuality != ImageLoadQuality.Thumbnail || thumbnailSize > 512) return null
+    val cacheKey = ThumbnailMemoryCache.key(imageUri, thumbnailSize)
+    return ThumbnailLoadCoordinator.load(cacheKey) {
+        // Transition previews must never trigger a new MediaStore decode. If neither memory nor
+        // the existing disk cache has the frame, the lightweight placeholder is intentional.
+        ThumbnailDiskCache.get(context, cacheKey)
     }
 }
 

@@ -138,17 +138,39 @@ class LockedMediaOperationsTest {
         assertFalse(hiddenWasChanged)
     }
 
+    @Test
+    fun serviceUsesOneBatchImportForMultipleItemsWhenAvailable() {
+        var batchCalls = 0
+        val operations = testOperations(
+            importToVault = { error("Per-item import should not be used") },
+            importBatchToVault = { items ->
+                batchCalls += 1
+                assertEquals(listOf("one", "two"), items.map(MediaItem::id))
+                setOf("one")
+            }
+        )
+
+        val execution = operations.importIntoVault(
+            listOf(mediaItem("one"), mediaItem("two"), mediaItem("one"))
+        )
+
+        assertEquals(1, batchCalls)
+        assertEquals(setOf("one"), execution.outcome.importedIds)
+    }
+
     private fun testOperations(
         importToVault: (MediaItem) -> Boolean = { true },
         originalStillExists: (String) -> Boolean = { false },
         deleteFromVault: (String) -> Unit = {},
-        setHidden: (Set<String>, Boolean) -> Set<String> = { ids, _ -> ids }
+        setHidden: (Set<String>, Boolean) -> Set<String> = { ids, _ -> ids },
+        importBatchToVault: ((List<MediaItem>) -> Set<String>)? = null
     ): LockedMediaOperations {
         return LockedMediaOperations(
             importToVault = importToVault,
             originalStillExists = originalStillExists,
             deleteFromVault = deleteFromVault,
-            setHidden = setHidden
+            setHidden = setHidden,
+            importBatchToVault = importBatchToVault
         )
     }
 

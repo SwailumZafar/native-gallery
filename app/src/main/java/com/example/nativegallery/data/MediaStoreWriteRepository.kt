@@ -73,6 +73,22 @@ class MediaStoreWriteRepository(context: Context) {
         return updatedCount == uris.size
     }
 
+    fun setTrashedDirectly(mediaItems: List<MediaItem>, trashed: Boolean): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+        val uris = mediaItems.mapNotNull { it.contentUri }.distinct()
+        if (uris.isEmpty()) return false
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.IS_TRASHED, if (trashed) 1 else 0)
+        }
+        var updatedCount = 0
+        uris.forEach { uri ->
+            updatedCount += runCatching {
+                appContext.contentResolver.update(uri, values, null, null)
+            }.getOrDefault(0)
+        }
+        return updatedCount == uris.size
+    }
+
     fun deleteDirectly(mediaItems: List<MediaItem>): Boolean {
         val uris = mediaItems.mapNotNull { it.contentUri }.distinct()
         if (uris.isEmpty()) return false

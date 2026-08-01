@@ -98,13 +98,15 @@ class LockedMediaOperations internal constructor(
     private val importToVault: (MediaItem) -> Boolean,
     private val originalStillExists: (String) -> Boolean,
     private val deleteFromVault: (String) -> Unit,
-    private val setHidden: (Set<String>, Boolean) -> Set<String>
+    private val setHidden: (Set<String>, Boolean) -> Set<String>,
+    private val importBatchToVault: ((List<MediaItem>) -> Set<String>)? = null
 ) {
     constructor(
         vaultRepository: LockedMediaVaultRepository,
         hiddenMediaRepository: HiddenMediaRepository
     ) : this(
         importToVault = vaultRepository::importMedia,
+        importBatchToVault = vaultRepository::importMediaBatch,
         originalStillExists = vaultRepository::originalMediaExists,
         deleteFromVault = vaultRepository::delete,
         setHidden = hiddenMediaRepository::setMediaHidden
@@ -112,9 +114,13 @@ class LockedMediaOperations internal constructor(
 
     fun importIntoVault(mediaItems: List<MediaItem>): LockedMediaImportExecution {
         val uniqueItems = mediaItems.distinctBy(MediaItem::id)
-        val importedIds = uniqueItems.mapNotNull { mediaItem ->
-            mediaItem.id.takeIf {
-                runCatching { importToVault(mediaItem) }.getOrDefault(false)
+        val importedIds = importBatchToVault?.let { importBatch ->
+            runCatching { importBatch(uniqueItems) }.getOrDefault(emptySet())
+        } ?: run {
+            uniqueItems.mapNotNull { mediaItem ->
+                mediaItem.id.takeIf {
+                    runCatching { importToVault(mediaItem) }.getOrDefault(false)
+                }
             }
         }
         val outcome = LockedMediaOperationsPolicy.afterImport(

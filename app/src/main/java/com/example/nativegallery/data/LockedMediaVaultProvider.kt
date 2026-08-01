@@ -13,10 +13,15 @@ import android.os.ParcelFileDescriptor
 import java.io.File
 import java.io.FileNotFoundException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 
 class LockedMediaVaultProvider : ContentProvider() {
+    private var vaultRepository: LockedMediaVaultRepository? = null
+
     override fun onCreate(): Boolean {
-        context?.applicationContext?.let(::clearSessionCache)
+        val appContext = context?.applicationContext ?: return false
+        vaultRepository = LockedMediaVaultRepository(appContext)
+        scheduleSessionCacheClear(appContext)
         return true
     }
 
@@ -59,7 +64,7 @@ class LockedMediaVaultProvider : ContentProvider() {
             token != null &&
             appContext != null &&
             uri.pathSegments.firstOrNull() != LockedMediaVaultRepository.VaultPreviewPath &&
-            LockedMediaVaultRepository(appContext).hasEncryptedToken(token, preview = true)
+            vaultRepository?.hasEncryptedToken(token, preview = true) == true
         ) {
             val previewUri = Uri.Builder()
                 .scheme(ContentResolver.SCHEME_CONTENT)
@@ -77,10 +82,11 @@ class LockedMediaVaultProvider : ContentProvider() {
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         if (mode.contains('w')) throw FileNotFoundException("Locked media is read-only")
         val appContext = context?.applicationContext ?: throw FileNotFoundException("Missing context")
+        awaitScheduledSessionCacheClear()
         val token = uri.lastPathSegment?.takeIf { it.isNotBlank() }
             ?: throw FileNotFoundException("Missing locked media token")
         val preview = uri.pathSegments.firstOrNull() == LockedMediaVaultRepository.VaultPreviewPath
-        val repository = LockedMediaVaultRepository(appContext)
+        val repository = vaultRepository ?: LockedMediaVaultRepository(appContext)
         if (!repository.hasEncryptedToken(token, preview)) {
             throw FileNotFoundException("Locked media token not found")
         }
@@ -114,7 +120,39 @@ class LockedMediaVaultProvider : ContentProvider() {
         private val cacheLock = Any()
         private val sessionLocks = ConcurrentHashMap<String, Any>()
 
+        @Volatile
+        private var scheduledCleanupLatch: CountDownLatch? = null
+
         fun clearSessionCache(context: Context) {
+            awaitScheduledSessionCacheClear()
+            clearSessionCacheFiles(context.applicationContext)
+        }
+
+        private fun scheduleSessionCacheClear(context: Context) {
+            val latch = CountDownLatch(1)
+            scheduledCleanupLatch = latch
+            Thread(
+                {
+                    try {
+                        clearSessionCacheFiles(context)
+                    } finally {
+                        latch.countDown()
+                        if (scheduledCleanupLatch === latch) scheduledCleanupLatch = null
+                    }
+                },
+                "LockedMediaCacheCleanup"
+            ).apply {
+                isDaemon = true
+                priority = Thread.MIN_PRIORITY
+                start()
+            }
+        }
+
+        private fun awaitScheduledSessionCacheClear() {
+            scheduledCleanupLatch?.await()
+        }
+
+        private fun clearSessionCacheFiles(context: Context) {
             synchronized(cacheLock) {
                 File(context.applicationContext.cacheDir, SessionCacheDir)
                     .listFiles()

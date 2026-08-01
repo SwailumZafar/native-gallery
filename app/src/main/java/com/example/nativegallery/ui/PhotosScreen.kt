@@ -131,7 +131,14 @@ fun PhotosScreen(
             .entries
             .toList()
     }
-    val headerCollapse = 0f
+    val headerCollapse by remember(listState) {
+        derivedStateOf {
+            when {
+                listState.firstVisibleItemIndex > 0 -> 1f
+                else -> (listState.firstVisibleItemScrollOffset / 280f).coerceIn(0f, 1f)
+            }
+        }
+    }
     val tileBounds = remember { mutableMapOf<String, Rect>() }
     val rootBounds = remember { PhotoBoundsRef() }
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
@@ -337,11 +344,11 @@ private fun PicturesHeader(
 ) {
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
     val progress = collapseProgress.coerceIn(0f, 1f)
-    val topPadding = interpolate(96f, 34f, progress).dp
-    val titleScale = interpolate(1.08f, 0.72f, progress)
-    val titleAlpha = interpolate(1f, 0.84f, progress)
-    val titleSpacing = interpolate(44f, 14f, progress).dp
-    val bottomSpacing = interpolate(34f, 18f, progress).dp
+    val topPadding = interpolate(96f, 22f, progress).dp
+    val titleScale = interpolate(1f, 0.5f, progress)
+    val titleAlpha = interpolate(1f, 0.76f, progress)
+    val titleSpacing = interpolate(44f, 8f, progress).dp
+    val bottomSpacing = interpolate(34f, 12f, progress).dp
 
     Column(
         modifier = Modifier
@@ -365,7 +372,11 @@ private fun PicturesHeader(
                     scaleX = titleScale
                     scaleY = titleScale
                 },
-                style = MaterialTheme.typography.headlineLarge,
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontSize = 52.sp,
+                    lineHeight = 58.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
                 color = MaterialTheme.colorScheme.onBackground
             )
             Spacer(Modifier.height(titleSpacing))
