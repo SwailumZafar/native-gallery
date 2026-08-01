@@ -112,8 +112,8 @@ class PhotoViewerPolicyTest {
                 compactLandscape = false
             )
         )
-        assertEquals(66, viewerBottomActionContentHeightDp(showFilmstrip = false))
-        assertEquals(122, viewerBottomActionContentHeightDp(showFilmstrip = true))
+        assertEquals(10, ViewerBottomChromeSectionGapDp)
+        assertEquals(66, ViewerBottomChromeActionInsetDp)
         assertEquals(0, viewerBeyondViewportPageCount())
     }
 

@@ -56,9 +56,10 @@ class PhotoViewerCompactLayoutTest {
         val viewport = composeRule.onNodeWithTag(ViewportTag).fetchSemanticsNode().boundsInRoot
         val mediaStage = composeRule.onNodeWithTag(ViewerMediaStageTestTag).fetchSemanticsNode().boundsInRoot
         val actionSection = composeRule.onNodeWithTag(ViewerActionSectionTestTag).fetchSemanticsNode().boundsInRoot
+        assertTrue("The media stage should keep the opening hero's full-screen top", mediaStage.top <= viewport.top + 1f)
         assertTrue(
-            "The media stage must end before the separate action section begins",
-            mediaStage.bottom <= actionSection.top
+            "The media stage should remain full-screen beneath the unified bottom chrome",
+            mediaStage.bottom >= viewport.bottom - 1f && mediaStage.bottom >= actionSection.bottom
         )
         assertTrue("The action section should span the viewer width", actionSection.width >= viewport.width * 0.95f)
 

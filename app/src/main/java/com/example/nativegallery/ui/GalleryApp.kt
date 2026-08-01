@@ -41,7 +41,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -4242,7 +4241,7 @@ private fun GalleryBottomBar(
     val tabGap = 2.dp
     val contentWidth = tabWidth * 3 + tabGap * 2
     val density = LocalDensity.current
-    val hideDistancePx = with(density) { 72.dp.toPx() }
+    val hideDistancePx = with(density) { 88.dp.toPx() }
     val visibilityProgress by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
         animationSpec = tween(210, easing = FastOutSlowInEasing),
@@ -4253,6 +4252,7 @@ private fun GalleryBottomBar(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
+            .padding(bottom = 4.dp)
             .graphicsLayer {
                 alpha = visibilityProgress
                 translationY = hideDistancePx * (1f - visibilityProgress)
@@ -4270,7 +4270,7 @@ private fun GalleryBottomBar(
             ) {
                 Box(
                     modifier = Modifier
-                        .padding(horizontal = 4.dp)
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
                         .width(contentWidth)
                         .height(tabHeight)
                 ) {
@@ -4278,7 +4278,7 @@ private fun GalleryBottomBar(
                     val tabStepPx = with(density) { (tabWidth + tabGap).toPx() }
                     val indicatorProgress by animateFloatAsState(
                         targetValue = selectedTab.pageIndex().toFloat(),
-                        animationSpec = tween(durationMillis = 90, easing = FastOutSlowInEasing),
+                        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
                         label = "bottom nav pill progress"
                     )
 
@@ -4388,13 +4388,18 @@ private fun GalleryNavigationItem(
     val inactiveColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
     val color by animateColorAsState(
         targetValue = if (selected) activeColor else inactiveColor,
-        animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
         label = "bottom nav item color"
     )
 
     Column(
         modifier = modifier
-            .clickable(onClickLabel = label, role = Role.Tab, onClick = onClick)
+            .bouncyClickable(
+                pressedScale = GalleryMotion.BottomNavPressedScale,
+                pressDampingRatio = GalleryMotion.BottomNavPressDamping,
+                pressStiffness = GalleryMotion.BottomNavPressStiffness,
+                onClick = onClick
+            )
             .padding(horizontal = 14.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center

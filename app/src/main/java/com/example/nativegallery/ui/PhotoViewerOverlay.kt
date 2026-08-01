@@ -33,7 +33,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -82,7 +81,6 @@ import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -127,7 +125,6 @@ import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -173,6 +170,8 @@ internal const val ViewerZoomableMediaTestTag = "viewer-zoomable-media"
 internal const val ViewerFilmstripSectionTestTag = "viewer-filmstrip-section"
 internal const val ViewerActionSectionTestTag = "viewer-action-section"
 internal const val ViewerBottomChromeTestTag = "viewer-bottom-chrome"
+internal const val ViewerBottomChromeSectionGapDp = 10
+internal const val ViewerBottomChromeActionInsetDp = 66
 
 enum class ViewerActionMode {
     Normal,
@@ -288,8 +287,6 @@ fun PhotoViewerOverlay(
         isVideo = currentItem.isVideo,
         compactLandscape = compactLandscape
     )
-    val bottomActionContentHeight = viewerBottomActionContentHeightDp(showViewerFilmstrip).dp
-
     val activity = remember(context) { context.findViewerActivity() }
     val originalWindowBrightness = remember(activity) {
         activity?.window?.attributes?.screenBrightness ?: -1f
@@ -556,8 +553,6 @@ fun PhotoViewerOverlay(
             state = pagerState,
             modifier = Modifier
                 .fillMaxSize()
-                .navigationBarsPadding()
-                .padding(bottom = bottomActionContentHeight)
                 .clipToBounds()
                 .testTag(ViewerMediaStageTestTag)
                 .graphicsLayer {
@@ -645,21 +640,27 @@ fun PhotoViewerOverlay(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag(ViewerBottomChromeTestTag)
-                    .background(Color(0xFF181818))
+                    .background(
+                        color = Color(0xFF181818),
+                        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = Color.White.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+                    )
                     .navigationBarsPadding()
                     .padding(
-                        top = if (showViewerFilmstrip) 6.dp else 4.dp,
-                        bottom = if (showViewerFilmstrip) 6.dp else 4.dp
+                        top = if (showViewerFilmstrip) 8.dp else 4.dp,
+                        bottom = 4.dp
                     ),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 if (showViewerFilmstrip) {
-                    Surface(
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag(ViewerFilmstripSectionTestTag),
-                        color = Color(0xFF141414),
-                        shadowElevation = 0.dp
+                            .testTag(ViewerFilmstripSectionTestTag)
                     ) {
                         ViewerFilmstrip(
                             mediaItems = viewerItems,
@@ -669,19 +670,12 @@ fun PhotoViewerOverlay(
                             }
                         )
                     }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(1.dp)
-                            .background(Color.White.copy(alpha = 0.10f))
-                    )
+                    Spacer(Modifier.height(ViewerBottomChromeSectionGapDp.dp))
                 }
-                Surface(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag(ViewerActionSectionTestTag),
-                    color = Color(0xFF1B1B1B),
-                    shadowElevation = 0.dp
+                        .testTag(ViewerActionSectionTestTag)
                 ) {
                     ViewerActionBar(
                         actionMode = actionMode,
@@ -810,10 +804,6 @@ internal fun shouldShowViewerFilmstrip(
     isVideo: Boolean,
     compactLandscape: Boolean
 ): Boolean = itemCount > 1 && !isVideo && !compactLandscape
-
-internal fun viewerBottomActionContentHeightDp(showFilmstrip: Boolean): Int {
-    return if (showFilmstrip) 122 else 66
-}
 
 internal fun viewerBeyondViewportPageCount(): Int = 0
 
@@ -1909,6 +1899,8 @@ private fun ViewerVideoPlayer(
             visible = controlsVisible && isPrepared,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = ViewerBottomChromeActionInsetDp.dp)
                 .zIndex(3f),
             enter = fadeIn(animationSpec = tween(120)),
             exit = fadeOut(animationSpec = tween(140))
@@ -1965,7 +1957,7 @@ private fun ViewerVideoPlayer(
                         onToggleFill = { videoFillFrame = !videoFillFrame }
                     )
                 } else {
-                    CompactVideoSeekSlider(
+                    ViewerVideoSeekSlider(
                         value = positionMs.coerceIn(0, durationMs.coerceAtLeast(1)).toFloat(),
                         onValueChange = { value ->
                             isScrubbing = true
@@ -2065,48 +2057,27 @@ private fun ViewerVideoPlayer(
 
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CompactVideoSeekSlider(
+private fun ViewerVideoSeekSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
     valueRange: ClosedFloatingPointRange<Float>,
     modifier: Modifier = Modifier
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val colors = SliderDefaults.colors(
-        thumbColor = Color.White,
-        activeTrackColor = Color.White,
-        inactiveTrackColor = Color.White.copy(alpha = 0.24f)
-    )
     Slider(
         value = value,
         onValueChange = onValueChange,
         onValueChangeFinished = onValueChangeFinished,
         valueRange = valueRange,
         modifier = modifier
-            .height(32.dp)
+            .height(40.dp)
             .semantics { contentDescription = "Video seek" },
-        colors = colors,
-        interactionSource = interactionSource,
-        thumb = {
-            SliderDefaults.Thumb(
-                interactionSource = interactionSource,
-                colors = colors,
-                thumbSize = DpSize(12.dp, 12.dp)
-            )
-        },
-        track = { sliderState ->
-            SliderDefaults.Track(
-                sliderState = sliderState,
-                modifier = Modifier.height(3.dp),
-                colors = colors,
-                drawStopIndicator = null,
-                thumbTrackGapSize = 0.dp,
-                trackInsideCornerSize = 2.dp
-            )
-        }
+        colors = SliderDefaults.colors(
+            thumbColor = Color.White,
+            activeTrackColor = Color.White,
+            inactiveTrackColor = Color.White.copy(alpha = 0.28f)
+        )
     )
 }
 @Composable
@@ -2135,7 +2106,7 @@ private fun CompactVideoControlDeck(
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
             maxLines = 1
         )
-        CompactVideoSeekSlider(
+        ViewerVideoSeekSlider(
             value = positionMs.coerceIn(0, durationMs.coerceAtLeast(1)).toFloat(),
             onValueChange = onPositionChange,
             onValueChangeFinished = onPositionChangeFinished,
