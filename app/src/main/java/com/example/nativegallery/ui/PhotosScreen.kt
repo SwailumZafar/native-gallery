@@ -60,6 +60,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -131,7 +132,7 @@ fun PhotosScreen(
             .entries
             .toList()
     }
-    val headerCollapse by remember(listState) {
+    val headerCollapse = remember(listState) {
         derivedStateOf {
             when {
                 listState.firstVisibleItemIndex > 0 -> 1f
@@ -330,7 +331,7 @@ fun PhotosScreen(
 @Composable
 private fun PicturesHeader(
     mediaAccessNotice: (@Composable () -> Unit)?,
-    collapseProgress: Float,
+    collapseProgress: State<Float>,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
     selectedCount: Int,
@@ -343,17 +344,11 @@ private fun PicturesHeader(
     onOpenSettings: () -> Unit
 ) {
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
-    val progress = collapseProgress.coerceIn(0f, 1f)
-    val topPadding = interpolate(96f, 22f, progress).dp
-    val titleScale = interpolate(1f, 0.5f, progress)
-    val titleAlpha = interpolate(1f, 0.76f, progress)
-    val titleSpacing = interpolate(44f, 8f, progress).dp
-    val bottomSpacing = interpolate(34f, 12f, progress).dp
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 10.dp, top = topPadding, end = 10.dp),
+            .padding(start = 10.dp, top = 96.dp, end = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (selectedCount > 0) {
@@ -367,10 +362,11 @@ private fun PicturesHeader(
             Text(
                 text = "Photos",
                 modifier = Modifier.graphicsLayer {
-                    alpha = titleAlpha
+                    val progress = collapseProgress.value.coerceIn(0f, 1f)
+                    alpha = interpolate(1f, 0.76f, progress)
                     transformOrigin = TransformOrigin(0.5f, 0f)
-                    scaleX = titleScale
-                    scaleY = titleScale
+                    scaleX = interpolate(1f, 0.5f, progress)
+                    scaleY = interpolate(1f, 0.5f, progress)
                 },
                 style = MaterialTheme.typography.headlineLarge.copy(
                     fontSize = 52.sp,
@@ -379,13 +375,14 @@ private fun PicturesHeader(
                 ),
                 color = MaterialTheme.colorScheme.onBackground
             )
-            Spacer(Modifier.height(titleSpacing))
+            Spacer(Modifier.height(44.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
                 Row(
                     modifier = Modifier.graphicsLayer {
+                        val progress = collapseProgress.value.coerceIn(0f, 1f)
                         alpha = interpolate(1f, 0.9f, progress)
                         translationY = -8f * progress
                     },
@@ -443,7 +440,7 @@ private fun PicturesHeader(
             Spacer(Modifier.height(18.dp))
             mediaAccessNotice()
         }
-        Spacer(Modifier.height(bottomSpacing))
+        Spacer(Modifier.height(34.dp))
     }
 }
 

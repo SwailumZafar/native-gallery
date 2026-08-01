@@ -3884,7 +3884,11 @@ private fun PositionAwareAlbumTransitionOverlay(
                 } else {
                     GalleryMotion.AlbumCloseMillis
                 },
-                easing = FastOutSlowInEasing
+                easing = if (transition.mode == AlbumTransitionMode.Opening) {
+                    GalleryMotion.AlbumOpenEasing
+                } else {
+                    GalleryMotion.AlbumCloseEasing
+                }
             )
         )
         onFinished(transition)
@@ -3892,16 +3896,16 @@ private fun PositionAwareAlbumTransitionOverlay(
 
     val density = LocalDensity.current
     val expansion = progress.value.coerceIn(0f, 1f)
-    val approachProgress = GalleryMotion.smoothstep(0f, 0.22f, expansion)
-    val revealProgress = GalleryMotion.smoothstep(0.18f, 1f, expansion)
+    val approachProgress = GalleryMotion.smoothstep(0f, 0.18f, expansion)
+    val revealProgress = GalleryMotion.smoothstep(0.08f, 1f, expansion)
     val rootBounds = Rect(0f, 0f, rootWidthPx, rootHeightPx)
     val towardCenter = Offset(
-        x = (rootBounds.center.x - sourceBounds.center.x) * 0.12f * approachProgress,
-        y = (rootBounds.center.y - sourceBounds.center.y) * 0.08f * approachProgress
+        x = (rootBounds.center.x - sourceBounds.center.x) * 0.06f * approachProgress,
+        y = (rootBounds.center.y - sourceBounds.center.y) * 0.04f * approachProgress
     )
     val approachedBounds = scaledRectAroundCenter(
         rect = sourceBounds,
-        scale = lerp(1f, 1.055f, approachProgress),
+        scale = lerp(1f, 1.025f, approachProgress),
         offset = towardCenter
     )
     val heroBounds = lerpRect(approachedBounds, rootBounds, revealProgress)

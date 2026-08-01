@@ -1,5 +1,6 @@
 package com.example.nativegallery.ui.components
 
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -17,6 +18,8 @@ object GalleryMotion {
     const val SharedBoundsMillis = 420
     const val AlbumOpenMillis = 320
     const val AlbumCloseMillis = 260
+    val AlbumOpenEasing = CubicBezierEasing(0.28f, 0f, 0.18f, 1f)
+    val AlbumCloseEasing = CubicBezierEasing(0.32f, 0f, 0.38f, 1f)
     const val ViewerHeroOpenMillis = 360
     const val ViewerHeroCloseMillis = 300
     const val SecondaryOpenMillis = 260

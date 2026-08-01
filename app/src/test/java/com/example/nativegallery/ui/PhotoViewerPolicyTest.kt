@@ -114,6 +114,8 @@ class PhotoViewerPolicyTest {
         )
         assertEquals(10, ViewerBottomChromeSectionGapDp)
         assertEquals(66, ViewerBottomChromeActionInsetDp)
+        assertEquals(38, ViewerActionButtonPlateSizeDp)
+        assertEquals(36, ViewerVideoSeekHeightDp)
         assertEquals(0, viewerBeyondViewportPageCount())
     }
 

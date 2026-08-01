@@ -56,26 +56,26 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Brightness6
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material.icons.filled.Restore
-import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -172,6 +172,8 @@ internal const val ViewerActionSectionTestTag = "viewer-action-section"
 internal const val ViewerBottomChromeTestTag = "viewer-bottom-chrome"
 internal const val ViewerBottomChromeSectionGapDp = 10
 internal const val ViewerBottomChromeActionInsetDp = 66
+internal const val ViewerActionButtonPlateSizeDp = 38
+internal const val ViewerVideoSeekHeightDp = 36
 
 enum class ViewerActionMode {
     Normal,
@@ -640,15 +642,6 @@ fun PhotoViewerOverlay(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag(ViewerBottomChromeTestTag)
-                    .background(
-                        color = Color(0xFF181818),
-                        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = Color.White.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
-                    )
                     .navigationBarsPadding()
                     .padding(
                         top = if (showViewerFilmstrip) 8.dp else 4.dp,
@@ -850,48 +843,49 @@ private fun ViewerActionBar(
         ) {
             if (actionMode == ViewerActionMode.Normal) {
                 ViewerActionButton(
-                    icon = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    icon = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
                     contentDescription = "Favorite",
                     selected = isFavorite,
                     onClick = onFavorite
                 )
                 if (isPhoto) {
                     ViewerActionButton(
-                        icon = Icons.Filled.Edit,
+                        icon = Icons.Outlined.Edit,
                         contentDescription = "Edit photo",
                         onClick = onEdit
                     )
                 }
                 ViewerActionButton(
-                    icon = Icons.Filled.Share,
+                    icon = Icons.Outlined.Share,
                     contentDescription = "Share",
                     onClick = onShare
                 )
             }
             ViewerActionButton(
-                icon = Icons.Filled.Info,
+                icon = Icons.Outlined.Info,
                 contentDescription = "Info",
                 onClick = onInfo
             )
             when (actionMode) {
                 ViewerActionMode.Normal -> ViewerActionButton(
-                    icon = Icons.Filled.Lock,
+                    icon = Icons.Outlined.Lock,
                     contentDescription = "Lock",
                     onClick = onHide
                 )
                 ViewerActionMode.RecentlyDeleted -> ViewerActionButton(
-                    icon = Icons.Filled.Restore,
+                    icon = Icons.Outlined.Restore,
                     contentDescription = "Restore",
                     onClick = onRestore
                 )
                 ViewerActionMode.Locked -> ViewerActionButton(
-                    icon = Icons.Filled.LockOpen,
+                    icon = Icons.Outlined.LockOpen,
                     contentDescription = "Show",
                     onClick = onRestore
                 )
             }
             ViewerActionButton(
-                icon = Icons.Filled.Delete,
+                icon = Icons.Outlined.Delete,
+                destructive = true,
                 contentDescription = if (actionMode == ViewerActionMode.RecentlyDeleted) "Delete forever" else "Delete",
                 onClick = onDelete
             )
@@ -904,15 +898,39 @@ private fun ViewerActionButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
     selected: Boolean = false,
+    destructive: Boolean = false,
     onClick: () -> Unit
 ) {
+    val plateColor = when {
+        selected -> Color(0xD9164560)
+        destructive -> Color(0xB81A1010)
+        else -> Color.Black.copy(alpha = 0.52f)
+    }
+    val plateBorderColor = when {
+        selected -> Color(0xFF72CFFF).copy(alpha = 0.72f)
+        destructive -> Color(0xFFFFB4AB).copy(alpha = 0.58f)
+        else -> Color.White.copy(alpha = 0.24f)
+    }
+    val iconTint = when {
+        selected -> Color(0xFF9CDEFF)
+        destructive -> Color(0xFFFFC2BC)
+        else -> Color.White
+    }
     IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = if (selected) Color(0xFF72CFFF) else Color.White,
-            modifier = Modifier.size(22.dp)
-        )
+        Box(
+            modifier = Modifier
+                .size(ViewerActionButtonPlateSizeDp.dp)
+                .background(plateColor, CircleShape)
+                .border(1.dp, plateBorderColor, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = iconTint,
+                modifier = Modifier.size(20.dp)
+            )
+        }
     }
 }
 @Composable
@@ -2071,7 +2089,7 @@ private fun ViewerVideoSeekSlider(
         onValueChangeFinished = onValueChangeFinished,
         valueRange = valueRange,
         modifier = modifier
-            .height(40.dp)
+            .height(ViewerVideoSeekHeightDp.dp)
             .semantics { contentDescription = "Video seek" },
         colors = SliderDefaults.colors(
             thumbColor = Color.White,
