@@ -16,7 +16,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -29,12 +28,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -45,15 +45,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -147,6 +149,9 @@ fun PhotosScreen(
     val showLoading = isLoading
     val revealOffsetPx = with(LocalDensity.current) { 72.dp.roundToPx() }
     var pinchPreviewScale by remember { mutableStateOf(1f) }
+    val isGridScrolling by remember(listState) { derivedStateOf { listState.isScrollInProgress } }
+    val trackTileBounds = shouldTrackPhotoTileBounds(isSelectionMode, isGridScrolling)
+    val deferThumbnailLoads = shouldDeferPhotoThumbnailLoads(isGridScrolling)
 
     LaunchedEffect(revealMediaId, sections, gridColumns) {
         val mediaId = revealMediaId ?: return@LaunchedEffect
@@ -288,6 +293,8 @@ fun PhotosScreen(
                         sharedTransitionScope = sharedTransitionScope,
                         animatedVisibilityScope = animatedVisibilityScope,
                         sharedBoundsTransform = sharedBoundsTransform,
+                        trackTileBounds = trackTileBounds,
+                        deferThumbnailLoads = deferThumbnailLoads,
                         activeSharedElementKey = activeSharedElementKey,
                         onMediaBoundsChanged = { mediaItem, bounds ->
                             tileBounds[mediaItem.id] = bounds
@@ -484,21 +491,22 @@ private fun SelectionBottomActionBar(
     ) {
         Surface(
             modifier = Modifier
+                .widthIn(max = 520.dp)
                 .fillMaxWidth()
                 .navigationBarsPadding()
                 .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
-            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+            shape = RoundedCornerShape(50.dp),
             shadowElevation = 14.dp
         ) {
-            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = onClear) {
                         Icon(
-                            imageVector = Icons.Filled.Close,
+                            imageVector = Icons.Outlined.Close,
                             contentDescription = "Cancel selection"
                         )
                     }
@@ -513,37 +521,38 @@ private fun SelectionBottomActionBar(
                         onClick = onSelectAll
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.SelectAll,
+                            imageVector = Icons.Outlined.SelectAll,
                             contentDescription = "Select all"
                         )
                     }
                 }
-                Row(modifier = Modifier.fillMaxWidth()) {
+                Row(modifier = Modifier.fillMaxWidth().height(54.dp)) {
                     SelectionBottomAction(
                         label = "Share",
-                        icon = Icons.Filled.Share,
+                        icon = Icons.Outlined.Share,
                         enabled = selectedCount > 0,
                         onClick = onShare,
                         modifier = Modifier.weight(1f)
                     )
                     SelectionBottomAction(
                         label = "Lock",
-                        icon = Icons.Filled.Lock,
+                        icon = Icons.Outlined.Lock,
                         enabled = selectedCount > 0,
                         onClick = onHide,
                         modifier = Modifier.weight(1f)
                     )
                     SelectionBottomAction(
                         label = "Move",
-                        icon = Icons.Filled.Folder,
+                        icon = Icons.Outlined.Folder,
                         enabled = selectedCount > 0,
                         onClick = onMove,
                         modifier = Modifier.weight(1f)
                     )
                     SelectionBottomAction(
                         label = "Delete",
-                        icon = Icons.Filled.Delete,
+                        icon = Icons.Outlined.Delete,
                         enabled = selectedCount > 0,
+                        destructive = true,
                         onClick = onDelete,
                         modifier = Modifier.weight(1f)
                     )
@@ -557,13 +566,38 @@ private fun SelectionBottomAction(
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     enabled: Boolean,
+    destructive: Boolean = false,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    TextButton(modifier = modifier, enabled = enabled, onClick = onClick) {
-        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.size(6.dp))
-        Text(label)
+    val contentColor = if (destructive) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }.copy(alpha = if (enabled) 1f else 0.38f)
+    TextButton(
+        modifier = modifier.fillMaxWidth().height(54.dp),
+        enabled = enabled,
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 3.dp)
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = label,
+                color = contentColor,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
     }
 }
 
@@ -585,6 +619,8 @@ private fun LazyListScope.photoSection(
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
+    trackTileBounds: Boolean,
+    deferThumbnailLoads: Boolean,
     activeSharedElementKey: Any? = null,
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit,
     onMediaLongClick: (MediaItem) -> Unit,
@@ -623,6 +659,8 @@ private fun LazyListScope.photoSection(
             activeSharedElementKey = activeSharedElementKey,
             onMediaBoundsChanged = onMediaBoundsChanged,
             onMediaLongClick = onMediaLongClick,
+            trackTileBounds = trackTileBounds,
+            deferThumbnailLoads = deferThumbnailLoads,
             onMediaSelectionToggle = onMediaSelectionToggle,
             onMediaClick = onMediaClick
         )
@@ -670,46 +708,54 @@ private fun PhotoGridRow(
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
     activeSharedElementKey: Any? = null,
+    trackTileBounds: Boolean,
+    deferThumbnailLoads: Boolean,
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit,
     onMediaLongClick: (MediaItem) -> Unit,
     onMediaSelectionToggle: (MediaItem) -> Unit,
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
-    BoxWithConstraints(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp)
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(spacing)
     ) {
-        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-            mediaItems.forEach { mediaItem ->
-                val sharedElementPrefix = "photos"
-                val sharedElementKey = "$sharedElementPrefix-media-${mediaItem.id}"
-                val selectionMode = selectedMediaIds.isNotEmpty()
-                MediaThumbnail(
-                    mediaItem = mediaItem,
-                    modifier = Modifier.size(cellSize),
-                    cornerRadius = 0.dp,
-                    sharedTransitionScope = sharedTransitionScope,
-                    animatedVisibilityScope = animatedVisibilityScope,
-                    sharedElementKey = sharedElementKey,
-                    sharedBoundsTransform = sharedBoundsTransform,
-                    isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
-                    selected = selectedMediaIds.contains(mediaItem.id),
-                    onBoundsChanged = { bounds -> onMediaBoundsChanged(mediaItem, bounds) },
-                    onLongClick = { onMediaLongClick(mediaItem) },
-                    onClickWithBounds = { bounds ->
-                        if (selectionMode) {
-                            onMediaSelectionToggle(mediaItem)
-                        } else {
-                            onMediaClick(mediaItem, bounds, sharedElementKey, sharedElementPrefix)
-                        }
+        mediaItems.forEach { mediaItem ->
+            val sharedElementPrefix = "photos"
+            val sharedElementKey = "$sharedElementPrefix-media-${mediaItem.id}"
+            val selectionMode = selectedMediaIds.isNotEmpty()
+            MediaThumbnail(
+                mediaItem = mediaItem,
+                modifier = Modifier
+                    .weight(1f)
+                    .aspectRatio(1f),
+                cornerRadius = 0.dp,
+                sharedTransitionScope = sharedTransitionScope,
+                animatedVisibilityScope = animatedVisibilityScope,
+                sharedElementKey = sharedElementKey,
+                sharedBoundsTransform = sharedBoundsTransform,
+                isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
+                selected = selectedMediaIds.contains(mediaItem.id),
+                deferUncachedLoad = deferThumbnailLoads,
+                onBoundsChanged = if (trackTileBounds) {
+                    { bounds -> onMediaBoundsChanged(mediaItem, bounds) }
+                } else {
+                    null
+                },
+                onLongClick = { onMediaLongClick(mediaItem) },
+                onClickWithBounds = { bounds ->
+                    onMediaBoundsChanged(mediaItem, bounds)
+                    if (selectionMode) {
+                        onMediaSelectionToggle(mediaItem)
+                    } else {
+                        onMediaClick(mediaItem, bounds, sharedElementKey, sharedElementPrefix)
                     }
-                )
-            }
-            repeat(columns - mediaItems.size) {
-                Spacer(Modifier.size(cellSize))
-            }
+                }
+            )
+        }
+        repeat(columns - mediaItems.size) {
+            Spacer(Modifier.weight(1f).aspectRatio(1f))
         }
     }
 }
@@ -719,22 +765,28 @@ private fun PhotoSkeletonRow(
     columns: Int,
     spacing: androidx.compose.ui.unit.Dp
 ) {
-    BoxWithConstraints(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp)
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(spacing)
     ) {
-        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-            repeat(columns) {
-                SkeletonBlock(
-                    modifier = Modifier.size(cellSize),
-                    cornerRadius = 0.dp
-                )
-            }
+        repeat(columns) {
+            SkeletonBlock(
+                modifier = Modifier
+                    .weight(1f)
+                    .aspectRatio(1f),
+                cornerRadius = 0.dp
+            )
         }
     }
 }
+
+internal fun shouldTrackPhotoTileBounds(selectionMode: Boolean, scrolling: Boolean): Boolean {
+    return selectionMode || !scrolling
+}
+
+internal fun shouldDeferPhotoThumbnailLoads(scrolling: Boolean): Boolean = scrolling
 
 private fun interpolate(start: Float, end: Float, fraction: Float): Float {
     val boundedFraction = fraction.coerceIn(0f, 1f)

@@ -172,7 +172,7 @@ internal const val ViewerActionSectionTestTag = "viewer-action-section"
 internal const val ViewerBottomChromeTestTag = "viewer-bottom-chrome"
 internal const val ViewerBottomChromeSectionGapDp = 10
 internal const val ViewerBottomChromeActionInsetDp = 66
-internal const val ViewerActionButtonPlateSizeDp = 38
+internal const val ViewerActionCapsuleHeightDp = 56
 internal const val ViewerVideoSeekHeightDp = 36
 
 enum class ViewerActionMode {
@@ -668,7 +668,8 @@ fun PhotoViewerOverlay(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag(ViewerActionSectionTestTag)
+                        .testTag(ViewerActionSectionTestTag),
+                    contentAlignment = Alignment.Center
                 ) {
                     ViewerActionBar(
                         actionMode = actionMode,
@@ -828,17 +829,21 @@ private fun ViewerActionBar(
     onHide: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val capsuleShape = RoundedCornerShape(50.dp)
     Surface(
         modifier = Modifier
-            .widthIn(max = 720.dp)
-            .fillMaxWidth()
-            .height(58.dp),
-        color = Color.Transparent,
-        shadowElevation = 0.dp
+            .height(ViewerActionCapsuleHeightDp.dp)
+            .border(1.dp, Color.White.copy(alpha = 0.16f), capsuleShape),
+        color = Color(0xFF101318).copy(alpha = 0.72f),
+        shape = capsuleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 8.dp
     ) {
         Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            modifier = Modifier
+                .height(ViewerActionCapsuleHeightDp.dp)
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (actionMode == ViewerActionMode.Normal) {
@@ -901,36 +906,18 @@ private fun ViewerActionButton(
     destructive: Boolean = false,
     onClick: () -> Unit
 ) {
-    val plateColor = when {
-        selected -> Color(0xD9164560)
-        destructive -> Color(0xB81A1010)
-        else -> Color.Black.copy(alpha = 0.52f)
-    }
-    val plateBorderColor = when {
-        selected -> Color(0xFF72CFFF).copy(alpha = 0.72f)
-        destructive -> Color(0xFFFFB4AB).copy(alpha = 0.58f)
-        else -> Color.White.copy(alpha = 0.24f)
-    }
     val iconTint = when {
-        selected -> Color(0xFF9CDEFF)
-        destructive -> Color(0xFFFFC2BC)
-        else -> Color.White
+        selected -> Color(0xFF86D7FF)
+        destructive -> Color(0xFFFFC1BB)
+        else -> Color.White.copy(alpha = 0.96f)
     }
     IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-        Box(
-            modifier = Modifier
-                .size(ViewerActionButtonPlateSizeDp.dp)
-                .background(plateColor, CircleShape)
-                .border(1.dp, plateBorderColor, CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = iconTint,
-                modifier = Modifier.size(20.dp)
-            )
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = iconTint,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 @Composable
@@ -1511,7 +1498,7 @@ private fun ViewerVideoPlayer(
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                isPrepared = playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED
+                isPrepared = videoPreparedStateAfterPlaybackState(isPrepared, playbackState)
                 if (playbackState == Player.STATE_READY) {
                     hasPlaybackError = false
                     durationMs = player.duration
@@ -2425,6 +2412,14 @@ internal fun localPlayerGain(targetVolume: Float, systemVolumeApplied: Boolean):
         boundedVolume <= 0.01f -> 0f
         systemVolumeApplied -> 1f
         else -> boundedVolume
+    }
+}
+
+internal fun videoPreparedStateAfterPlaybackState(wasPrepared: Boolean, playbackState: Int): Boolean {
+    return when (playbackState) {
+        Player.STATE_READY, Player.STATE_ENDED -> true
+        Player.STATE_BUFFERING -> wasPrepared
+        else -> false
     }
 }
 

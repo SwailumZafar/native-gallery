@@ -5,6 +5,17 @@ import android.net.Uri
 import android.util.LruCache
 import kotlin.math.abs
 
+internal fun imageLoadCacheIdentity(uri: String, quality: ImageLoadQuality): String {
+    return when (quality) {
+        ImageLoadQuality.Thumbnail -> uri
+        ImageLoadQuality.HighQuality -> "$uri#full-quality"
+    }
+}
+
+internal fun imageLoadCacheKey(uri: String, size: Int, quality: ImageLoadQuality): String {
+    return "${imageLoadCacheIdentity(uri, quality)}@$size"
+}
+
 object ThumbnailMemoryCache {
     private val MaxCacheKilobytes = ((Runtime.getRuntime().maxMemory() / 1024L) / 6L)
         .coerceIn(48L * 1024L, 128L * 1024L)
@@ -37,14 +48,21 @@ object ThumbnailMemoryCache {
         }
     }
 
-    fun key(uri: Uri, size: Int): String = "$uri@$size"
+    fun key(uri: Uri, size: Int): String = key(uri, size, ImageLoadQuality.Thumbnail)
+
+    fun key(uri: Uri, size: Int, quality: ImageLoadQuality): String =
+        imageLoadCacheKey(uri.toString(), size, quality)
 
     fun get(key: String): Bitmap? = pinnedCache.get(key) ?: cache.get(key)
 
     fun getNearest(uri: Uri, requestedSize: Int): Bitmap? {
-        get(key(uri, requestedSize))?.let { return it }
+        return getNearest(uri, requestedSize, ImageLoadQuality.Thumbnail)
+    }
 
-        val uriKey = uri.toString()
+    fun getNearest(uri: Uri, requestedSize: Int, quality: ImageLoadQuality): Bitmap? {
+        get(key(uri, requestedSize, quality))?.let { return it }
+
+        val uriKey = imageLoadCacheIdentity(uri.toString(), quality)
         val candidateSizes = synchronized(indexLock) {
             sizesByUri[uriKey]
                 ?.toList()
@@ -52,7 +70,7 @@ object ThumbnailMemoryCache {
                 .orEmpty()
         }
         candidateSizes.forEach { cachedSize ->
-            get(key(uri, cachedSize))?.let { return it }
+            get(key(uri, cachedSize, quality))?.let { return it }
             synchronized(indexLock) {
                 sizesByUri[uriKey]?.let { sizes ->
                     sizes.remove(cachedSize)

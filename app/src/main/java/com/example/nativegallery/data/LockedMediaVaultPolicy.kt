@@ -1,6 +1,8 @@
 package com.example.nativegallery.data
 
 internal object LockedMediaVaultPolicy {
+    private const val EncryptedPreviewMaxRequestSize = 512
+
     fun mimeType(mimeType: String?, isVideo: Boolean): String {
         return mimeType
             ?.trim()
@@ -36,6 +38,11 @@ internal object LockedMediaVaultPolicy {
             else -> if (isVideo) "mp4" else "jpg"
         }
         return "$cleanTitle.$extension"
+    }
+
+    fun shouldServeEncryptedPreview(requestedWidth: Int, requestedHeight: Int): Boolean {
+        return requestedWidth in 1..EncryptedPreviewMaxRequestSize &&
+            requestedHeight in 1..EncryptedPreviewMaxRequestSize
     }
 
     fun previewSampleSize(width: Int, height: Int, targetSize: Int): Int {

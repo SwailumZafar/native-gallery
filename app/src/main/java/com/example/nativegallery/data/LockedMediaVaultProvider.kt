@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.util.Size
 import java.io.File
 import java.io.FileNotFoundException
 import java.util.concurrent.ConcurrentHashMap
@@ -55,8 +56,14 @@ class LockedMediaVaultProvider : ContentProvider() {
         mimeTypeFilter: String,
         opts: Bundle?
     ): AssetFileDescriptor? {
-        val thumbnailRequested = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            opts?.containsKey(ContentResolver.EXTRA_SIZE) == true
+        @Suppress("DEPRECATION")
+        val requestedSize = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            opts?.get(ContentResolver.EXTRA_SIZE) as? Size
+        } else null
+        val thumbnailRequested = requestedSize != null &&
+            LockedMediaVaultPolicy.shouldServeEncryptedPreview(
+                requestedSize.width, requestedSize.height
+            )
         val token = uri.lastPathSegment
         val appContext = context?.applicationContext
         if (

@@ -295,6 +295,7 @@ fun MediaThumbnail(
     isSharedElementSourceHidden: Boolean = false,
     selected: Boolean = false,
     onBoundsChanged: ((Rect) -> Unit)? = null,
+    deferUncachedLoad: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     onClickWithBounds: ((Rect) -> Unit)? = null
@@ -345,6 +346,8 @@ fun MediaThumbnail(
             modifier = imageModifier,
             cornerRadius = cornerRadius,
             thumbnailSize = 384,
+            animatedPlaceholder = false,
+            deferUncachedLoad = deferUncachedLoad,
             isVideo = mediaItem.isVideo
         )
         if (selected) {
@@ -453,7 +456,9 @@ fun GalleryImage(
     cachedOnly: Boolean = false,
     allowApproximateCache: Boolean = true,
     fallbackImageUri: Uri? = null,
-    isVideo: Boolean = false
+    isVideo: Boolean = false,
+    animatedPlaceholder: Boolean = true,
+    deferUncachedLoad: Boolean = false
 ) {
     val bitmap = rememberContentUriBitmap(
         imageUri = imageUri,
@@ -461,6 +466,7 @@ fun GalleryImage(
         loadQuality = loadQuality,
         cachedOnly = cachedOnly,
         allowApproximateCache = allowApproximateCache,
+        deferUncachedLoad = deferUncachedLoad,
         isVideo = isVideo
     )
     val fallbackBitmap = rememberContentUriBitmap(
@@ -469,6 +475,7 @@ fun GalleryImage(
         loadQuality = ImageLoadQuality.Thumbnail,
         cachedOnly = false,
         allowApproximateCache = true,
+        deferUncachedLoad = deferUncachedLoad,
         isVideo = false
     )
     val shapedModifier = if (cornerRadius > 0.dp) {
@@ -520,12 +527,13 @@ fun GalleryImage(
                     )
                 }
             }
-            else -> {
+            animatedPlaceholder -> {
                 SkeletonBlock(
                     modifier = Modifier.fillMaxSize(),
                     cornerRadius = 0.dp
                 )
             }
+            else -> Unit
         }
     }
 }
@@ -654,15 +662,18 @@ suspend fun prefetchMediaThumbnails(
                 async {
                     thumbnailPrefetchSemaphore.withPermit {
                         currentCoroutineContext().ensureActive()
+                        val loadQuality = if (size >= 1024 && !isVideo) {
+                            ImageLoadQuality.HighQuality
+                        } else ImageLoadQuality.Thumbnail
                         val bitmap = loadCachedBitmap(
                             context = appContext,
                             imageUri = uri,
                             thumbnailSize = size,
-                            loadQuality = if (size >= 1024 && !isVideo) ImageLoadQuality.HighQuality else ImageLoadQuality.Thumbnail,
+                            loadQuality = loadQuality,
                             isVideo = isVideo
                         )
                         if (pinInMemory && bitmap != null) {
-                            ThumbnailMemoryCache.pin(ThumbnailMemoryCache.key(uri, size), bitmap)
+                            ThumbnailMemoryCache.pin(ThumbnailMemoryCache.key(uri, size, loadQuality), bitmap)
                         }
                     }
                 }
@@ -694,21 +705,22 @@ private fun rememberContentUriBitmap(
     loadQuality: ImageLoadQuality,
     cachedOnly: Boolean,
     allowApproximateCache: Boolean,
-    isVideo: Boolean
+    isVideo: Boolean,
+    deferUncachedLoad: Boolean
 ): Bitmap? {
     val context = LocalContext.current.applicationContext
-    val cacheKey = imageUri?.let { ThumbnailMemoryCache.key(it, thumbnailSize) }
+    val cacheKey = imageUri?.let { ThumbnailMemoryCache.key(it, thumbnailSize, loadQuality) }
 
     var bitmap by remember(imageUri, thumbnailSize, loadQuality, cachedOnly, allowApproximateCache, isVideo) {
         mutableStateOf(
             cacheKey?.let { ThumbnailMemoryCache.get(it) }
                 ?: imageUri
                     ?.takeIf { allowApproximateCache }
-                    ?.let { ThumbnailMemoryCache.getNearest(it, thumbnailSize) }
+                    ?.let { ThumbnailMemoryCache.getNearest(it, thumbnailSize, loadQuality) }
         )
     }
 
-    LaunchedEffect(imageUri, thumbnailSize, loadQuality, cachedOnly, allowApproximateCache, isVideo) {
+    LaunchedEffect(imageUri, thumbnailSize, loadQuality, cachedOnly, allowApproximateCache, isVideo, deferUncachedLoad) {
         if (imageUri == null || cacheKey == null) {
             bitmap = null
             return@LaunchedEffect
@@ -717,9 +729,17 @@ private fun rememberContentUriBitmap(
             bitmap = cachedBitmap
             return@LaunchedEffect
         }
+        if (deferUncachedLoad) {
+            if (allowApproximateCache) {
+                bitmap = ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize, loadQuality)
+            }
+            return@LaunchedEffect
+        }
+
         if (cachedOnly) {
             if (allowApproximateCache) {
-                ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize)?.let { cachedBitmap ->
+
+                ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize, loadQuality)?.let { cachedBitmap ->
                     bitmap = cachedBitmap
                     return@LaunchedEffect
                 }
@@ -730,7 +750,7 @@ private fun rememberContentUriBitmap(
             return@LaunchedEffect
         }
         if (bitmap == null && allowApproximateCache) {
-            bitmap = ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize)
+            bitmap = ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize, loadQuality)
         }
         loadCachedBitmap(context, imageUri, thumbnailSize, loadQuality, isVideo)?.let { loadedBitmap ->
             bitmap = loadedBitmap
@@ -746,7 +766,7 @@ private suspend fun loadCachedBitmap(
     loadQuality: ImageLoadQuality,
     isVideo: Boolean = false
 ): Bitmap? {
-    val cacheKey = ThumbnailMemoryCache.key(imageUri, thumbnailSize)
+    val cacheKey = ThumbnailMemoryCache.key(imageUri, thumbnailSize, loadQuality)
     val diskCacheEligible = loadQuality == ImageLoadQuality.Thumbnail && thumbnailSize <= 512
     return ThumbnailLoadCoordinator.load(cacheKey) loader@{
         if (diskCacheEligible) {
@@ -755,6 +775,7 @@ private suspend fun loadCachedBitmap(
         val loaded = when (loadQuality) {
             ImageLoadQuality.Thumbnail -> loadThumbnail(context, imageUri, thumbnailSize, isVideo)
             ImageLoadQuality.HighQuality -> loadHighQualityBitmap(context, imageUri, thumbnailSize)
+                ?: loadSampledBitmap(context, imageUri, thumbnailSize)
                 ?: loadThumbnail(context, imageUri, thumbnailSize, isVideo)
         }
         if (diskCacheEligible) {

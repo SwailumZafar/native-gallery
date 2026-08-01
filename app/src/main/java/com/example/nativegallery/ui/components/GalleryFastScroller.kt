@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
@@ -24,11 +23,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -44,7 +42,7 @@ fun GalleryFastScroller(listState: LazyListState, modifier: Modifier = Modifier)
     if (visibleItems == 0 || totalItems <= visibleItems + 4) return
 
     val scope = rememberCoroutineScope()
-    val fraction by remember(listState) {
+    val fraction = remember(listState) {
         derivedStateOf {
             val info = listState.layoutInfo
             val maxFirst = (info.totalItemsCount - info.visibleItemsInfo.size).coerceAtLeast(1)
@@ -55,7 +53,7 @@ fun GalleryFastScroller(listState: LazyListState, modifier: Modifier = Modifier)
     val thumbHeight = 46.dp
     val thumbHeightPx = with(LocalDensity.current) { thumbHeight.roundToPx() }
     val animationLabel = "fast scroller alpha"
-    val thumbAlpha by animateFloatAsState(
+    val thumbAlpha = animateFloatAsState(
         if (listState.isScrollInProgress) 0.92f else 0.50f,
         tween(140),
         label = animationLabel
@@ -98,8 +96,10 @@ fun GalleryFastScroller(listState: LazyListState, modifier: Modifier = Modifier)
             modifier = Modifier
                 .width(5.dp)
                 .height(thumbHeight)
-                .alpha(thumbAlpha)
-                .offset { IntOffset(0, (travel * fraction).roundToInt()) },
+                .graphicsLayer {
+                    alpha = thumbAlpha.value
+                    translationY = travel * fraction.value
+                },
             color = MaterialTheme.colorScheme.primary,
             shape = RoundedCornerShape(4.dp),
             shadowElevation = 3.dp

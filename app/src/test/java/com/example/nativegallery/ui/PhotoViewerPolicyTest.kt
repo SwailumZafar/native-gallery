@@ -1,6 +1,7 @@
 package com.example.nativegallery.ui
 
 import androidx.compose.ui.geometry.Offset
+import androidx.media3.common.Player
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -56,6 +57,16 @@ class PhotoViewerPolicyTest {
         assertEquals(1f, localPlayerGain(targetVolume = 0.5f, systemVolumeApplied = true), 0.001f)
         assertEquals(0.5f, localPlayerGain(targetVolume = 0.5f, systemVolumeApplied = false), 0.001f)
     }
+
+    @Test
+    fun bufferingSeekKeepsPreparedControlsVisible() {
+        assertFalse(videoPreparedStateAfterPlaybackState(false, Player.STATE_BUFFERING))
+        assertTrue(videoPreparedStateAfterPlaybackState(true, Player.STATE_BUFFERING))
+        assertTrue(videoPreparedStateAfterPlaybackState(false, Player.STATE_READY))
+        assertTrue(videoPreparedStateAfterPlaybackState(false, Player.STATE_ENDED))
+        assertFalse(videoPreparedStateAfterPlaybackState(true, Player.STATE_IDLE))
+    }
+
 
     @Test
     fun backgroundedVideoCannotKeepPlayingOrAutoplayOnResume() {
@@ -114,7 +125,7 @@ class PhotoViewerPolicyTest {
         )
         assertEquals(10, ViewerBottomChromeSectionGapDp)
         assertEquals(66, ViewerBottomChromeActionInsetDp)
-        assertEquals(38, ViewerActionButtonPlateSizeDp)
+        assertEquals(56, ViewerActionCapsuleHeightDp)
         assertEquals(36, ViewerVideoSeekHeightDp)
         assertEquals(0, viewerBeyondViewportPageCount())
     }

@@ -58,4 +58,13 @@ class LockedMediaVaultPolicyTest {
         assertEquals(8, LockedMediaVaultPolicy.previewSampleSize(8000, 6000, 512))
         assertEquals(1, LockedMediaVaultPolicy.previewSampleSize(8000, 6000, 0))
     }
+    @Test
+    fun encryptedPreviewIsOnlyUsedForSmallThumbnailRequests() {
+        assertTrue(LockedMediaVaultPolicy.shouldServeEncryptedPreview(384, 384))
+        assertTrue(LockedMediaVaultPolicy.shouldServeEncryptedPreview(512, 512))
+        assertFalse(LockedMediaVaultPolicy.shouldServeEncryptedPreview(513, 512))
+        assertFalse(LockedMediaVaultPolicy.shouldServeEncryptedPreview(1440, 2560))
+        assertFalse(LockedMediaVaultPolicy.shouldServeEncryptedPreview(0, 384))
+    }
+
 }

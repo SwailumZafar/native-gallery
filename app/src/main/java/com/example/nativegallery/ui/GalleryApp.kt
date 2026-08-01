@@ -249,15 +249,40 @@ internal enum class MediaStoreWriteMode {
     MoveToAlbum
 }
 
+internal fun shouldApplyOptimisticMediaRemoval(hasMediaManagementAccess: Boolean, mode: MediaStoreWriteMode): Boolean {
+    return hasMediaManagementAccess && (mode == MediaStoreWriteMode.Trash || mode == MediaStoreWriteMode.DeleteForever)
+}
+
 internal data class PendingMediaStoreWriteAction(
     val mode: MediaStoreWriteMode,
     val mediaItems: List<MediaItem>,
     val viewerDirection: Int = 1,
     val fromViewer: Boolean = false,
+    val uiRemovalApplied: Boolean = false,
+    val viewerIndexBeforeRemoval: Int = -1,
+    val selectedMediaIdsBeforeRemoval: Set<String> = emptySet(),
     val targetAlbumName: String? = null,
     val targetAlbumRelativePath: String? = null,
     val returnToAlbumsAfterMove: Boolean = false
 )
+
+private sealed interface PendingDeleteConfirmation {
+    val mediaItems: List<MediaItem>
+
+    data class MediaStore(val action: PendingMediaStoreWriteAction) : PendingDeleteConfirmation {
+        override val mediaItems: List<MediaItem> = action.mediaItems
+    }
+
+    data class Locked(
+        override val mediaItems: List<MediaItem>,
+        val viewerDirection: Int? = null
+    ) : PendingDeleteConfirmation
+
+    data class VaultForever(
+        override val mediaItems: List<MediaItem>,
+        val viewerDirection: Int? = null
+    ) : PendingDeleteConfirmation
+}
 
 private data class PendingLockConfirmation(
     val mediaItems: List<MediaItem>,
@@ -371,6 +396,7 @@ fun GalleryApp(
     val biometricAvailable = remember(context) { context.supportsBiometricPrompt() }
     var favoriteMediaIds by remember { mutableStateOf(favoritesRepository.initialFavoriteIds()) }
     var recentlyDeletedMedia by remember { mutableStateOf(recentlyDeletedRepository.initialDeletedMedia()) }
+    var optimisticRemovedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var permanentlyDeletedMediaIds by remember { mutableStateOf(recentlyDeletedRepository.initialPermanentlyDeletedMediaIds()) }
     val albumTileBounds = remember { mutableMapOf<String, Rect>() }
     val mediaTileBounds = remember { mutableMapOf<String, Rect>() }
@@ -393,6 +419,7 @@ fun GalleryApp(
     var vaultRefreshKey by remember { mutableIntStateOf(0) }
     var pendingMediaStoreWriteAction by viewerSessionViewModel.pendingMediaStoreWriteActionState
     var pendingLockConfirmation by remember { mutableStateOf<PendingLockConfirmation?>(null) }
+    var pendingDeleteConfirmation by remember { mutableStateOf<PendingDeleteConfirmation?>(null) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
     var showMediaManagementExplanation by rememberSaveable { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -605,8 +632,14 @@ fun GalleryApp(
         mediaAccess.hasAccess -> mediaStoreSnapshot ?: emptySnapshot
         else -> emptySnapshot
     }
-    val removedMediaIds = remember(recentlyDeletedMedia, permanentlyDeletedMediaIds) {
-        recentlyDeletedMedia.keys + permanentlyDeletedMediaIds
+    val activeSnapshotMediaIds = remember(activeSnapshot.mediaItems) {
+        activeSnapshot.mediaItems.mapTo(hashSetOf()) { it.id }
+    }
+    LaunchedEffect(activeSnapshotMediaIds) {
+        optimisticRemovedMediaIds = optimisticRemovedMediaIds.intersect(activeSnapshotMediaIds)
+    }
+    val removedMediaIds = remember(recentlyDeletedMedia, permanentlyDeletedMediaIds, optimisticRemovedMediaIds) {
+        recentlyDeletedMedia.keys + permanentlyDeletedMediaIds + optimisticRemovedMediaIds
     }
     val availableMedia = remember(activeSnapshot.mediaItems, removedMediaIds) {
         GalleryPrivacyFilter.availableMedia(
@@ -1533,7 +1566,7 @@ fun GalleryApp(
         when (action.mode) {
             MediaStoreWriteMode.Trash -> {
                 selectedMediaIds = selectedMediaIds - mediaIds
-                if (action.fromViewer) {
+                if (action.fromViewer && !action.uiRemovalApplied) {
                     action.mediaItems.firstOrNull()?.let { mediaItem ->
                         advanceViewerAfterRemoval(mediaItem, action.viewerDirection)
                     }
@@ -1553,7 +1586,7 @@ fun GalleryApp(
                 permanentlyDeletedMediaIds = deleteState.permanentlyDeletedMediaIds
                 favoriteMediaIds = favoritesRepository.removeFavorites(mediaIds)
                 selectedMediaIds = selectedMediaIds - mediaIds
-                if (action.fromViewer) {
+                if (action.fromViewer && !action.uiRemovalApplied) {
                     action.mediaItems.firstOrNull()?.let { mediaItem ->
                         advanceViewerAfterRemoval(mediaItem, action.viewerDirection)
                     }
@@ -1568,6 +1601,28 @@ fun GalleryApp(
         } else {
             mediaViewModel.requestFullRefresh()
         }
+    }
+
+    fun rollbackOptimisticMediaRemoval(action: PendingMediaStoreWriteAction) {
+        if (!action.uiRemovalApplied) return
+        val mediaIds = action.mediaItems.mapTo(linkedSetOf()) { it.id }
+        optimisticRemovedMediaIds = optimisticRemovedMediaIds - mediaIds
+        selectedMediaIds = selectedMediaIds + action.selectedMediaIdsBeforeRemoval
+
+        if (action.fromViewer) {
+            val restoredItem = action.mediaItems.firstOrNull() ?: return
+            if (viewerMediaItems.none { it.id == restoredItem.id }) {
+                val restoredItems = viewerMediaItems.toMutableList()
+                restoredItems.add(
+                    index = action.viewerIndexBeforeRemoval.coerceIn(0, restoredItems.size),
+                    element = restoredItem
+                )
+                viewerMediaItems = restoredItems
+            }
+            viewerMediaItem = restoredItem
+            viewerVisible = true
+        }
+        mediaViewModel.requestQuickRefresh()
     }
 
     fun rollbackCancelledLockedMedia(action: PendingMediaStoreWriteAction) {
@@ -1619,6 +1674,7 @@ fun GalleryApp(
                     if (deleted) {
                         completeMediaStoreWrite(action)
                     } else {
+                        rollbackOptimisticMediaRemoval(action)
                         lockedSecurityViewModel.showMessage(
                             "Android did not allow those items to be deleted. Nothing was removed."
                         )
@@ -1676,6 +1732,7 @@ fun GalleryApp(
         if (result.resultCode == Activity.RESULT_OK && action != null) {
             completeMediaStoreWrite(action)
         } else if (action != null) {
+            rollbackOptimisticMediaRemoval(action)
             rollbackCancelledLockedMedia(action)
         }
     }
@@ -1773,14 +1830,62 @@ fun GalleryApp(
         }
     }
 
+    fun requestMediaStoreDeleteConfirmation(action: PendingMediaStoreWriteAction) {
+        if (action.mediaItems.isEmpty()) return
+        pendingDeleteConfirmation = PendingDeleteConfirmation.MediaStore(action)
+    }
+
+    fun confirmPendingDelete(pending: PendingDeleteConfirmation) {
+        pendingDeleteConfirmation = null
+        when (pending) {
+            is PendingDeleteConfirmation.MediaStore -> {
+                var action = pending.action
+                val canApplyImmediately = shouldApplyOptimisticMediaRemoval(mediaManagementAccessStatus.isGranted, action.mode)
+                if (canApplyImmediately) {
+                    val mediaIds = action.mediaItems.mapTo(linkedSetOf()) { it.id }
+                    val selectedIdsBeforeRemoval = selectedMediaIds.intersect(mediaIds)
+                    val viewerIndex = if (action.fromViewer) {
+                        viewerMediaItems.indexOfFirst { it.id in mediaIds }
+                    } else {
+                        -1
+                    }
+                    if (action.mode == MediaStoreWriteMode.Trash) {
+                        optimisticRemovedMediaIds = optimisticRemovedMediaIds + mediaIds
+                    }
+                    selectedMediaIds = selectedMediaIds - mediaIds
+                    if (action.fromViewer) {
+                        action.mediaItems.firstOrNull()?.let { mediaItem ->
+                            advanceViewerAfterRemoval(mediaItem, action.viewerDirection)
+                        }
+                    }
+                    action = action.copy(
+                        uiRemovalApplied = true,
+                        viewerIndexBeforeRemoval = viewerIndex,
+                        selectedMediaIdsBeforeRemoval = selectedIdsBeforeRemoval
+                    )
+                }
+                launchMediaStoreWrite(action)
+            }
+            is PendingDeleteConfirmation.Locked -> {
+                softDeleteLockedMediaItems(pending.mediaItems, pending.viewerDirection)
+            }
+            is PendingDeleteConfirmation.VaultForever -> {
+                permanentlyDeleteVaultMediaItems(pending.mediaItems, pending.viewerDirection)
+            }
+        }
+    }
+
     fun requestMediaDelete(mediaItem: MediaItem, direction: Int) {
         when {
             viewerActionMode == ViewerActionMode.RecentlyDeleted ||
                 (destination == GalleryDestination.RecentlyDeleted && recentlyDeletedMedia.containsKey(mediaItem.id)) -> {
-                if (isVaultMedia(mediaItem)) {
-                    permanentlyDeleteVaultMediaItems(listOf(mediaItem), direction)
+                pendingDeleteConfirmation = if (isVaultMedia(mediaItem)) {
+                    PendingDeleteConfirmation.VaultForever(
+                        mediaItems = listOf(mediaItem),
+                        viewerDirection = direction
+                    )
                 } else {
-                    launchMediaStoreWrite(
+                    PendingDeleteConfirmation.MediaStore(
                         PendingMediaStoreWriteAction(
                             mode = MediaStoreWriteMode.DeleteForever,
                             mediaItems = listOf(mediaItem),
@@ -1791,9 +1896,12 @@ fun GalleryApp(
                 }
             }
             viewerActionMode == ViewerActionMode.Locked -> {
-                softDeleteLockedMediaItems(listOf(mediaItem), direction)
+                pendingDeleteConfirmation = PendingDeleteConfirmation.Locked(
+                    mediaItems = listOf(mediaItem),
+                    viewerDirection = direction
+                )
             }
-            else -> launchMediaStoreWrite(
+            else -> requestMediaStoreDeleteConfirmation(
                 PendingMediaStoreWriteAction(
                     mode = MediaStoreWriteMode.Trash,
                     mediaItems = listOf(mediaItem),
@@ -1831,7 +1939,9 @@ fun GalleryApp(
 
     fun deleteSelectedMedia() {
         if (selectedMediaItems.isEmpty()) return
-        launchMediaStoreWrite(PendingMediaStoreWriteAction(MediaStoreWriteMode.Trash, selectedMediaItems))
+        requestMediaStoreDeleteConfirmation(
+            PendingMediaStoreWriteAction(MediaStoreWriteMode.Trash, selectedMediaItems)
+        )
     }
 
     fun shareSelectedMedia() {
@@ -2440,7 +2550,9 @@ fun GalleryApp(
                                 },
                                 onDeleteSelected = { selectedItems ->
                                     val fullItemsById = lockedDisplayMedia.associateBy { it.id }
-                                    softDeleteLockedMediaItems(selectedItems.map { fullItemsById[it.id] ?: it })
+                                    pendingDeleteConfirmation = PendingDeleteConfirmation.Locked(
+                                        selectedItems.map { fullItemsById[it.id] ?: it }
+                                    )
                                 },
                                 onOpenMedia = { mediaItem, bounds ->
                                     val lockedViewerItems = lockedDisplayMedia
@@ -2553,7 +2665,9 @@ fun GalleryApp(
                                     )
                                 },
                                 onTrashMedia = { mediaItems ->
-                                    launchMediaStoreWrite(PendingMediaStoreWriteAction(MediaStoreWriteMode.Trash, mediaItems))
+                                    requestMediaStoreDeleteConfirmation(
+                                        PendingMediaStoreWriteAction(MediaStoreWriteMode.Trash, mediaItems)
+                                    )
                                 }
                             )
                         }
@@ -2675,6 +2789,50 @@ fun GalleryApp(
                     predictiveBackDirectionProvider = {
                         if (predictiveBackSwipeEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
                     }
+                )
+            }
+
+            pendingDeleteConfirmation?.let { pending ->
+                val itemCount = pending.mediaItems.size
+                val permanent = pending is PendingDeleteConfirmation.VaultForever ||
+                    (pending is PendingDeleteConfirmation.MediaStore &&
+                        pending.action.mode == MediaStoreWriteMode.DeleteForever)
+                AlertDialog(
+                    onDismissRequest = { pendingDeleteConfirmation = null },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Filled.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    },
+                    title = {
+                        Text("Are you sure?")
+                    },
+                    text = {
+                        Text(
+                            when {
+                                permanent && itemCount == 1 -> "This item will be deleted forever. This cannot be undone."
+                                permanent -> "%1\$,d items will be deleted forever. This cannot be undone.".format(itemCount)
+                                itemCount == 1 -> "This item will move to Recently deleted, where it can be restored."
+                                else -> "%1\$,d items will move to Recently deleted, where they can be restored.".format(itemCount)
+                            }
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { confirmPendingDelete(pending) }) {
+                            Text(
+                                text = if (permanent) "Delete forever" else "Delete",
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingDeleteConfirmation = null }) {
+                            Text("Cancel")
+                        }
+                    },
+                    shape = RoundedCornerShape(24.dp)
                 )
             }
 
@@ -3896,24 +4054,15 @@ private fun PositionAwareAlbumTransitionOverlay(
 
     val density = LocalDensity.current
     val expansion = progress.value.coerceIn(0f, 1f)
-    val approachProgress = GalleryMotion.smoothstep(0f, 0.18f, expansion)
-    val revealProgress = GalleryMotion.smoothstep(0.08f, 1f, expansion)
     val rootBounds = Rect(0f, 0f, rootWidthPx, rootHeightPx)
-    val towardCenter = Offset(
-        x = (rootBounds.center.x - sourceBounds.center.x) * 0.06f * approachProgress,
-        y = (rootBounds.center.y - sourceBounds.center.y) * 0.04f * approachProgress
-    )
-    val approachedBounds = scaledRectAroundCenter(
-        rect = sourceBounds,
-        scale = lerp(1f, 1.025f, approachProgress),
-        offset = towardCenter
-    )
-    val heroBounds = lerpRect(approachedBounds, rootBounds, revealProgress)
+    val heroBounds = lerpRect(sourceBounds, rootBounds, expansion)
+    val liftProgress = GalleryMotion.smoothstep(0f, 0.34f, expansion) *
+        (1f - GalleryMotion.smoothstep(0.66f, 1f, expansion))
     val heroWidth = heroBounds.width.coerceAtLeast(1f)
     val heroHeight = heroBounds.height.coerceAtLeast(1f)
     val detailAlpha = GalleryMotion.smoothstep(0.34f, 0.68f, expansion)
     val coverAlpha = 1f - GalleryMotion.smoothstep(0.22f, 0.58f, expansion)
-    val cornerRadius = lerp(22f, 0f, revealProgress).dp
+    val cornerRadius = lerp(22f, 0f, expansion).dp
     val scrimAlpha = GalleryMotion.smoothstep(0.04f, 0.70f, expansion) * 0.18f
 
     Box(
@@ -3938,7 +4087,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                     translationX = heroBounds.left
                     translationY = heroBounds.top
                     shadowElevation = with(density) {
-                        22.dp.toPx() * approachProgress * (1f - revealProgress)
+                        14.dp.toPx() * liftProgress
                     }
                     clip = true
                     shape = RoundedCornerShape(cornerRadius)
