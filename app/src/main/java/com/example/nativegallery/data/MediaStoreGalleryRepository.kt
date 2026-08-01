@@ -502,7 +502,9 @@ class MediaStoreGalleryRepository(
     }
 
     companion object {
-        const val InitialGalleryPageSize = 120
+        // Keep cold-start work to roughly one to two fast swipes. The complete library is
+        // loaded shortly afterwards, without holding up the first useful Photos frame.
+        const val InitialGalleryPageSize = 72
 
         private val SnapshotLock = Any()
         private val CachedSnapshots = mutableMapOf<Set<MediaKind>, GallerySnapshot>()

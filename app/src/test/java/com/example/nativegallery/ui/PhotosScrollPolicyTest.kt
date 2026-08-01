@@ -6,18 +6,18 @@ import org.junit.Test
 
 class PhotosScrollPolicyTest {
     @Test
-    fun normalScrollingSkipsContinuousTileBoundsTracking() {
-        assertFalse(shouldTrackPhotoTileBounds(selectionMode = false, scrolling = true))
+    fun normalGridSkipsContinuousTileBoundsTracking() {
+        assertFalse(shouldTrackPhotoTileBounds(selectionMode = false, revealInProgress = false))
     }
 
     @Test
-    fun settledGridRefreshesBoundsForViewerTransitions() {
-        assertTrue(shouldTrackPhotoTileBounds(selectionMode = false, scrolling = false))
+    fun viewerRevealRefreshesBoundsForCloseTransition() {
+        assertTrue(shouldTrackPhotoTileBounds(selectionMode = false, revealInProgress = true))
     }
 
     @Test
     fun selectionDragKeepsHitTestingBoundsWhileScrolling() {
-        assertTrue(shouldTrackPhotoTileBounds(selectionMode = true, scrolling = true))
+        assertTrue(shouldTrackPhotoTileBounds(selectionMode = true, revealInProgress = false))
     }
 
     @Test

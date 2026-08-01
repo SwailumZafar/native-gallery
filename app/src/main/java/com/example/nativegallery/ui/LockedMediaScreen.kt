@@ -252,7 +252,6 @@ fun LockedMediaScreen(
                 onSelectAll = { selectedMediaIds = mediaIds },
                 onUnhide = {
                     val selectedItems = lockedMediaItems.filter { it.id in selectedMediaIds }
-                    selectedMediaIds = emptySet()
                     onUnhideSelected(selectedItems)
                 },
                 onDelete = {
@@ -558,7 +557,7 @@ private fun LockedMediaSelectionToolbar(
                 TextButton(onClick = onUnhide, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Filled.LockOpen, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Unhide")
+                    Text("Restore")
                 }
                 TextButton(onClick = onDelete, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -584,4 +583,12 @@ private fun lockedMediaBadgeLabel(lockedItemCount: Int, isUnlocked: Boolean): St
         lockedItemCount > 0 -> "%1$,d items".format(lockedItemCount)
         else -> "Empty"
     }
+}
+
+internal fun lockedMediaRestoreTitle(itemCount: Int): String =
+    if (itemCount == 1) "Restore this item?" else "Restore %1$,d items?".format(itemCount)
+
+internal fun lockedMediaRestoreMessage(itemCount: Int): String {
+    val subject = if (itemCount == 1) "The original-quality item" else "The original-quality items"
+    return "$subject will return to your device gallery. If a public copy is missing, Native Gallery decrypts a new full-quality copy. This is an in-app confirmation, not Android's system permission panel; Android normally will not ask again."
 }

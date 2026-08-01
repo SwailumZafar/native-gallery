@@ -20,8 +20,8 @@ object GalleryMotion {
     const val AlbumCloseMillis = 260
     val AlbumOpenEasing = CubicBezierEasing(0.28f, 0f, 0.18f, 1f)
     val AlbumCloseEasing = CubicBezierEasing(0.32f, 0f, 0.38f, 1f)
-    const val ViewerHeroOpenMillis = 360
-    const val ViewerHeroCloseMillis = 300
+    const val ViewerHeroOpenMillis = 330
+    const val ViewerHeroCloseMillis = 260
     const val SecondaryOpenMillis = 260
     const val SecondaryCloseMillis = 230
 
@@ -44,7 +44,7 @@ object GalleryMotion {
     const val SkeletonShimmerMillis = 1350
     const val PullThresholdDp = 72
     const val ViewerChromeFadeMillis = 90
-    const val ViewerChromeCloseDelayMillis = 70L
+    const val ViewerChromeCloseDelayMillis = 40L
     const val ViewerActionEnterMillis = 180
     const val ViewerActionExitMillis = 140
     const val ViewerDetailsEnterMillis = 220

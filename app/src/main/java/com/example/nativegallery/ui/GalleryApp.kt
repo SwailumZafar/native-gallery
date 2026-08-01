@@ -88,6 +88,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
@@ -160,6 +161,7 @@ import com.example.nativegallery.data.HiddenMediaRepository
 import com.example.nativegallery.data.HiddenSecurityRepository
 import com.example.nativegallery.data.LockedMediaOperations
 import com.example.nativegallery.data.LockedMediaOriginalRemovalResult
+import com.example.nativegallery.data.LockedMediaVaultPolicy
 import com.example.nativegallery.data.LockedMediaVaultProvider
 import com.example.nativegallery.data.LockedMediaVaultRepository
 import com.example.nativegallery.data.LockedMediaVaultSnapshot
@@ -289,6 +291,11 @@ private data class PendingLockConfirmation(
     val viewerMediaId: String? = null,
     val viewerDirection: Int = 1
 )
+private data class PendingLockedRestoreConfirmation(
+    val mediaItems: List<MediaItem>,
+    val viewerDirection: Int? = null
+)
+
 private data class MediaCloseTransitionSpec(
     val key: Int,
     val mediaItem: MediaItem,
@@ -420,6 +427,7 @@ fun GalleryApp(
     var pendingMediaStoreWriteAction by viewerSessionViewModel.pendingMediaStoreWriteActionState
     var pendingLockConfirmation by remember { mutableStateOf<PendingLockConfirmation?>(null) }
     var pendingDeleteConfirmation by remember { mutableStateOf<PendingDeleteConfirmation?>(null) }
+    var pendingLockedRestoreConfirmation by remember { mutableStateOf<PendingLockedRestoreConfirmation?>(null) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
     var showMediaManagementExplanation by rememberSaveable { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -597,6 +605,7 @@ fun GalleryApp(
         mediaViewModel.setRecentlyDeletedVisible(destination == GalleryDestination.RecentlyDeleted)
         if (destination != GalleryDestination.LockedMedia) {
             lockedSecurityViewModel.lock()
+            pendingLockedRestoreConfirmation = null
             withContext(Dispatchers.IO) {
                 LockedMediaVaultProvider.clearSessionCache(context.applicationContext)
             }
@@ -990,6 +999,34 @@ fun GalleryApp(
             } ?: mediaItem.copy(contentUri = null)
         }
     }
+    val lockedFullQualityWarmupSize = remember(viewerPhotoDecodeSize) {
+        LockedMediaVaultPolicy.fullQualityWarmupSize(viewerPhotoDecodeSize)
+    }
+    val lockedFullQualityWarmupPhotos = remember(lockedDisplayMedia) {
+        val photos = lockedDisplayMedia.filterNot(MediaItem::isVideo)
+        photos.take(LockedMediaVaultPolicy.fullQualityWarmupLimit(photos.size))
+    }
+    val lockedFullQualityWarmupKey = remember(lockedFullQualityWarmupPhotos) {
+        lockedFullQualityWarmupPhotos.joinToString(separator = "|") { it.id }
+    }
+    LaunchedEffect(
+        destination,
+        hiddenVaultUnlocked,
+        lockedFullQualityWarmupKey,
+        lockedFullQualityWarmupSize
+    ) {
+        if (destination != GalleryDestination.LockedMedia || !hiddenVaultUnlocked) return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            lockedFullQualityWarmupPhotos.forEach(lockedVaultRepository::prepareFullQualityRead)
+        }
+        prefetchMediaThumbnails(
+            context = context.applicationContext,
+            mediaItems = lockedFullQualityWarmupPhotos,
+            thumbnailSizes = listOf(lockedFullQualityWarmupSize),
+            maxItems = lockedFullQualityWarmupPhotos.size,
+            pinInMemory = true
+        )
+    }
     val missingLockedPreviewIds = remember(lockedVaultSnapshot, lockedDisplayMedia) {
         val displayedIds = lockedDisplayMedia.mapTo(mutableSetOf()) { it.id }
         lockedVaultSnapshot.missingPreviewIds.intersect(displayedIds)
@@ -1146,6 +1183,15 @@ fun GalleryApp(
             onCompleted(restoredIds)
         }
     }
+    fun requestLockedMediaRestore(mediaItems: List<MediaItem>, viewerDirection: Int? = null) {
+        if (mediaItems.isEmpty()) return
+        pendingLockedRestoreConfirmation = PendingLockedRestoreConfirmation(
+            mediaItems = mediaItems,
+            viewerDirection = viewerDirection
+        )
+    }
+
+
     fun updateAlbumHidden(album: Album, hidden: Boolean) {
         if (album.isAllPhotos) return
         hiddenStates[album.id] = hidden
@@ -1346,6 +1392,23 @@ fun GalleryApp(
             )
         }
 
+        if (actionMode == ViewerActionMode.Locked && mediaItem.contentUri != null) {
+            val fullQualitySize = LockedMediaVaultPolicy.fullQualityWarmupSize(viewerPhotoDecodeSize)
+            prefetchScope.launch {
+                withContext(Dispatchers.IO) {
+                    lockedVaultRepository.prepareFullQualityRead(mediaItem)
+                }
+                if (!mediaItem.isVideo) {
+                    prefetchMediaThumbnails(
+                        context = context.applicationContext,
+                        mediaItems = listOf(mediaItem),
+                        thumbnailSizes = listOf(fullQualitySize),
+                        maxItems = 1,
+                        pinInMemory = true
+                    )
+                }
+            }
+        }
         val warmupItem = (if (actionMode == ViewerActionMode.Locked) {
             transitionMediaItem.copy(isVideo = false)
         } else {
@@ -1454,7 +1517,7 @@ fun GalleryApp(
             if (needsGridReveal) {
                 mediaTileBounds.remove(currentItem.id)
                 viewerRevealMediaId = currentItem.id
-                for (attempt in 0 until 18) {
+                for (attempt in 0 until 8) {
                     delay(16)
                     val revealedBounds = mediaTileBounds[currentItem.id] ?: Rect.Zero
                     if (revealedBounds.isVisibleWithin(transitionRootBoundsInWindow)) break
@@ -1491,6 +1554,22 @@ fun GalleryApp(
         }
     }
 
+    val activeMediaCloseTransitionKey = mediaCloseTransition?.key
+    LaunchedEffect(activeMediaCloseTransitionKey, destination, selectedTab, photosListState) {
+        if (
+            activeMediaCloseTransitionKey != null &&
+            destination == GalleryDestination.Main &&
+            selectedTab == GalleryTab.Photos
+        ) {
+            snapshotFlow { photosListState.isScrollInProgress }.first { it }
+            if (mediaCloseTransition?.key == activeMediaCloseTransitionKey) {
+                // A fling invalidates the immutable target bounds used by the closing hero.
+                // Remove it immediately instead of drawing a stale tile above the moving grid.
+                clearViewerAfterClose()
+            }
+        }
+    }
+
     fun advanceViewerAfterRemoval(mediaItem: MediaItem, direction: Int) {
         val currentItems = if (viewerMediaItems.isNotEmpty()) viewerMediaItems else visibleMedia
         val currentIndex = currentItems.indexOfFirst { it.id == mediaItem.id }
@@ -1503,6 +1582,18 @@ fun GalleryApp(
         )
         if (remainingItems.isEmpty()) {
             viewerVisible = false
+        }
+    }
+
+    fun confirmLockedMediaRestore(pending: PendingLockedRestoreConfirmation) {
+        pendingLockedRestoreConfirmation = null
+        val viewerItem = pending.viewerDirection?.let { pending.mediaItems.firstOrNull() }
+        unhideMediaItems(pending.mediaItems) { restoredIds ->
+            val restoredViewerItem = viewerItem?.takeIf { it.id in restoredIds }
+            val direction = pending.viewerDirection
+            if (restoredViewerItem != null && direction != null) {
+                advanceViewerAfterRemoval(restoredViewerItem, direction)
+            }
         }
     }
 
@@ -2007,11 +2098,7 @@ fun GalleryApp(
                 }
             }
             ViewerActionMode.Locked -> {
-                unhideMediaItems(listOf(mediaItem)) { restoredIds ->
-                    if (mediaItem.id in restoredIds) {
-                        advanceViewerAfterRemoval(mediaItem, direction)
-                    }
-                }
+                requestLockedMediaRestore(listOf(mediaItem), viewerDirection = direction)
             }
             ViewerActionMode.Normal -> Unit
         }
@@ -2546,7 +2633,7 @@ fun GalleryApp(
                                 onBiometricUnlock = ::requestHiddenBiometricUnlock,
                                 onUnhideSelected = { selectedItems ->
                                     val fullItemsById = lockedDisplayMedia.associateBy { it.id }
-                                    unhideMediaItems(selectedItems.map { fullItemsById[it.id] ?: it })
+                                    requestLockedMediaRestore(selectedItems.map { fullItemsById[it.id] ?: it })
                                 },
                                 onDeleteSelected = { selectedItems ->
                                     val fullItemsById = lockedDisplayMedia.associateBy { it.id }
@@ -2829,6 +2916,38 @@ fun GalleryApp(
                     },
                     dismissButton = {
                         TextButton(onClick = { pendingDeleteConfirmation = null }) {
+                            Text("Cancel")
+                        }
+                    },
+                    shape = RoundedCornerShape(24.dp)
+                )
+            }
+
+            pendingLockedRestoreConfirmation?.let { pending ->
+                val itemCount = pending.mediaItems.size
+                AlertDialog(
+                    onDismissRequest = { pendingLockedRestoreConfirmation = null },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Filled.LockOpen,
+                            contentDescription = null
+                        )
+                    },
+                    title = {
+                        Text(lockedMediaRestoreTitle(itemCount))
+                    },
+                    text = {
+                        Text(lockedMediaRestoreMessage(itemCount))
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = { confirmLockedMediaRestore(pending) }
+                        ) {
+                            Text("Restore")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingLockedRestoreConfirmation = null }) {
                             Text("Cancel")
                         }
                     },

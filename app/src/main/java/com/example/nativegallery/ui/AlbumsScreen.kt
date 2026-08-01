@@ -104,6 +104,7 @@ import com.example.nativegallery.ui.components.PremiumDropdownMenu
 import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
 import com.example.nativegallery.ui.components.PremiumOverflowButton
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.MediaSelectionCapsule
 import com.example.nativegallery.ui.components.bouncyClickable
 import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
@@ -1595,82 +1596,16 @@ private fun AlbumSelectionToolbar(
     onDelete: () -> Unit,
     onHide: () -> Unit
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        shape = RoundedCornerShape(28.dp),
-        shadowElevation = 12.dp
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onClear) {
-                    Icon(
-                        imageVector = Icons.Filled.Close,
-                        contentDescription = "Clear selection",
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Text(
-                    text = "%1$,d selected".format(selectedCount),
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                IconButton(
-                    enabled = selectedCount < totalVisibleCount,
-                    onClick = onSelectAll
-                ) {
-                    Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
-                }
-            }
-            Row(modifier = Modifier.fillMaxWidth()) {
-                AlbumSelectionAction(
-                    label = "Share",
-                    icon = Icons.Filled.Share,
-                    onClick = onShare,
-                    modifier = Modifier.weight(1f)
-                )
-                AlbumSelectionAction(
-                    label = "Lock",
-                    icon = Icons.Filled.Lock,
-                    onClick = onHide,
-                    modifier = Modifier.weight(1f)
-                )
-                AlbumSelectionAction(
-                    label = "Move",
-                    icon = Icons.Filled.Folder,
-                    onClick = onMove,
-                    modifier = Modifier.weight(1f)
-                )
-                AlbumSelectionAction(
-                    label = "Delete",
-                    icon = Icons.Filled.Delete,
-                    onClick = onDelete,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AlbumSelectionAction(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    TextButton(
-        modifier = modifier,
-        onClick = onClick
-    ) {
-        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.size(6.dp))
-        Text(label)
-    }
+    MediaSelectionCapsule(
+        selectedCount = selectedCount,
+        canSelectAll = selectedCount < totalVisibleCount,
+        onClear = onClear,
+        onSelectAll = onSelectAll,
+        onShare = onShare,
+        onLock = onHide,
+        onMove = onMove,
+        onDelete = onDelete
+    )
 }
 private fun LazyListScope.albumDetailRows(
     mediaItems: List<MediaItem>,

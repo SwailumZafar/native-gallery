@@ -98,8 +98,8 @@ internal class GalleryMediaViewModel(
             val presentingFromCache = _uiState.value.snapshot != null
             refreshMutex.withLock { refreshLatestPage(access) }
             if (!presentingFromCache) {
-                // Give Compose a frame to present the first page before the full-library query
-                // competes with visible thumbnail decoding on a cold process start.
+                // Let the first page render and its visible thumbnails begin decoding before the
+                // full-library query competes for I/O on a cold process start.
                 delay(ColdStartFullRefreshYieldMillis)
             }
             refreshMutex.withLock { refreshFullLibrary(access) }
@@ -256,7 +256,7 @@ internal class GalleryMediaViewModel(
     }
 
     private companion object {
-        const val ColdStartFullRefreshYieldMillis = 48L
+        const val ColdStartFullRefreshYieldMillis = 220L
     }
 }
 

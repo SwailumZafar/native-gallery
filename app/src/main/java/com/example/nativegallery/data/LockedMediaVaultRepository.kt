@@ -101,6 +101,11 @@ class LockedMediaVaultRepository(context: Context) {
         )
     }
 
+    fun prepareFullQualityRead(mediaItem: MediaItem): Boolean {
+        val uri = mediaItem.contentUri ?: return false
+        return LockedMediaVaultProvider.prepareFullQualityRead(appContext, uri)
+    }
+
     fun encryptedPreviewUriFor(mediaItem: MediaItem): Uri? {
         mediaItem.previewUri?.let { return it }
         val token = fileToken(mediaItem.id)

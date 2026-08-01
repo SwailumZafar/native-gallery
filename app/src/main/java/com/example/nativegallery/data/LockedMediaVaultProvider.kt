@@ -94,32 +94,8 @@ class LockedMediaVaultProvider : ContentProvider() {
             ?: throw FileNotFoundException("Missing locked media token")
         val preview = uri.pathSegments.firstOrNull() == LockedMediaVaultRepository.VaultPreviewPath
         val repository = vaultRepository ?: LockedMediaVaultRepository(appContext)
-        if (!repository.hasEncryptedToken(token, preview)) {
-            throw FileNotFoundException("Locked media token not found")
-        }
-
-        val sessionKey = if (preview) "preview:$token" else "media:$token"
-        val sessionLock = sessionLocks.computeIfAbsent(sessionKey) { Any() }
-        return synchronized(sessionLock) {
-            val sessionFile = sessionFile(appContext, token, preview)
-            if (!sessionFile.exists() || sessionFile.length() == 0L) {
-                val partialFile = File(sessionFile.parentFile, "${sessionFile.name}.partial")
-                partialFile.delete()
-                val decrypted = partialFile.outputStream().use { output ->
-                    repository.decryptTokenTo(token, output, preview)
-                }
-                if (!decrypted || partialFile.length() == 0L) {
-                    partialFile.delete()
-                    throw FileNotFoundException("Locked media token could not be decrypted")
-                }
-                if (sessionFile.exists()) sessionFile.delete()
-                if (!partialFile.renameTo(sessionFile)) {
-                    partialFile.copyTo(sessionFile, overwrite = true)
-                    partialFile.delete()
-                }
-            }
-            ParcelFileDescriptor.open(sessionFile, ParcelFileDescriptor.MODE_READ_ONLY)
-        }
+        val readyFile = ensureSessionFile(appContext, repository, token, preview)
+        return ParcelFileDescriptor.open(readyFile, ParcelFileDescriptor.MODE_READ_ONLY)
     }
 
     companion object {
@@ -129,6 +105,70 @@ class LockedMediaVaultProvider : ContentProvider() {
 
         @Volatile
         private var scheduledCleanupLatch: CountDownLatch? = null
+
+        /**
+         * Decrypts the full-quality vault payload into the existing private session cache before a
+         * decoder or player asks for it. Call only while the authenticated Locked Media session is
+         * active; [clearSessionCache] removes the prepared plaintext when that session closes.
+         */
+        fun prepareFullQualityRead(context: Context, uri: Uri): Boolean {
+            val appContext = context.applicationContext
+            if (uri.authority != LockedMediaVaultRepository.vaultAuthority(appContext)) return false
+            if (uri.pathSegments.firstOrNull() == LockedMediaVaultRepository.VaultPreviewPath) return false
+            val token = uri.lastPathSegment?.takeIf { it.isNotBlank() } ?: return false
+            awaitScheduledSessionCacheClear()
+            return runCatching {
+                ensureSessionFile(
+                    context = appContext,
+                    repository = LockedMediaVaultRepository(appContext),
+                    token = token,
+                    preview = false
+                )
+                true
+            }.getOrDefault(false)
+        }
+
+        private fun ensureSessionFile(
+            context: Context,
+            repository: LockedMediaVaultRepository,
+            token: String,
+            preview: Boolean
+        ): File {
+            if (!repository.hasEncryptedToken(token, preview)) {
+                throw FileNotFoundException("Locked media token not found")
+            }
+            val sessionKey = if (preview) "preview:$token" else "media:$token"
+            val sessionLock = sessionLocks.computeIfAbsent(sessionKey) { Any() }
+            return synchronized(sessionLock) {
+                val readyFile = sessionFile(context, token, preview)
+                if (!readyFile.exists() || readyFile.length() == 0L) {
+                    decryptSessionFile(repository, token, preview, readyFile)
+                }
+                readyFile
+            }
+        }
+
+        private fun decryptSessionFile(
+            repository: LockedMediaVaultRepository,
+            token: String,
+            preview: Boolean,
+            readyFile: File
+        ) {
+            val partialFile = File(readyFile.parentFile, "${readyFile.name}.partial")
+            partialFile.delete()
+            val decrypted = partialFile.outputStream().use { output ->
+                repository.decryptTokenTo(token, output, preview)
+            }
+            if (!decrypted || partialFile.length() == 0L) {
+                partialFile.delete()
+                throw FileNotFoundException("Locked media token could not be decrypted")
+            }
+            if (readyFile.exists()) readyFile.delete()
+            if (!partialFile.renameTo(readyFile)) {
+                partialFile.copyTo(readyFile, overwrite = true)
+                partialFile.delete()
+            }
+        }
 
         fun clearSessionCache(context: Context) {
             awaitScheduledSessionCacheClear()

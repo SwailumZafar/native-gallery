@@ -50,11 +50,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -80,6 +82,7 @@ import androidx.compose.ui.unit.sp
 import com.example.nativegallery.data.VideoFrameDecoder
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.util.GalleryPerformanceMonitor
+import kotlinx.coroutines.flow.collectLatest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
@@ -295,7 +298,7 @@ fun MediaThumbnail(
     isSharedElementSourceHidden: Boolean = false,
     selected: Boolean = false,
     onBoundsChanged: ((Rect) -> Unit)? = null,
-    deferUncachedLoad: Boolean = false,
+    deferUncachedLoad: State<Boolean>? = null,
     onLongClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     onClickWithBounds: ((Rect) -> Unit)? = null
@@ -458,7 +461,7 @@ fun GalleryImage(
     fallbackImageUri: Uri? = null,
     isVideo: Boolean = false,
     animatedPlaceholder: Boolean = true,
-    deferUncachedLoad: Boolean = false
+    deferUncachedLoad: State<Boolean>? = null
 ) {
     val bitmap = rememberContentUriBitmap(
         imageUri = imageUri,
@@ -706,7 +709,7 @@ private fun rememberContentUriBitmap(
     cachedOnly: Boolean,
     allowApproximateCache: Boolean,
     isVideo: Boolean,
-    deferUncachedLoad: Boolean
+    deferUncachedLoad: State<Boolean>?
 ): Bitmap? {
     val context = LocalContext.current.applicationContext
     val cacheKey = imageUri?.let { ThumbnailMemoryCache.key(it, thumbnailSize, loadQuality) }
@@ -725,35 +728,41 @@ private fun rememberContentUriBitmap(
             bitmap = null
             return@LaunchedEffect
         }
-        ThumbnailMemoryCache.get(cacheKey)?.let { cachedBitmap ->
-            bitmap = cachedBitmap
-            return@LaunchedEffect
-        }
-        if (deferUncachedLoad) {
-            if (allowApproximateCache) {
+
+        suspend fun loadAndPublish() {
+            ThumbnailMemoryCache.get(cacheKey)?.let { cachedBitmap ->
+                bitmap = cachedBitmap
+                return
+            }
+            if (cachedOnly) {
+                if (allowApproximateCache) {
+                    ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize, loadQuality)?.let { cachedBitmap ->
+                        bitmap = cachedBitmap
+                        return
+                    }
+                }
+                loadPersistedThumbnail(context, imageUri, thumbnailSize, loadQuality)?.let { loadedBitmap ->
+                    bitmap = loadedBitmap
+                }
+                return
+            }
+            if (bitmap == null && allowApproximateCache) {
                 bitmap = ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize, loadQuality)
             }
-            return@LaunchedEffect
-        }
-
-        if (cachedOnly) {
-            if (allowApproximateCache) {
-
-                ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize, loadQuality)?.let { cachedBitmap ->
-                    bitmap = cachedBitmap
-                    return@LaunchedEffect
+            loadCachedBitmap(context, imageUri, thumbnailSize, loadQuality, isVideo)?.let { loadedBitmap ->
+                if (deferUncachedLoad?.value != true) {
+                    bitmap = loadedBitmap
                 }
             }
-            loadPersistedThumbnail(context, imageUri, thumbnailSize, loadQuality)?.let { loadedBitmap ->
-                bitmap = loadedBitmap
+        }
+
+        val loadGate = deferUncachedLoad
+        if (loadGate == null) {
+            loadAndPublish()
+        } else {
+            snapshotFlow { loadGate.value }.collectLatest { deferred ->
+                if (!deferred) loadAndPublish()
             }
-            return@LaunchedEffect
-        }
-        if (bitmap == null && allowApproximateCache) {
-            bitmap = ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize, loadQuality)
-        }
-        loadCachedBitmap(context, imageUri, thumbnailSize, loadQuality, isVideo)?.let { loadedBitmap ->
-            bitmap = loadedBitmap
         }
     }
     return bitmap

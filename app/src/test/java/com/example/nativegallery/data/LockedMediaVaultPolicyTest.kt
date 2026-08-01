@@ -67,4 +67,13 @@ class LockedMediaVaultPolicyTest {
         assertFalse(LockedMediaVaultPolicy.shouldServeEncryptedPreview(0, 384))
     }
 
+    @Test
+    fun fullQualityWarmupNeverReusesPreviewSizingAndStaysBounded() {
+        assertEquals(1024, LockedMediaVaultPolicy.fullQualityWarmupSize(512))
+        assertEquals(1440, LockedMediaVaultPolicy.fullQualityWarmupSize(1440))
+        assertEquals(0, LockedMediaVaultPolicy.fullQualityWarmupLimit(0))
+        assertEquals(1, LockedMediaVaultPolicy.fullQualityWarmupLimit(1))
+        assertEquals(2, LockedMediaVaultPolicy.fullQualityWarmupLimit(20))
+    }
+
 }

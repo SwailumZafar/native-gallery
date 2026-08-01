@@ -2,6 +2,8 @@ package com.example.nativegallery.data
 
 internal object LockedMediaVaultPolicy {
     private const val EncryptedPreviewMaxRequestSize = 512
+    private const val FullQualityMinRequestSize = 1024
+    private const val InitialFullQualityWarmupCount = 2
 
     fun mimeType(mimeType: String?, isVideo: Boolean): String {
         return mimeType
@@ -61,6 +63,12 @@ internal object LockedMediaVaultPolicy {
     fun prefetchLimit(gridColumns: Int): Int {
         return (gridColumns.coerceAtLeast(2) * 5).coerceAtMost(24)
     }
+
+    fun fullQualityWarmupSize(preferredSize: Int): Int =
+        preferredSize.coerceAtLeast(FullQualityMinRequestSize)
+
+    fun fullQualityWarmupLimit(availablePhotoCount: Int): Int =
+        availablePhotoCount.coerceIn(0, InitialFullQualityWarmupCount)
 
     fun isRestoredCopyUsable(sizeBytes: Long): Boolean = sizeBytes > 0L
 

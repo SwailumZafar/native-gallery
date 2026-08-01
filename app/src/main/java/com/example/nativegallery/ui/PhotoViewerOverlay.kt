@@ -106,6 +106,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -164,6 +165,7 @@ private val ViewerEnterEasing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
 private val ViewerExitEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 private val ViewerPhotoBackground = Color(0xFF111111)
 private val ViewerPhotoStageBackground = Color.Transparent
+private val ViewerVideoControlTextShadow = Shadow(Color.Black.copy(alpha = 0.90f), Offset(0f, 1f), 3f)
 private const val DEFAULT_AUDIBLE_MEDIA_VOLUME = 0.35f
 internal const val ViewerMediaStageTestTag = "viewer-media-stage"
 internal const val ViewerZoomableMediaTestTag = "viewer-zoomable-media"
@@ -173,7 +175,7 @@ internal const val ViewerBottomChromeTestTag = "viewer-bottom-chrome"
 internal const val ViewerBottomChromeSectionGapDp = 10
 internal const val ViewerBottomChromeActionInsetDp = 66
 internal const val ViewerActionCapsuleHeightDp = 56
-internal const val ViewerVideoSeekHeightDp = 36
+internal const val ViewerVideoSeekHeightDp = 32
 
 enum class ViewerActionMode {
     Normal,
@@ -1914,10 +1916,6 @@ private fun ViewerVideoPlayer(
                 modifier = Modifier
                     .widthIn(max = controlMaxWidth)
                     .fillMaxWidth()
-                    .background(
-                        color = Color(0xFF141414),
-                        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
-                    )
                     .padding(
                         start = if (compactLandscape) 8.dp else 18.dp,
                         end = if (compactLandscape) 8.dp else 18.dp,
@@ -1982,12 +1980,12 @@ private fun ViewerVideoPlayer(
                     Text(
                         text = formatPlaybackTime(positionMs),
                         color = Color.White.copy(alpha = 0.88f),
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodySmall.copy(shadow = ViewerVideoControlTextShadow)
                     )
                     Text(
                         text = formatPlaybackTime(durationMs),
                         color = Color.White.copy(alpha = 0.72f),
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodySmall.copy(shadow = ViewerVideoControlTextShadow)
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -2108,7 +2106,7 @@ private fun CompactVideoControlDeck(
         Text(
             text = "${formatPlaybackTime(positionMs)} / ${formatPlaybackTime(durationMs)}",
             color = Color.White.copy(alpha = 0.84f),
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, shadow = ViewerVideoControlTextShadow),
             maxLines = 1
         )
         ViewerVideoSeekSlider(

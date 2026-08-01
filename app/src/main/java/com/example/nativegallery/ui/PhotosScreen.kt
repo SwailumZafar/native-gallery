@@ -79,6 +79,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
+import com.example.nativegallery.ui.components.MediaSelectionCapsule
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.GalleryFastScroller
 import com.example.nativegallery.ui.components.MediaThumbnail
@@ -149,9 +150,10 @@ fun PhotosScreen(
     val showLoading = isLoading
     val revealOffsetPx = with(LocalDensity.current) { 72.dp.roundToPx() }
     var pinchPreviewScale by remember { mutableStateOf(1f) }
-    val isGridScrolling by remember(listState) { derivedStateOf { listState.isScrollInProgress } }
-    val trackTileBounds = shouldTrackPhotoTileBounds(isSelectionMode, isGridScrolling)
-    val deferThumbnailLoads = shouldDeferPhotoThumbnailLoads(isGridScrolling)
+    val trackTileBounds = shouldTrackPhotoTileBounds(isSelectionMode, revealMediaId != null)
+    val deferThumbnailLoads = remember(listState) {
+        derivedStateOf { shouldDeferPhotoThumbnailLoads(listState.isScrollInProgress) }
+    }
 
     LaunchedEffect(revealMediaId, sections, gridColumns) {
         val mediaId = revealMediaId ?: return@LaunchedEffect
@@ -489,115 +491,19 @@ private fun SelectionBottomActionBar(
         enter = fadeIn(animationSpec = tween(100)) + slideInVertically(initialOffsetY = { it + GalleryMotion.BottomSelectionOffsetPx }),
         exit = fadeOut(animationSpec = tween(GalleryMotion.ViewerChromeFadeMillis)) + slideOutVertically(targetOffsetY = { it + GalleryMotion.BottomSelectionOffsetPx })
     ) {
-        Surface(
+        MediaSelectionCapsule(
+            selectedCount = selectedCount,
+            canSelectAll = selectedCount < totalVisibleCount,
+            onClear = onClear,
+            onSelectAll = onSelectAll,
+            onShare = onShare,
+            onLock = onHide,
+            onMove = onMove,
+            onDelete = onDelete,
             modifier = Modifier
-                .widthIn(max = 520.dp)
-                .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-            shape = RoundedCornerShape(50.dp),
-            shadowElevation = 14.dp
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onClear) {
-                        Icon(
-                            imageVector = Icons.Outlined.Close,
-                            contentDescription = "Cancel selection"
-                        )
-                    }
-                    Text(
-                        text = "%1$,d selected".format(selectedCount),
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    IconButton(
-                        enabled = selectedCount < totalVisibleCount,
-                        onClick = onSelectAll
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.SelectAll,
-                            contentDescription = "Select all"
-                        )
-                    }
-                }
-                Row(modifier = Modifier.fillMaxWidth().height(54.dp)) {
-                    SelectionBottomAction(
-                        label = "Share",
-                        icon = Icons.Outlined.Share,
-                        enabled = selectedCount > 0,
-                        onClick = onShare,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SelectionBottomAction(
-                        label = "Lock",
-                        icon = Icons.Outlined.Lock,
-                        enabled = selectedCount > 0,
-                        onClick = onHide,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SelectionBottomAction(
-                        label = "Move",
-                        icon = Icons.Outlined.Folder,
-                        enabled = selectedCount > 0,
-                        onClick = onMove,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SelectionBottomAction(
-                        label = "Delete",
-                        icon = Icons.Outlined.Delete,
-                        enabled = selectedCount > 0,
-                        destructive = true,
-                        onClick = onDelete,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-        }
-    }
-}
-@Composable
-private fun SelectionBottomAction(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    enabled: Boolean,
-    destructive: Boolean = false,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val contentColor = if (destructive) {
-        MaterialTheme.colorScheme.error
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }.copy(alpha = if (enabled) 1f else 0.38f)
-    TextButton(
-        modifier = modifier.fillMaxWidth().height(54.dp),
-        enabled = enabled,
-        onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 3.dp)
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = label,
-                color = contentColor,
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
+                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+        )
     }
 }
 
@@ -620,7 +526,7 @@ private fun LazyListScope.photoSection(
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
     trackTileBounds: Boolean,
-    deferThumbnailLoads: Boolean,
+    deferThumbnailLoads: State<Boolean>,
     activeSharedElementKey: Any? = null,
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit,
     onMediaLongClick: (MediaItem) -> Unit,
@@ -709,7 +615,7 @@ private fun PhotoGridRow(
     sharedBoundsTransform: BoundsTransform? = null,
     activeSharedElementKey: Any? = null,
     trackTileBounds: Boolean,
-    deferThumbnailLoads: Boolean,
+    deferThumbnailLoads: State<Boolean>,
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit,
     onMediaLongClick: (MediaItem) -> Unit,
     onMediaSelectionToggle: (MediaItem) -> Unit,
@@ -782,8 +688,8 @@ private fun PhotoSkeletonRow(
     }
 }
 
-internal fun shouldTrackPhotoTileBounds(selectionMode: Boolean, scrolling: Boolean): Boolean {
-    return selectionMode || !scrolling
+internal fun shouldTrackPhotoTileBounds(selectionMode: Boolean, revealInProgress: Boolean): Boolean {
+    return selectionMode || revealInProgress
 }
 
 internal fun shouldDeferPhotoThumbnailLoads(scrolling: Boolean): Boolean = scrolling
