@@ -88,7 +88,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
@@ -2927,12 +2926,6 @@ fun GalleryApp(
                 val itemCount = pending.mediaItems.size
                 AlertDialog(
                     onDismissRequest = { pendingLockedRestoreConfirmation = null },
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Filled.LockOpen,
-                            contentDescription = null
-                        )
-                    },
                     title = {
                         Text(lockedMediaRestoreTitle(itemCount))
                     },
@@ -2943,12 +2936,12 @@ fun GalleryApp(
                         TextButton(
                             onClick = { confirmLockedMediaRestore(pending) }
                         ) {
-                            Text("Restore")
+                            Text("Yes")
                         }
                     },
                     dismissButton = {
                         TextButton(onClick = { pendingLockedRestoreConfirmation = null }) {
-                            Text("Cancel")
+                            Text("No")
                         }
                     },
                     shape = RoundedCornerShape(24.dp)
@@ -4273,9 +4266,6 @@ private fun ReferenceMediaOpenOverlay(
     val latestContentReady by rememberUpdatedState(contentReady)
 
     LaunchedEffect(transition.key) {
-        if (!latestContentReady) {
-            snapshotFlow { latestContentReady }.first { it }
-        }
         progress.animateTo(
             targetValue = 1f,
             animationSpec = tween(
@@ -4283,6 +4273,9 @@ private fun ReferenceMediaOpenOverlay(
                 easing = ReferenceViewerOpenEasing
             )
         )
+        if (!latestContentReady) {
+            snapshotFlow { latestContentReady }.first { it }
+        }
         onFinished(transition)
     }
 
@@ -4408,7 +4401,10 @@ private fun ReferenceMediaHeroFrame(
                 thumbnailSize = thumbnailSize,
                 loadQuality = loadQuality,
                 backgroundColor = Color.Black,
-                cachedOnly = cachedOnly
+                cachedOnly = cachedOnly,
+                fallbackImageUri = mediaItem.previewUri ?: mediaItem.contentUri,
+                isVideo = mediaItem.isVideo,
+                animatedPlaceholder = false
             )
         }
     }

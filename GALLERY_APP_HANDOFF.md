@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-08-02
+Last updated: 2026-08-09
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -42,6 +42,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-22 slice: added album arrangement/pinning/swap/codec, stricter document classification/prefilter/cache migration, editor-filter, video-volume, and background-playback policy coverage; the suite now has 81 passing tests.
   - 2026-07-30 slice: added media-management, two-phase vault rollback, viewer-session rotation, adaptive-viewer, fold-safe-pane, and legacy permission tests; the local suite now has 98 passing tests. Instrumentation coverage now exercises encrypted vault round trips, navigation, recreation, compact landscape, and three-button insets.
   - 2026-08-02 slice: added locked-restore confirmation/full-quality warmup and Photos fling/decode policy coverage; the local suite now has 114 passing tests. Debug lint, debug APK assembly, and instrumentation-test APK assembly all pass.
+  - 2026-08-09 slice: added album drop-target/return animation and hidden-first ordering policy tests, and simplified the Locked Media restore confirmation contract; the local suite now has 116 passing tests. Debug lint and debug APK assembly pass.
 - [ ] Gradually move screen state and business logic out of `GalleryApp.kt` into ViewModels and testable state holders.
   - 2026-07-15 slice: extracted viewer delete selection and Photos lazy-list indexing into `GalleryLogic.kt`.
   - 2026-07-15 slice: extracted normalized media/album search documents and matching into `GallerySearchIndex.kt`.
@@ -133,6 +134,39 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-08-09 Viewer Open, Album Reorder, and Hidden Albums Polish
+
+Completed locally on 2026-08-09:
+
+- Simplified the Locked Media restore confirmation to a neutral `Are you sure?` dialog with `Yes` and `No` actions. The explanatory Native Gallery/system-panel copy and lock icon were removed.
+- Viewer hero motion now starts immediately from the already-visible thumbnail instead of waiting behind a full-quality decode. The high-quality frame continues warming during the 330 ms hero and, when necessary, the final hero frame holds until that exact decode is ready before handing off to the viewer.
+- Added a thumbnail fallback directly to the hero layer and disabled its animated placeholder, preventing the intermittent gallery-icon/placeholder frame on photo open while preserving the exact full-quality viewer handoff.
+- Album drag/drop now uses stable pre-transform card bounds, more forgiving overlap/edge hit testing, and a clean spring exchange. A valid target visibly moves toward the source position; the dragged album settles into the target before the persisted swap commits. Invalid drops spring back instead of snapping.
+- Removed the reorder target jiggle/rotation and retuned scale, translation, elevation, and damping for a calmer OEM-gallery feel across hero and grid album sizes.
+- Hidden Albums now places every currently hidden album first while preserving the existing relative order within both the hidden and visible groups.
+- Related hardening: added focused drop-target and hidden-order policy coverage and updated the Locked Media confirmation contract test. The local suite now has 116 passing tests.
+
+Verification:
+
+- `:app:testDebugUnitTest`: BUILD SUCCESSFUL, 116 tests, 0 failures, 0 errors, 0 skipped
+- `:app:lintDebug`: BUILD SUCCESSFUL, 0 errors; 10 existing non-blocking warnings and 2 informational findings
+- `:app:assembleDebug`: BUILD SUCCESSFUL
+- ADB found no attached device, so this pass was not installed or physically smoke-tested.
+
+Latest APK:
+
+    F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+    Size: 65,597,388 bytes
+    Last write: 2026-08-09 11:03:30 Asia/Karachi
+    SHA-256: 6FF2C4D6C4756CC7392A8144BC2A1FA200AB01F4430A538A836FE11A70C6B04C
+
+Physical-device checks still required:
+
+- Open uncached and cached photos repeatedly and confirm every tap begins the hero immediately with no icon/placeholder flash.
+- Reorder albums within the grid, across rows, and onto/from the leading hero; valid drops should exchange smoothly and invalid drops should spring home.
+- Hide and unhide several albums and confirm hidden albums remain grouped at the top.
+- Confirm the Locked Media restore dialog shows only the short question and Yes/No choices.
 
 ## 2026-08-02 Scrolling, Viewer Return, Selection, and Locked Restore Pass
 

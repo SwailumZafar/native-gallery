@@ -6,6 +6,7 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -67,6 +68,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshotFlow
@@ -112,6 +114,7 @@ import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.max
@@ -131,7 +134,7 @@ enum class AlbumDetailSortMode {
 
 private class AlbumBoundsRef(var value: Rect = Rect.Zero)
 
-private const val AlbumDropOverlapFraction = 0.34f
+private const val AlbumDropOverlapFraction = 0.16f
 
 private fun Rect.translatedBy(offset: Offset): Rect = Rect(
     left = left + offset.x,
@@ -167,6 +170,38 @@ private fun hasSufficientAlbumDropOverlap(
 
     return centerInsideTarget || overlapFraction >= AlbumDropOverlapFraction
 }
+internal fun selectAlbumDropTargetId(
+    draggedAlbumId: String,
+    draggedBounds: Rect,
+    orderedAlbumIds: List<String>,
+    boundsByAlbumId: Map<String, Rect>
+): String? {
+    val candidates = orderedAlbumIds.asSequence()
+        .filterNot { it == draggedAlbumId }
+        .mapNotNull { albumId -> boundsByAlbumId[albumId]?.let { albumId to it } }
+        .toList()
+    if (candidates.isEmpty()) return null
+
+    val directTargets = candidates.filter { (_, bounds) ->
+        hasSufficientAlbumDropOverlap(draggedBounds, bounds)
+    }
+    val targetPool = directTargets.ifEmpty {
+        candidates.filter { (_, bounds) ->
+            val horizontalTolerance = bounds.width * 0.18f
+            val verticalTolerance = bounds.height * 0.18f
+            val center = draggedBounds.center
+            center.x >= bounds.left - horizontalTolerance &&
+                center.x <= bounds.right + horizontalTolerance &&
+                center.y >= bounds.top - verticalTolerance &&
+                center.y <= bounds.bottom + verticalTolerance
+        }
+    }
+    return targetPool.minByOrNull { (_, bounds) ->
+        val distance = bounds.center - draggedBounds.center
+        distance.getDistanceSquared()
+    }?.first
+}
+
 
 private enum class AlbumDragSelectMode {
     Add,
@@ -179,6 +214,10 @@ private class AlbumCardInteraction(
     val draggedAlbumId: String?,
     val dropTargetAlbumId: String?,
     val dragOffset: Offset,
+    val dropSettling: Boolean,
+    val dropSettleProgress: Float,
+    val dropSettleStartOffset: Offset,
+    val dropSettleTargetOffset: Offset,
     val dropTargetSwapOffset: Offset,
     val draggedHoverScale: Offset,
     val dropTargetHoverScale: Offset,
@@ -261,12 +300,20 @@ fun AlbumsScreen(
     var dropTargetAlbumId by remember { mutableStateOf<String?>(null) }
     var contextAlbumId by remember { mutableStateOf<String?>(null) }
     var pendingDeleteAlbum by remember { mutableStateOf<Album?>(null) }
+    val reorderScope = rememberCoroutineScope()
+    val dropSettleProgress = remember { Animatable(1f) }
+    var dropSettling by remember { mutableStateOf(false) }
+    var dropSettleStartOffset by remember { mutableStateOf(Offset.Zero) }
+    var dropSettleTargetOffset by remember { mutableStateOf(Offset.Zero) }
+
 
     fun recordAlbumBounds(album: Album, bounds: Rect) {
-        albumBounds[album.id] = bounds
+        if (draggedAlbumId == null) {
+            albumBounds[album.id] = bounds
+        }
         // The click path already carries the card's current bounds. The external cache is only
         // needed for returning to an album tile, so avoid mutating app-level state mid-fling.
-        if (!listState.isScrollInProgress) {
+        if (draggedAlbumId == null && !listState.isScrollInProgress) {
             latestOnAlbumBoundsChanged(album, bounds)
         }
     }
@@ -313,6 +360,9 @@ fun AlbumsScreen(
         draggedAlbumId = null
         dropTargetAlbumId = null
         dragOffset = Offset.Zero
+        dropSettling = false
+        dropSettleStartOffset = Offset.Zero
+        dropSettleTargetOffset = Offset.Zero
     }
 
     val cardInteraction = AlbumCardInteraction(
@@ -321,6 +371,10 @@ fun AlbumsScreen(
         draggedAlbumId = draggedAlbumId,
         dropTargetAlbumId = dropTargetAlbumId,
         dragOffset = dragOffset,
+        dropSettling = dropSettling,
+        dropSettleProgress = dropSettleProgress.value,
+        dropSettleStartOffset = dropSettleStartOffset,
+        dropSettleTargetOffset = dropSettleTargetOffset,
         dropTargetSwapOffset = dropTargetSwapOffset,
         draggedHoverScale = draggedHoverScale,
         dropTargetHoverScale = dropTargetHoverScale,
@@ -343,7 +397,7 @@ fun AlbumsScreen(
             if (canDeleteAlbum(album)) pendingDeleteAlbum = album
         },
         onDragStart = { album ->
-            if (reorderEnabled) {
+            if (reorderEnabled && !dropSettling) {
                 draggedAlbumId = album.id
                 dragOffset = Offset.Zero
                 dropTargetAlbumId = album.id
@@ -352,47 +406,75 @@ fun AlbumsScreen(
         onDrag = { delta ->
             val draggedId = draggedAlbumId
             val origin = draggedId?.let(albumBounds::get)
-            if (draggedId != null && origin != null) {
+            if (draggedId != null && origin != null && !dropSettling) {
                 dragOffset += delta
                 if (dragOffset.getDistanceSquared() > 36f) {
                     contextAlbumId = null
                 }
-                val draggedBounds = origin.translatedBy(dragOffset)
-                dropTargetAlbumId = sortedAlbums.asSequence()
-                    .filterNot { it.id == draggedId }
-                    .mapNotNull { album -> albumBounds[album.id]?.let { bounds -> album.id to bounds } }
-                    .filter { (_, bounds) ->
-                        hasSufficientAlbumDropOverlap(
-                            draggedBounds = draggedBounds,
-                            targetBounds = bounds
-                        )
-                    }
-                    .minByOrNull { (_, bounds) ->
-                        val distance = bounds.center - draggedBounds.center
-                        distance.getDistanceSquared()
-                    }
-                    ?.first
-                    ?: draggedId
+                val translatedBounds = origin.translatedBy(dragOffset)
+                dropTargetAlbumId = selectAlbumDropTargetId(
+                    draggedAlbumId = draggedId,
+                    draggedBounds = translatedBounds,
+                    orderedAlbumIds = sortedAlbums.map(Album::id),
+                    boundsByAlbumId = albumBounds
+                ) ?: draggedId
             }
         },
         onDragEnd = {
             val movedId = draggedAlbumId
-            val targetId = dropTargetAlbumId
-            if (
-                movedId != null &&
-                targetId != null &&
-                movedId != targetId
-            ) {
-                arrangementState = arrangementRepository.save(
+            val origin = movedId?.let(albumBounds::get)
+            if (movedId == null || origin == null || dropSettling) {
+                if (!dropSettling) clearAlbumDrag()
+            } else {
+                val translatedBounds = origin.translatedBy(dragOffset)
+                val targetId = selectAlbumDropTargetId(
+                    draggedAlbumId = movedId,
+                    draggedBounds = translatedBounds,
+                    orderedAlbumIds = sortedAlbums.map(Album::id),
+                    boundsByAlbumId = albumBounds
+                ) ?: movedId
+                val targetBounds = albumBounds[targetId]
+                val settleTarget = if (targetId != movedId && targetBounds != null) {
+                    targetBounds.center - origin.center
+                } else {
+                    Offset.Zero
+                }
+                val nextArrangement = if (targetId != movedId) {
                     AlbumArrangementPolicy.swap(
                         availableIds = availableAlbumIds,
                         state = arrangementState,
                         movedId = movedId,
                         targetId = targetId
                     )
-                )
+                } else {
+                    null
+                }
+
+                if (targetId == movedId && dragOffset.getDistanceSquared() <= 36f) {
+                    clearAlbumDrag()
+                } else {
+                    dropTargetAlbumId = targetId
+                    dropSettleStartOffset = dragOffset
+                    dropSettleTargetOffset = settleTarget
+                    reorderScope.launch {
+                        dropSettleProgress.snapTo(0f)
+                        dropSettling = true
+                        dropSettleProgress.animateTo(
+                            targetValue = 1f,
+                            animationSpec = spring(
+                                dampingRatio = 0.86f,
+                                stiffness = Spring.StiffnessMediumLow
+                            )
+                        )
+                        if (draggedAlbumId == movedId && dropTargetAlbumId == targetId) {
+                            nextArrangement?.let {
+                                arrangementState = arrangementRepository.save(it)
+                            }
+                            clearAlbumDrag()
+                        }
+                    }
+                }
             }
-            clearAlbumDrag()
         }
     )
 
@@ -2017,60 +2099,63 @@ private fun Modifier.albumReorderMotion(
     val isDropTarget = interaction.dropTargetAlbumId == album.id && !isDragging
     val animatedScaleX by animateFloatAsState(
         targetValue = when {
-            isDragging -> interaction.draggedHoverScale.x * 1.035f
-            isDropTarget -> interaction.dropTargetHoverScale.x * 0.985f
+            isDragging -> interaction.draggedHoverScale.x * 1.015f
+            isDropTarget -> interaction.dropTargetHoverScale.x * 0.995f
             else -> 1f
         },
         animationSpec = spring(
-            dampingRatio = 0.58f,
+            dampingRatio = 0.82f,
             stiffness = Spring.StiffnessMediumLow
         ),
         label = "album reorder scale x"
     )
     val animatedScaleY by animateFloatAsState(
         targetValue = when {
-            isDragging -> interaction.draggedHoverScale.y * 1.035f
-            isDropTarget -> interaction.dropTargetHoverScale.y * 0.985f
+            isDragging -> interaction.draggedHoverScale.y * 1.015f
+            isDropTarget -> interaction.dropTargetHoverScale.y * 0.995f
             else -> 1f
         },
         animationSpec = spring(
-            dampingRatio = 0.58f,
+            dampingRatio = 0.82f,
             stiffness = Spring.StiffnessMediumLow
         ),
         label = "album reorder scale y"
     )
     val swapX by animateFloatAsState(
         targetValue = if (isDropTarget) interaction.dropTargetSwapOffset.x else 0f,
-        animationSpec = spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessLow),
+        animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMediumLow),
         label = "album swap x"
     )
     val swapY by animateFloatAsState(
         targetValue = if (isDropTarget) interaction.dropTargetSwapOffset.y else 0f,
-        animationSpec = spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessLow),
+        animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMediumLow),
         label = "album swap y"
     )
-    val targetJiggle by animateFloatAsState(
-        targetValue = if (isDropTarget) {
-            if (interaction.dropTargetSwapOffset.x >= 0f) 1.1f else -1.1f
-        } else {
-            0f
-        },
-        animationSpec = spring(dampingRatio = 0.42f, stiffness = Spring.StiffnessLow),
-        label = "album target jiggle"
-    )
+    val settleFraction = interaction.dropSettleProgress.coerceIn(0f, 1f)
+    val settledDragOffset = if (interaction.dropSettling) {
+        interaction.dropSettleStartOffset +
+            (interaction.dropSettleTargetOffset - interaction.dropSettleStartOffset) * settleFraction
+    } else {
+        interaction.dragOffset
+    }
     return this
-        .zIndex(if (isDragging) 4f else 0f)
+        .zIndex(
+            when {
+                isDragging -> 6f
+                isDropTarget -> 3f
+                else -> 0f
+            }
+        )
         .graphicsLayer {
             scaleX = animatedScaleX
             scaleY = animatedScaleY
-            translationX = if (isDragging) interaction.dragOffset.x else swapX
-            translationY = if (isDragging) interaction.dragOffset.y else swapY
-            rotationZ = if (isDragging) {
-                (interaction.dragOffset.x / 180f).coerceIn(-2.2f, 2.2f)
-            } else {
-                targetJiggle
+            translationX = if (isDragging) settledDragOffset.x else swapX
+            translationY = if (isDragging) settledDragOffset.y else swapY
+            shadowElevation = when {
+                isDragging -> 20.dp.toPx()
+                isDropTarget -> 8.dp.toPx()
+                else -> 0f
             }
-            shadowElevation = if (isDragging) 18.dp.toPx() else 0f
         }
 }
 

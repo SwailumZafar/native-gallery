@@ -40,6 +40,11 @@ fun HiddenItemsScreen(
     onHiddenChange: (Album, Boolean) -> Unit,
     contentPadding: PaddingValues
 ) {
+    val hiddenAlbumIds = albums.mapNotNull { album ->
+        album.id.takeIf { hiddenStates[album.id] == true }
+    }.toSet()
+    val orderedAlbums = orderAlbumsForHiddenItems(albums, hiddenAlbumIds)
+
     LazyColumn(
         contentPadding = PaddingValues(
             start = 18.dp,
@@ -68,7 +73,7 @@ fun HiddenItemsScreen(
         }
 
         item(key = "hidden-albums-list", contentType = "hidden-albums-list") {
-            if (albums.isEmpty()) {
+            if (orderedAlbums.isEmpty()) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     color = MaterialTheme.colorScheme.surface,
@@ -90,13 +95,13 @@ fun HiddenItemsScreen(
                     shadowElevation = 1.dp
                 ) {
                     Column(modifier = Modifier.padding(vertical = 10.dp)) {
-                        albums.forEachIndexed { index, album ->
+                        orderedAlbums.forEachIndexed { index, album ->
                             HiddenAlbumRow(
                                 album = album,
                                 checked = hiddenStates[album.id] == true,
                                 onCheckedChange = { checked -> onHiddenChange(album, checked) }
                             )
-                            if (index != albums.lastIndex) {
+                            if (index != orderedAlbums.lastIndex) {
                                 Spacer(Modifier.height(1.dp))
                             }
                         }
@@ -245,4 +250,13 @@ private fun hiddenAlbumRowLabel(itemCount: Int, checked: Boolean): String {
     } else {
         "%1$,d items".format(itemCount)
     }
+}
+
+internal fun orderAlbumsForHiddenItems(
+    albums: List<Album>,
+    hiddenAlbumIds: Set<String>
+): List<Album> {
+    val hiddenAlbums = albums.filter { it.id in hiddenAlbumIds }
+    val visibleAlbums = albums.filterNot { it.id in hiddenAlbumIds }
+    return hiddenAlbums + visibleAlbums
 }

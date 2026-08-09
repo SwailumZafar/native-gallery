@@ -585,10 +585,8 @@ private fun lockedMediaBadgeLabel(lockedItemCount: Int, isUnlocked: Boolean): St
     }
 }
 
-internal fun lockedMediaRestoreTitle(itemCount: Int): String =
-    if (itemCount == 1) "Restore this item?" else "Restore %1$,d items?".format(itemCount)
+internal fun lockedMediaRestoreTitle(_itemCount: Int): String = "Are you sure?"
 
 internal fun lockedMediaRestoreMessage(itemCount: Int): String {
-    val subject = if (itemCount == 1) "The original-quality item" else "The original-quality items"
-    return "$subject will return to your device gallery. If a public copy is missing, Native Gallery decrypts a new full-quality copy. This is an in-app confirmation, not Android's system permission panel; Android normally will not ask again."
+    return if (itemCount == 1) "Restore this item?" else "Restore %1$,d items?".format(itemCount)
 }
