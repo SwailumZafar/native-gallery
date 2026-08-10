@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-08-09
+Last updated: 2026-08-10
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -108,18 +108,18 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Latest pushed implementation baseline: 8de211f Stabilize gallery scrolling and locked media restore
-GitHub sync: implementation commit 8de211f and this handoff are synchronized on origin/main
+Latest pushed implementation baseline: 92cc6c9 Polish viewer opening and album reordering
+GitHub sync: implementation commit 92cc6c9 and this handoff are synchronized on origin/main
 Repository visibility: private
 ```
 
 Recent saved work:
 
 ```text
+92cc6c9 Polish viewer opening and album reordering
 8de211f Stabilize gallery scrolling and locked media restore
 b69c43b Improve gallery scrolling and media actions
 ab217ac Refine gallery motion and viewer controls
-12bb5a9 Restore gallery navigation and viewer chrome
 ```
 
 Repository project-file status:
@@ -137,7 +137,7 @@ temporary video frames, and Codex working data must remain uncommitted.
 
 ## 2026-08-09 Viewer Open, Album Reorder, and Hidden Albums Polish
 
-Completed locally on 2026-08-09:
+Completed locally on 2026-08-09 and pushed on 2026-08-10 in implementation commit `92cc6c9`:
 
 - Simplified the Locked Media restore confirmation to a neutral `Are you sure?` dialog with `Yes` and `No` actions. The explanatory Native Gallery/system-panel copy and lock icon were removed.
 - Viewer hero motion now starts immediately from the already-visible thumbnail instead of waiting behind a full-quality decode. The high-quality frame continues warming during the 330 ms hero and, when necessary, the final hero frame holds until that exact decode is ready before handing off to the viewer.
