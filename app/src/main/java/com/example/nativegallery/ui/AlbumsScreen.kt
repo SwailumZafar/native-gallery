@@ -2,14 +2,20 @@
 
 package com.example.nativegallery.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,6 +36,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -65,6 +72,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -86,8 +95,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -99,6 +110,7 @@ import com.example.nativegallery.model.Album
 import com.example.nativegallery.model.AlbumLayoutMode
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryImage
+import com.example.nativegallery.ui.components.GalleryFastScroller
 import com.example.nativegallery.ui.components.HeaderActionButton
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.GalleryScreenHeader
@@ -106,7 +118,8 @@ import com.example.nativegallery.ui.components.PremiumDropdownMenu
 import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
 import com.example.nativegallery.ui.components.PremiumOverflowButton
 import com.example.nativegallery.ui.components.MediaThumbnail
-import com.example.nativegallery.ui.components.MediaSelectionCapsule
+import com.example.nativegallery.ui.components.MediaSelectionActionBar
+import com.example.nativegallery.ui.components.MediaSelectionTopBar
 import com.example.nativegallery.ui.components.bouncyClickable
 import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
@@ -219,8 +232,7 @@ private class AlbumCardInteraction(
     val dropSettleStartOffset: Offset,
     val dropSettleTargetOffset: Offset,
     val dropTargetSwapOffset: Offset,
-    val draggedHoverScale: Offset,
-    val dropTargetHoverScale: Offset,
+    val draggedPreviewScale: Float,
     val contextAlbumId: String?,
     val canDelete: (Album) -> Boolean,
     val onPinToggle: (Album) -> Unit,
@@ -260,6 +272,7 @@ fun AlbumsScreen(
     basicTileColumns: Int = 3,
     heroHeight: androidx.compose.ui.unit.Dp = 176.dp
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
     var overflowExpanded by rememberSaveable { mutableStateOf(false) }
     var layoutExpanded by rememberSaveable { mutableStateOf(false) }
     var sortAlphabetically by rememberSaveable { mutableStateOf(false) }
@@ -291,6 +304,9 @@ fun AlbumsScreen(
     val leadingAlbum = sortedAlbums.firstOrNull()
     val remainingAlbums = sortedAlbums.drop(1)
     val reorderEnabled = !sortAlphabetically && searchQuery.isBlank() && sortedAlbums.size > 1
+    val deferAlbumCoverLoads = remember(listState) {
+        derivedStateOf { listState.isScrollInProgress }
+    }
     // Coordinates change on every fling frame. Keeping them out of snapshot state prevents
     // album scrolling from invalidating and recomposing the whole screen.
     val albumBounds = remember { mutableMapOf<String, Rect>() }
@@ -335,25 +351,37 @@ fun AlbumsScreen(
     val dropTargetSwapOffset = if (
         draggedBounds != null && dropTargetBounds != null && draggedAlbumId != dropTargetAlbumId
     ) {
-        draggedBounds.center - dropTargetBounds.center
+        val fullOffset = draggedBounds.center - dropTargetBounds.center
+        val widthRatio = max(
+            draggedBounds.width / dropTargetBounds.width.coerceAtLeast(1f),
+            dropTargetBounds.width / draggedBounds.width.coerceAtLeast(1f)
+        )
+        val heightRatio = max(
+            draggedBounds.height / dropTargetBounds.height.coerceAtLeast(1f),
+            dropTargetBounds.height / draggedBounds.height.coerceAtLeast(1f)
+        )
+        if (widthRatio > 1.32f || heightRatio > 1.32f) {
+            // The hero and square cards should acknowledge each other without trying to exchange
+            // differently shaped frames. Cap the target nudge while the dragged card stays true
+            // to its own aspect ratio.
+            val distance = fullOffset.getDistance().coerceAtLeast(1f)
+            val maximumNudge = min(dropTargetBounds.width, dropTargetBounds.height) * 0.16f
+            fullOffset * (maximumNudge / distance).coerceAtMost(1f)
+        } else {
+            fullOffset
+        }
     } else {
         Offset.Zero
     }
-    val draggedHoverScale = if (draggedBounds != null && dropTargetBounds != null) {
-        Offset(
-            x = (dropTargetBounds.width / draggedBounds.width).coerceIn(0.58f, 1.72f),
-            y = (dropTargetBounds.height / draggedBounds.height).coerceIn(0.72f, 1.38f)
-        )
+    val draggedPreviewScale = if (
+        draggedBounds != null && dropTargetBounds != null && draggedAlbumId != dropTargetAlbumId
+    ) {
+        min(
+            dropTargetBounds.width / draggedBounds.width.coerceAtLeast(1f),
+            dropTargetBounds.height / draggedBounds.height.coerceAtLeast(1f)
+        ).coerceIn(0.72f, 1.08f)
     } else {
-        Offset(1f, 1f)
-    }
-    val dropTargetHoverScale = if (draggedBounds != null && dropTargetBounds != null) {
-        Offset(
-            x = (draggedBounds.width / dropTargetBounds.width).coerceIn(0.58f, 1.72f),
-            y = (draggedBounds.height / dropTargetBounds.height).coerceIn(0.72f, 1.38f)
-        )
-    } else {
-        Offset(1f, 1f)
+        1f
     }
 
     fun clearAlbumDrag() {
@@ -376,8 +404,7 @@ fun AlbumsScreen(
         dropSettleStartOffset = dropSettleStartOffset,
         dropSettleTargetOffset = dropSettleTargetOffset,
         dropTargetSwapOffset = dropTargetSwapOffset,
-        draggedHoverScale = draggedHoverScale,
-        dropTargetHoverScale = dropTargetHoverScale,
+        draggedPreviewScale = draggedPreviewScale,
         contextAlbumId = contextAlbumId,
         canDelete = canDeleteAlbum,
         onPinToggle = { album ->
@@ -482,9 +509,9 @@ fun AlbumsScreen(
     LazyColumn(
         state = listState,
         contentPadding = PaddingValues(
-            start = 18.dp,
+            start = if (layoutMode == AlbumLayoutMode.Basic) 8.dp else 18.dp,
             top = 58.dp,
-            end = 18.dp,
+            end = if (layoutMode == AlbumLayoutMode.Basic) 8.dp else 18.dp,
             bottom = contentPadding.calculateBottomPadding() + 6.dp
         )
     ) {
@@ -499,6 +526,7 @@ fun AlbumsScreen(
                     icon = if (layoutMode == AlbumLayoutMode.BigTiles) Icons.Filled.GridView else Icons.Filled.Apps,
                     contentDescription = "Switch layout",
                     onClick = {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onLayoutModeChange(
                             if (layoutMode == AlbumLayoutMode.BigTiles) AlbumLayoutMode.Basic else AlbumLayoutMode.BigTiles
                         )
@@ -521,6 +549,7 @@ fun AlbumsScreen(
                                 if (sortAlphabetically) Icon(Icons.Filled.Check, contentDescription = null)
                             },
                             onClick = {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 sortAlphabetically = !sortAlphabetically
                                 overflowExpanded = false
                             }
@@ -555,7 +584,12 @@ fun AlbumsScreen(
                     layoutMode = layoutMode,
                     expanded = layoutExpanded,
                     onExpandedChange = { layoutExpanded = it },
-                    onLayoutModeChange = onLayoutModeChange
+                    onLayoutModeChange = { nextMode ->
+                        if (nextMode != layoutMode) {
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onLayoutModeChange(nextMode)
+                        }
+                    }
                 )
             }
             Spacer(Modifier.height(18.dp))
@@ -583,6 +617,7 @@ fun AlbumsScreen(
                             height = heroHeight,
                             activeTransitionAlbumId = activeTransitionAlbumId,
                             cardInteraction = cardInteraction,
+                            deferThumbnailLoads = deferAlbumCoverLoads,
                             onAlbumClick = onAlbumClick,
                             onAlbumBoundsChanged = ::recordAlbumBounds
                         )
@@ -595,6 +630,7 @@ fun AlbumsScreen(
                 columns = bigTileColumns,
                 activeTransitionAlbumId = activeTransitionAlbumId,
                 cardInteraction = cardInteraction,
+                deferThumbnailLoads = deferAlbumCoverLoads,
                 onAlbumClick = onAlbumClick,
                 onAlbumBoundsChanged = ::recordAlbumBounds
             )
@@ -604,6 +640,7 @@ fun AlbumsScreen(
                 columns = basicTileColumns,
                 activeTransitionAlbumId = activeTransitionAlbumId,
                 cardInteraction = cardInteraction,
+                deferThumbnailLoads = deferAlbumCoverLoads,
                 onAlbumClick = onAlbumClick,
                 onAlbumBoundsChanged = ::recordAlbumBounds
             )
@@ -615,6 +652,14 @@ fun AlbumsScreen(
             }
         }
     }
+        if (!isLoading) {
+            GalleryFastScroller(
+                listState = listState,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .zIndex(2f)
+            )
+        }
     }
 
     if (showCreateDialog) {
@@ -672,7 +717,7 @@ fun AlbumsScreen(
             dismissButton = {
                 TextButton(onClick = { pendingDeleteAlbum = null }) { Text("Cancel") }
             },
-            shape = RoundedCornerShape(18.dp)
+            shape = RoundedCornerShape(24.dp)
         )
     }
 
@@ -950,6 +995,7 @@ private fun LazyListScope.bigAlbumRows(
     columns: Int,
     activeTransitionAlbumId: String?,
     cardInteraction: AlbumCardInteraction,
+    deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     val safeColumns = columns.coerceAtLeast(1)
@@ -968,6 +1014,7 @@ private fun LazyListScope.bigAlbumRows(
             columns = safeColumns,
             activeTransitionAlbumId = activeTransitionAlbumId,
             cardInteraction = cardInteraction,
+            deferThumbnailLoads = deferThumbnailLoads,
             onAlbumClick = onAlbumClick,
             onAlbumBoundsChanged = onAlbumBoundsChanged
         )
@@ -980,6 +1027,7 @@ private fun LazyListScope.basicAlbumRows(
     columns: Int,
     activeTransitionAlbumId: String?,
     cardInteraction: AlbumCardInteraction,
+    deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     val safeColumns = columns.coerceAtLeast(1)
@@ -998,6 +1046,7 @@ private fun LazyListScope.basicAlbumRows(
             columns = safeColumns,
             activeTransitionAlbumId = activeTransitionAlbumId,
             cardInteraction = cardInteraction,
+            deferThumbnailLoads = deferThumbnailLoads,
             onAlbumClick = onAlbumClick,
             onAlbumBoundsChanged = onAlbumBoundsChanged
         )
@@ -1011,6 +1060,7 @@ private fun AlbumHeroCard(
     height: androidx.compose.ui.unit.Dp,
     activeTransitionAlbumId: String?,
     cardInteraction: AlbumCardInteraction,
+    deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     AlbumImageCard(
@@ -1021,6 +1071,7 @@ private fun AlbumHeroCard(
         cornerRadius = 24.dp,
         activeTransitionAlbumId = activeTransitionAlbumId,
         cardInteraction = cardInteraction,
+        deferThumbnailLoads = deferThumbnailLoads,
         onAlbumClick = onAlbumClick,
         onAlbumBoundsChanged = onAlbumBoundsChanged
     )
@@ -1032,6 +1083,7 @@ private fun BigAlbumRow(
     columns: Int,
     activeTransitionAlbumId: String?,
     cardInteraction: AlbumCardInteraction,
+    deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -1048,6 +1100,7 @@ private fun BigAlbumRow(
                         cornerRadius = 22.dp,
                         activeTransitionAlbumId = activeTransitionAlbumId,
                         cardInteraction = cardInteraction,
+                        deferThumbnailLoads = deferThumbnailLoads,
                         onAlbumClick = onAlbumClick,
                         onAlbumBoundsChanged = onAlbumBoundsChanged
                     )
@@ -1066,12 +1119,16 @@ private fun BasicAlbumRow(
     columns: Int,
     activeTransitionAlbumId: String?,
     cardInteraction: AlbumCardInteraction,
+    deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val spacing = 8.dp
+        val spacing = 6.dp
         val cellWidth = (maxWidth - spacing * (columns - 1)) / columns
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(spacing)
+        ) {
             albums.forEach { album ->
                 key(album.id) {
                     val albumBounds = remember(album.id) { AlbumBoundsRef() }
@@ -1084,7 +1141,7 @@ private fun BasicAlbumRow(
                             .hideForAlbumTransition(album.id == activeTransitionAlbumId)
                     ) {
                         Box {
-                            ResourceImage(
+                            GalleryImage(
                                 imageRes = album.coverRes,
                                 imageUri = album.coverUri,
                                 contentDescription = album.name,
@@ -1094,9 +1151,10 @@ private fun BasicAlbumRow(
                                         val bounds = coordinates.boundsInWindow()
                                         albumBounds.value = bounds
                                         onAlbumBoundsChanged(album, bounds)
-                                    },
+                                },
                                 cornerRadius = 18.dp,
-                                thumbnailSize = 384
+                                thumbnailSize = 384,
+                                deferUncachedLoad = deferThumbnailLoads
                             )
                             AlbumContextMenu(
                                 album = album,
@@ -1170,6 +1228,7 @@ fun AlbumDetailScreen(
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit = { _, _ -> },
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
     val sortedMediaItems = remember(mediaItems, sortMode) {
         sortAlbumMedia(mediaItems, sortMode)
     }
@@ -1191,6 +1250,10 @@ fun AlbumDetailScreen(
     val tileBounds = remember(album.id) { mutableMapOf<String, Rect>() }
     val rootBounds = remember(album.id) { AlbumBoundsRef() }
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
+    val deferThumbnailLoads = remember(listState) {
+        derivedStateOf { listState.isScrollInProgress }
+    }
+    val trackMediaBounds = selectedMediaIds.isNotEmpty() || revealMediaId != null
     val isSelectionMode = selectedMediaIds.isNotEmpty()
     var pinchPreviewScale by remember { mutableStateOf(1f) }
 
@@ -1311,7 +1374,10 @@ fun AlbumDetailScreen(
                                         AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Spacious
                                         AlbumDetailGridMode.Spacious -> AlbumDetailGridMode.Spacious
                                     }
-                                    if (nextMode != gridMode) onGridModeChange(nextMode)
+                                    if (nextMode != gridMode) {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onGridModeChange(nextMode)
+                                    }
                                     densityChanged = true
                                 } else if (!densityChanged && cumulativeZoom <= 0.86f) {
                                     val nextMode = when (gridMode) {
@@ -1319,7 +1385,10 @@ fun AlbumDetailScreen(
                                         AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Compact
                                         AlbumDetailGridMode.Compact -> AlbumDetailGridMode.Compact
                                     }
-                                    if (nextMode != gridMode) onGridModeChange(nextMode)
+                                    if (nextMode != gridMode) {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onGridModeChange(nextMode)
+                                    }
                                     densityChanged = true
                                 }
                                 event.changes.forEach { it.consume() }
@@ -1332,13 +1401,18 @@ fun AlbumDetailScreen(
                 }
             }
     ) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.graphicsLayer {
+        val gridTransformModifier = if (pinchPreviewScale != 1f || revealProgress < 1f) {
+            Modifier.graphicsLayer {
                 alpha = GalleryMotion.smoothstep(0.48f, 0.78f, revealProgress)
                 scaleX = pinchPreviewScale
                 scaleY = pinchPreviewScale
-            },
+            }
+        } else {
+            Modifier
+        }
+        LazyColumn(
+            state = listState,
+            modifier = gridTransformModifier,
             contentPadding = PaddingValues(
                 start = 8.dp,
                 top = gridTopPadding,
@@ -1369,6 +1443,8 @@ fun AlbumDetailScreen(
                     sharedElementPrefix = "album-${album.id}",
                     activeSharedElementKey = activeSharedElementKey,
                     selectedMediaIds = selectedMediaIds,
+                    trackMediaBounds = trackMediaBounds,
+                    deferThumbnailLoads = deferThumbnailLoads,
                     onMediaBoundsChanged = { mediaItem, bounds ->
                         tileBounds[mediaItem.id] = bounds
                         onMediaBoundsChanged(mediaItem, bounds)
@@ -1407,27 +1483,57 @@ fun AlbumDetailScreen(
                 modifier = Modifier.padding(start = 10.dp, top = 48.dp, end = 10.dp, bottom = 14.dp)
             )
         }
-        if (selectedMediaIds.isNotEmpty()) {
-            Box(
+        if (selectedMediaIds.isEmpty() && sortedMediaItems.isNotEmpty()) {
+            GalleryFastScroller(
+                listState = listState,
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(
-                        start = 12.dp,
-                        end = 12.dp,
-                        bottom = contentPadding.calculateBottomPadding() + 12.dp
-                    )
-            ) {
-                AlbumSelectionToolbar(
-                    selectedCount = selectedMediaIds.size,
-                    totalVisibleCount = sortedMediaItems.size,
-                    onClear = onSelectionClear,
-                    onSelectAll = onSelectAllVisible,
-                    onShare = onShareSelected,
-                    onMove = onMoveSelected,
-                    onDelete = onDeleteSelected,
-                    onHide = onHideSelected
+                    .align(Alignment.CenterEnd)
+                    .zIndex(3f)
+            )
+        }
+        AnimatedVisibility(
+            visible = isSelectionMode,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .zIndex(4f),
+            enter = fadeIn(tween(140)) + slideInVertically(
+                animationSpec = tween(180),
+                initialOffsetY = { -it / 2 }
+            ),
+            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { -it / 2 })
+        ) {
+            MediaSelectionTopBar(
+                selectedCount = selectedMediaIds.size,
+                canSelectAll = selectedMediaIds.size < sortedMediaItems.size,
+                onClear = onSelectionClear,
+                onSelectAll = onSelectAllVisible,
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(start = 12.dp, top = 8.dp, end = 12.dp)
+            )
+        }
+        AnimatedVisibility(
+            visible = isSelectionMode,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(4f),
+            enter = fadeIn(tween(140)) + slideInVertically(
+                animationSpec = tween(190),
+                initialOffsetY = { it / 2 + 24 }
+            ),
+            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { it / 2 + 24 })
+        ) {
+            AlbumSelectionToolbar(
+                onShare = onShareSelected,
+                onMove = onMoveSelected,
+                onDelete = onDeleteSelected,
+                onHide = onHideSelected,
+                modifier = Modifier.padding(
+                    start = 12.dp,
+                    end = 12.dp,
+                    bottom = contentPadding.calculateBottomPadding() + 4.dp
                 )
-            }
+            )
         }
     }
 }
@@ -1548,6 +1654,7 @@ private fun AlbumDetailHeader(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -1575,67 +1682,33 @@ private fun AlbumDetailHeader(
                         }
                     )
                     PremiumDropdownMenuItem(
-                        text = { Text("Newest first") },
+                        text = { Text("Sort: ${sortMode.label()}") },
                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null) },
-                        trailingIcon = {
-                            if (sortMode == AlbumDetailSortMode.Newest) Icon(Icons.Filled.Check, contentDescription = null)
-                        },
+                        trailingIcon = { Icon(Icons.Filled.ExpandMore, contentDescription = null) },
                         onClick = {
-                            onSortModeChange(AlbumDetailSortMode.Newest)
-                            menuExpanded = false
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onSortModeChange(
+                                when (sortMode) {
+                                    AlbumDetailSortMode.Newest -> AlbumDetailSortMode.Oldest
+                                    AlbumDetailSortMode.Oldest -> AlbumDetailSortMode.Name
+                                    AlbumDetailSortMode.Name -> AlbumDetailSortMode.Newest
+                                }
+                            )
                         }
                     )
                     PremiumDropdownMenuItem(
-                        text = { Text("Oldest first") },
-                        trailingIcon = {
-                            if (sortMode == AlbumDetailSortMode.Oldest) Icon(Icons.Filled.Check, contentDescription = null)
-                        },
-                        onClick = {
-                            onSortModeChange(AlbumDetailSortMode.Oldest)
-                            menuExpanded = false
-                        }
-                    )
-                    PremiumDropdownMenuItem(
-                        text = { Text("Name") },
-                        trailingIcon = {
-                            if (sortMode == AlbumDetailSortMode.Name) Icon(Icons.Filled.Check, contentDescription = null)
-                        },
-                        onClick = {
-                            onSortModeChange(AlbumDetailSortMode.Name)
-                            menuExpanded = false
-                        }
-                    )
-                    PremiumDropdownMenuItem(
-                        text = { Text("Compact grid") },
+                        text = { Text("Grid: ${gridMode.label()}") },
                         leadingIcon = { Icon(Icons.Filled.GridView, contentDescription = null) },
-                        trailingIcon = {
-                            if (gridMode == AlbumDetailGridMode.Compact) Icon(Icons.Filled.Check, contentDescription = null)
-                        },
+                        trailingIcon = { Icon(Icons.Filled.ExpandMore, contentDescription = null) },
                         onClick = {
-                            onGridModeChange(AlbumDetailGridMode.Compact)
-                            menuExpanded = false
-                        }
-                    )
-                    PremiumDropdownMenuItem(
-                        text = { Text("Comfortable grid") },
-                        leadingIcon = { Icon(Icons.Filled.Apps, contentDescription = null) },
-                        trailingIcon = {
-                            if (gridMode == AlbumDetailGridMode.Comfortable) Icon(Icons.Filled.Check, contentDescription = null)
-                        },
-                        onClick = {
-                            onGridModeChange(AlbumDetailGridMode.Comfortable)
-                            menuExpanded = false
-                        }
-                    )
-                    PremiumDropdownMenuItem(
-                        text = { Text("Spacious grid") },
-                        leadingIcon = { Icon(Icons.Filled.Apps, contentDescription = null) },
-                        trailingIcon = {
-                            if (gridMode == AlbumDetailGridMode.Spacious) Icon(Icons.Filled.Check, contentDescription = null)
-                        },
-                        onClick = {
-                            onGridModeChange(AlbumDetailGridMode.Spacious)
-                            menuExpanded = false
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onGridModeChange(
+                                when (gridMode) {
+                                    AlbumDetailGridMode.Compact -> AlbumDetailGridMode.Comfortable
+                                    AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Spacious
+                                    AlbumDetailGridMode.Spacious -> AlbumDetailGridMode.Compact
+                                }
+                            )
                         }
                     )
                     if (onHideAlbum != null && !album.isAllPhotos) {
@@ -1669,24 +1742,18 @@ private fun AlbumDetailHeader(
 
 @Composable
 private fun AlbumSelectionToolbar(
-    selectedCount: Int,
-    totalVisibleCount: Int,
-    onClear: () -> Unit,
-    onSelectAll: () -> Unit,
     onShare: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
-    onHide: () -> Unit
+    onHide: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    MediaSelectionCapsule(
-        selectedCount = selectedCount,
-        canSelectAll = selectedCount < totalVisibleCount,
-        onClear = onClear,
-        onSelectAll = onSelectAll,
+    MediaSelectionActionBar(
         onShare = onShare,
         onLock = onHide,
         onMove = onMove,
-        onDelete = onDelete
+        onDelete = onDelete,
+        modifier = modifier
     )
 }
 private fun LazyListScope.albumDetailRows(
@@ -1698,6 +1765,8 @@ private fun LazyListScope.albumDetailRows(
     sharedElementPrefix: String,
     activeSharedElementKey: Any? = null,
     selectedMediaIds: Set<String>,
+    trackMediaBounds: Boolean,
+    deferThumbnailLoads: State<Boolean>,
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit,
     onMediaLongClick: (MediaItem) -> Unit,
     onMediaSelectionToggle: (MediaItem) -> Unit,
@@ -1722,6 +1791,8 @@ private fun LazyListScope.albumDetailRows(
             sharedElementPrefix = sharedElementPrefix,
             activeSharedElementKey = activeSharedElementKey,
             selectedMediaIds = selectedMediaIds,
+            trackMediaBounds = trackMediaBounds,
+            deferThumbnailLoads = deferThumbnailLoads,
             onMediaBoundsChanged = onMediaBoundsChanged,
             onMediaLongClick = onMediaLongClick,
             onMediaSelectionToggle = onMediaSelectionToggle,
@@ -1742,6 +1813,8 @@ private fun AlbumDetailRow(
     sharedElementPrefix: String,
     activeSharedElementKey: Any? = null,
     selectedMediaIds: Set<String>,
+    trackMediaBounds: Boolean,
+    deferThumbnailLoads: State<Boolean>,
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit,
     onMediaLongClick: (MediaItem) -> Unit,
     onMediaSelectionToggle: (MediaItem) -> Unit,
@@ -1752,7 +1825,7 @@ private fun AlbumDetailRow(
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
             mediaItems.forEach { mediaItem ->
                 val sharedElementKey = "$sharedElementPrefix-media-${mediaItem.id}"
-                val mediaBounds = remember(mediaItem.id) { AlbumBoundsRef() }
+                val selectionMode = selectedMediaIds.isNotEmpty()
                 MediaThumbnail(
                     mediaItem = mediaItem,
                     modifier = Modifier.size(cellSize),
@@ -1763,16 +1836,19 @@ private fun AlbumDetailRow(
                     sharedBoundsTransform = sharedBoundsTransform,
                     isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
                     selected = selectedMediaIds.contains(mediaItem.id),
-                    onBoundsChanged = { bounds ->
-                        mediaBounds.value = bounds
-                        onMediaBoundsChanged(mediaItem, bounds)
+                    deferUncachedLoad = deferThumbnailLoads,
+                    onBoundsChanged = if (trackMediaBounds) {
+                        { bounds -> onMediaBoundsChanged(mediaItem, bounds) }
+                    } else {
+                        null
                     },
                     onLongClick = { onMediaLongClick(mediaItem) },
-                    onClick = {
-                        if (selectedMediaIds.isNotEmpty()) {
+                    onClickWithBounds = { bounds ->
+                        onMediaBoundsChanged(mediaItem, bounds)
+                        if (selectionMode) {
                             onMediaSelectionToggle(mediaItem)
                         } else {
-                            onMediaClick(mediaItem, mediaBounds.value, sharedElementKey, sharedElementPrefix)
+                            onMediaClick(mediaItem, bounds, sharedElementKey, sharedElementPrefix)
                         }
                     }
                 )
@@ -2015,6 +2091,7 @@ private fun AlbumImageCard(
     cornerRadius: androidx.compose.ui.unit.Dp,
     activeTransitionAlbumId: String?,
     cardInteraction: AlbumCardInteraction,
+    deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
     onAlbumBoundsChanged: (Album, Rect) -> Unit) {
     val albumBounds = remember(album.id) { AlbumBoundsRef() }
@@ -2033,13 +2110,14 @@ private fun AlbumImageCard(
             .bouncyClickable(enabled = album.id != activeTransitionAlbumId) { onAlbumClick(album, albumBounds.value) }
             .hideForAlbumTransition(album.id == activeTransitionAlbumId)
     ) {
-        ResourceImage(
+        GalleryImage(
             imageRes = album.coverRes,
             imageUri = album.coverUri,
             contentDescription = album.name,
             modifier = Modifier.fillMaxSize(),
             cornerRadius = 0.dp,
-            thumbnailSize = 512
+            thumbnailSize = 512,
+            deferUncachedLoad = deferThumbnailLoads
         )
         Box(
             modifier = Modifier
@@ -2097,29 +2175,17 @@ private fun Modifier.albumReorderMotion(
 
     val isDragging = interaction.draggedAlbumId == album.id
     val isDropTarget = interaction.dropTargetAlbumId == album.id && !isDragging
-    val animatedScaleX by animateFloatAsState(
+    val animatedScale by animateFloatAsState(
         targetValue = when {
-            isDragging -> interaction.draggedHoverScale.x * 1.015f
-            isDropTarget -> interaction.dropTargetHoverScale.x * 0.995f
+            isDragging -> interaction.draggedPreviewScale * 1.018f
+            isDropTarget -> 0.972f
             else -> 1f
         },
         animationSpec = spring(
-            dampingRatio = 0.82f,
-            stiffness = Spring.StiffnessMediumLow
+            dampingRatio = 0.88f,
+            stiffness = Spring.StiffnessMedium
         ),
-        label = "album reorder scale x"
-    )
-    val animatedScaleY by animateFloatAsState(
-        targetValue = when {
-            isDragging -> interaction.draggedHoverScale.y * 1.015f
-            isDropTarget -> interaction.dropTargetHoverScale.y * 0.995f
-            else -> 1f
-        },
-        animationSpec = spring(
-            dampingRatio = 0.82f,
-            stiffness = Spring.StiffnessMediumLow
-        ),
-        label = "album reorder scale y"
+        label = "album reorder scale"
     )
     val swapX by animateFloatAsState(
         targetValue = if (isDropTarget) interaction.dropTargetSwapOffset.x else 0f,
@@ -2147,8 +2213,8 @@ private fun Modifier.albumReorderMotion(
             }
         )
         .graphicsLayer {
-            scaleX = animatedScaleX
-            scaleY = animatedScaleY
+            scaleX = animatedScale
+            scaleY = animatedScale
             translationX = if (isDragging) settledDragOffset.x else swapX
             translationY = if (isDragging) settledDragOffset.y else swapY
             shadowElevation = when {
@@ -2202,9 +2268,11 @@ private fun Modifier.albumReorderGesture(
     interaction: AlbumCardInteraction
 ): Modifier {
     val latestInteraction by rememberUpdatedState(interaction)
+    val hapticFeedback = LocalHapticFeedback.current
     return pointerInput(album.id) {
         detectDragGesturesAfterLongPress(
             onDragStart = {
+                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
                 latestInteraction.onContextMenuRequest(album)
                 if (latestInteraction.enabled) {
                     latestInteraction.onDragStart(album)

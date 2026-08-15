@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.media.AudioManager
+import android.os.Build
 import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.TextureView
@@ -71,6 +72,7 @@ import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
@@ -109,6 +111,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -116,6 +119,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -141,6 +145,7 @@ import androidx.media3.ui.PlayerView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.view.WindowCompat
 import com.example.nativegallery.R
 import androidx.compose.ui.zIndex
 import com.example.nativegallery.model.MediaItem
@@ -148,6 +153,8 @@ import com.example.nativegallery.ui.components.GalleryImage
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.PremiumDropdownMenu
+import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
 import com.example.nativegallery.ui.components.cacheVideoFrameThumbnail
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import java.util.Locale
@@ -166,15 +173,16 @@ private val ViewerExitEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 private val ViewerPhotoBackground = Color(0xFF111111)
 private val ViewerPhotoStageBackground = Color.Transparent
 private val ViewerVideoControlTextShadow = Shadow(Color.Black.copy(alpha = 0.90f), Offset(0f, 1f), 3f)
+private val ViewerActionLabelShadow = Shadow(Color.Black.copy(alpha = 0.96f), Offset(0f, 1.2f), 5f)
 private const val DEFAULT_AUDIBLE_MEDIA_VOLUME = 0.35f
 internal const val ViewerMediaStageTestTag = "viewer-media-stage"
 internal const val ViewerZoomableMediaTestTag = "viewer-zoomable-media"
 internal const val ViewerFilmstripSectionTestTag = "viewer-filmstrip-section"
 internal const val ViewerActionSectionTestTag = "viewer-action-section"
 internal const val ViewerBottomChromeTestTag = "viewer-bottom-chrome"
-internal const val ViewerBottomChromeSectionGapDp = 10
-internal const val ViewerBottomChromeActionInsetDp = 66
-internal const val ViewerActionCapsuleHeightDp = 56
+internal const val ViewerBottomChromeSectionGapDp = 4
+internal const val ViewerBottomChromeActionInsetDp = 82
+internal const val ViewerActionCapsuleHeightDp = 72
 internal const val ViewerVideoSeekHeightDp = 32
 
 enum class ViewerActionMode {
@@ -202,6 +210,7 @@ fun PhotoViewerOverlay(
     favoriteMediaIds: Set<String> = emptySet(),
     onFavoriteChange: (MediaItem, Boolean) -> Unit = { _, _ -> },
     onEdit: (MediaItem) -> Unit = {},
+    onMove: (MediaItem) -> Unit = {},
     onCurrentMediaChanged: (MediaItem) -> Unit = {},
     albumNameForMedia: (MediaItem) -> String? = { null },
     autoplayVideos: Boolean = true,
@@ -275,6 +284,11 @@ fun PhotoViewerOverlay(
     }
 
     val currentPageForState = pagerState.settledPage.coerceIn(0, viewerItems.lastIndex)
+    LaunchedEffect(currentPageForState) {
+        // A zoom flag belongs only to its active page. Never let it disable paging after the
+        // viewer settles on another item or a previously zoomed page is revisited.
+        activePhotoZoomed = false
+    }
     val currentItem = viewerItems.getOrNull(currentPageForState) ?: mediaItem
     val currentItemHasVideoPlayer = currentItem.isVideo && currentItem.contentUri != null
     val compactLandscape = remember(
@@ -320,6 +334,37 @@ fun PhotoViewerOverlay(
     DisposableEffect(activity, originalWindowBrightness) {
         onDispose {
             activity?.applyViewerBrightness(originalWindowBrightness)
+        }
+    }
+
+    DisposableEffect(activity, actionMode) {
+        if (activity == null || actionMode != ViewerActionMode.Locked) {
+            return@DisposableEffect onDispose { }
+        }
+        val viewerWindow = activity.window
+        @Suppress("DEPRECATION")
+        val previousNavigationBarColor = viewerWindow.navigationBarColor
+        val insetsController = WindowCompat.getInsetsController(viewerWindow, viewerWindow.decorView)
+        val previousLightNavigationBars = insetsController.isAppearanceLightNavigationBars
+        val previousContrastEnforced = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            viewerWindow.isNavigationBarContrastEnforced
+        } else {
+            false
+        }
+        @Suppress("DEPRECATION")
+        viewerWindow.navigationBarColor = android.graphics.Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            viewerWindow.isNavigationBarContrastEnforced = false
+        }
+        insetsController.isAppearanceLightNavigationBars = false
+
+        onDispose {
+            @Suppress("DEPRECATION")
+            viewerWindow.navigationBarColor = previousNavigationBarColor
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                viewerWindow.isNavigationBarContrastEnforced = previousContrastEnforced
+            }
+            insetsController.isAppearanceLightNavigationBars = previousLightNavigationBars
         }
     }
 
@@ -629,7 +674,16 @@ fun PhotoViewerOverlay(
             enter = fadeIn(animationSpec = tween(90)),
             exit = fadeOut(animationSpec = tween(90))
         ) {
-            ViewerTopBar(onClose = { closeViewerWithChromeFade() })
+            ViewerTopBar(
+                actionMode = actionMode,
+                onClose = { closeViewerWithChromeFade() },
+                onMove = { onMove(currentItem) },
+                onInfo = {
+                    detailsVisible = true
+                    controlsVisible = false
+                },
+                onLock = { onHide(currentItem, deleteDirection) }
+            )
         }
 
         AnimatedVisibility(
@@ -682,12 +736,7 @@ fun PhotoViewerOverlay(
                         },
                         onEdit = { onEdit(currentItem) },
                         onShare = ::shareCurrentMedia,
-                        onInfo = {
-                            detailsVisible = true
-                            controlsVisible = false
-                        },
                         onRestore = { onRestore(currentItem, deleteDirection) },
-                        onHide = { onHide(currentItem, deleteDirection) },
                         onDelete = { onDelete(currentItem, deleteDirection) }
                     )
                 }
@@ -721,23 +770,94 @@ fun PhotoViewerOverlay(
 }
 
 @Composable
-private fun ViewerTopBar(onClose: () -> Unit) {
-    Surface(
+private fun ViewerTopBar(
+    actionMode: ViewerActionMode,
+    onClose: () -> Unit,
+    onMove: () -> Unit,
+    onInfo: () -> Unit,
+    onLock: () -> Unit
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+    var menuExpanded by remember { mutableStateOf(false) }
+    Row(
         modifier = Modifier
+            .fillMaxWidth()
             .statusBarsPadding()
-            .padding(start = 12.dp, top = 4.dp)
-            .size(44.dp),
-        color = Color(0xFF1B1B1B),
-        shape = CircleShape,
-        shadowElevation = 0.dp
+            .padding(start = 12.dp, top = 4.dp, end = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = onClose) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Close media",
-                tint = Color.White,
-                modifier = Modifier.size(22.dp)
-            )
+        Surface(
+            modifier = Modifier.size(38.dp),
+            color = Color(0xFF1B1B1B),
+            shape = CircleShape
+        ) {
+            IconButton(onClick = {
+                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onClose()
+            }) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Close media",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+        Box {
+            Surface(
+                modifier = Modifier.size(38.dp),
+                color = Color(0xFF1B1B1B),
+                shape = CircleShape
+            ) {
+                IconButton(onClick = {
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    menuExpanded = true
+                }) {
+                    Icon(
+                        imageVector = Icons.Filled.MoreVert,
+                        contentDescription = "More media options",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            PremiumDropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false }
+            ) {
+                if (actionMode == ViewerActionMode.Normal) {
+                    PremiumDropdownMenuItem(
+                        text = { Text("Move to album") },
+                        leadingIcon = { Icon(Icons.Filled.Folder, contentDescription = null) },
+                        onClick = {
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            menuExpanded = false
+                            onMove()
+                        }
+                    )
+                }
+                PremiumDropdownMenuItem(
+                    text = { Text("Information") },
+                    leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                    onClick = {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        menuExpanded = false
+                        onInfo()
+                    }
+                )
+                if (actionMode == ViewerActionMode.Normal) {
+                    PremiumDropdownMenuItem(
+                        text = { Text("Lock") },
+                        leadingIcon = { Icon(Icons.Outlined.Lock, contentDescription = null) },
+                        onClick = {
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            menuExpanded = false
+                            onLock()
+                        }
+                    )
+                }
+            }
         }
     }
 }
@@ -826,74 +946,64 @@ private fun ViewerActionBar(
     onFavorite: () -> Unit,
     onEdit: () -> Unit,
     onShare: () -> Unit,
-    onInfo: () -> Unit,
     onRestore: () -> Unit,
-    onHide: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val capsuleShape = RoundedCornerShape(50.dp)
-    Surface(
+    Row(
         modifier = Modifier
-            .height(ViewerActionCapsuleHeightDp.dp)
-            .border(1.dp, Color.White.copy(alpha = 0.16f), capsuleShape),
-        color = Color(0xFF101318).copy(alpha = 0.72f),
-        shape = capsuleShape,
-        tonalElevation = 0.dp,
-        shadowElevation = 8.dp
+            .padding(horizontal = 12.dp)
+            .widthIn(max = 520.dp)
+            .fillMaxWidth()
+            .height(ViewerActionCapsuleHeightDp.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .height(ViewerActionCapsuleHeightDp.dp)
-                .padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (actionMode == ViewerActionMode.Normal) {
-                ViewerActionButton(
-                    icon = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = "Favorite",
-                    selected = isFavorite,
-                    onClick = onFavorite
-                )
-                if (isPhoto) {
-                    ViewerActionButton(
-                        icon = Icons.Outlined.Edit,
-                        contentDescription = "Edit photo",
-                        onClick = onEdit
-                    )
-                }
-                ViewerActionButton(
-                    icon = Icons.Outlined.Share,
-                    contentDescription = "Share",
-                    onClick = onShare
-                )
-            }
+        if (actionMode == ViewerActionMode.Normal) {
             ViewerActionButton(
-                icon = Icons.Outlined.Info,
-                contentDescription = "Info",
-                onClick = onInfo
+                icon = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                contentDescription = "Favorite",
+                label = "Favorite",
+                selected = isFavorite,
+                modifier = Modifier.weight(1f),
+                onClick = onFavorite
             )
-            when (actionMode) {
-                ViewerActionMode.Normal -> ViewerActionButton(
-                    icon = Icons.Outlined.Lock,
-                    contentDescription = "Lock",
-                    onClick = onHide
-                )
-                ViewerActionMode.RecentlyDeleted -> ViewerActionButton(
-                    icon = Icons.Outlined.Restore,
-                    contentDescription = "Restore",
-                    onClick = onRestore
-                )
-                ViewerActionMode.Locked -> ViewerActionButton(
-                    icon = Icons.Outlined.LockOpen,
-                    contentDescription = "Show",
-                    onClick = onRestore
-                )
-            }
+            ViewerActionButton(
+                icon = Icons.Outlined.Edit,
+                contentDescription = "Edit photo",
+                label = "Edit",
+                enabled = isPhoto,
+                modifier = Modifier.weight(1f),
+                onClick = onEdit
+            )
+            ViewerActionButton(
+                icon = Icons.Outlined.Share,
+                contentDescription = "Share",
+                label = "Share",
+                modifier = Modifier.weight(1f),
+                onClick = onShare
+            )
+            ViewerActionButton(
+                icon = Icons.Outlined.Delete,
+                destructive = true,
+                contentDescription = "Delete",
+                label = "Delete",
+                modifier = Modifier.weight(1f),
+                onClick = onDelete
+            )
+        } else {
+            ViewerActionButton(
+                icon = Icons.Outlined.Restore,
+                contentDescription = if (actionMode == ViewerActionMode.Locked) "Show" else "Restore",
+                label = "Restore",
+                modifier = Modifier.weight(1f),
+                onClick = onRestore
+            )
             ViewerActionButton(
                 icon = Icons.Outlined.Delete,
                 destructive = true,
                 contentDescription = if (actionMode == ViewerActionMode.RecentlyDeleted) "Delete forever" else "Delete",
+                label = if (actionMode == ViewerActionMode.RecentlyDeleted) "Delete forever" else "Delete",
+                modifier = Modifier.weight(1f),
                 onClick = onDelete
             )
         }
@@ -904,21 +1014,59 @@ private fun ViewerActionBar(
 private fun ViewerActionButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     contentDescription: String,
+    label: String,
+    modifier: Modifier = Modifier,
     selected: Boolean = false,
     destructive: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
     val iconTint = when {
         selected -> Color(0xFF86D7FF)
         destructive -> Color(0xFFFFC1BB)
         else -> Color.White.copy(alpha = 0.96f)
     }
-    IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = iconTint,
-            modifier = Modifier.size(20.dp)
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        IconButton(
+            onClick = {
+                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onClick()
+            },
+            enabled = enabled,
+            modifier = Modifier.size(38.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .background(
+                        color = Color.Black.copy(alpha = if (enabled) 0.46f else 0.22f),
+                        shape = RoundedCornerShape(10.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = contentDescription,
+                    tint = if (enabled) iconTint else iconTint.copy(alpha = 0.38f),
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+        }
+        Text(
+            text = label,
+            color = if (enabled) iconTint else iconTint.copy(alpha = 0.38f),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.5.sp,
+                lineHeight = 12.sp,
+                shadow = ViewerActionLabelShadow
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -1203,6 +1351,15 @@ private fun ZoomableViewerMedia(
         }
     }
 
+    LaunchedEffect(isActive) {
+        if (!isActive) {
+            gestureActive = false
+            targetScale = 1f
+            targetOffset = Offset.Zero
+            onZoomStateChanged(false)
+        }
+    }
+
     DisposableEffect(isActive) {
         onDispose {
             if (isActive) onZoomStateChanged(false)
@@ -1233,6 +1390,7 @@ private fun ZoomableViewerMedia(
                         if (nextScale <= 1.02f) {
                             targetScale = 1f
                             targetOffset = Offset.Zero
+                            if (isActive) onZoomStateChanged(false)
                         } else {
                             val center = Offset(size.width / 2f, size.height / 2f)
                             val desiredOffset = (center - tapOffset) * (nextScale - 1f)
@@ -1240,6 +1398,7 @@ private fun ZoomableViewerMedia(
                             val maxPanY = size.height * (nextScale - 1f) * 0.5f
                             targetScale = nextScale
                             targetOffset = desiredOffset.coercePan(maxPanX, maxPanY)
+                            if (isActive) onZoomStateChanged(true)
                         }
                     }
                 )
@@ -1391,14 +1550,16 @@ private fun ViewerVideoPlayer(
     var durationMs by remember(uri) {
         mutableIntStateOf(mediaItem.durationMillis?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt() ?: 0)
     }
-    var positionMs by remember(uri) { mutableIntStateOf(0) }
+    var positionMs by rememberSaveable(mediaItem.id) { mutableIntStateOf(0) }
     var isScrubbing by remember(uri) { mutableStateOf(false) }
     var pendingSeekPositionMs by remember(uri) { mutableStateOf<Int?>(null) }
     var pendingSeekRetryCount by remember(uri) { mutableIntStateOf(0) }
     var hasUserAdjustedVolume by remember(uri) { mutableStateOf(false) }
+    var playbackRequested by rememberSaveable(mediaItem.id) { mutableStateOf(autoplay) }
+    val currentPlaybackRequested by rememberUpdatedState(playbackRequested)
     var foregroundPlaybackAllowed by remember(uri) {
         mutableStateOf(
-            autoplay && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            playbackRequested && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         )
     }
     val rootView = LocalView.current
@@ -1435,12 +1596,15 @@ private fun ViewerVideoPlayer(
                     }
                     .build()
                 setMediaItem(playerMediaItem)
+                if (positionMs > 0) {
+                    seekTo(positionMs.toLong())
+                }
                 setAudioAttributes(AudioAttributes.DEFAULT, true)
                 setHandleAudioBecomingNoisy(true)
                 volume = localPlayerGain(playbackVolume, systemVolumeApplied = true)
                 playWhenReady =
                     isActive &&
-                        autoplay &&
+                        playbackRequested &&
                         lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
                 prepare()
         }
@@ -1566,6 +1730,9 @@ private fun ViewerVideoPlayer(
         }
         player.addListener(listener)
         onDispose {
+            positionMs = player.currentPosition
+                .coerceIn(0L, Int.MAX_VALUE.toLong())
+                .toInt()
             playerView?.player = null
             playerView = null
             player.removeListener(listener)
@@ -1604,7 +1771,9 @@ private fun ViewerVideoPlayer(
 
     DisposableEffect(lifecycleOwner, player) {
         val observer = LifecycleEventObserver { owner, _ ->
-            if (!owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            if (owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                foregroundPlaybackAllowed = currentPlaybackRequested
+            } else {
                 foregroundPlaybackAllowed = false
                 player.playWhenReady = false
                 player.pause()
@@ -1619,6 +1788,11 @@ private fun ViewerVideoPlayer(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
+    }
+
+    LaunchedEffect(playbackRequested, lifecycleOwner) {
+        foregroundPlaybackAllowed = playbackRequested &&
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
     }
 
     DisposableEffect(isActive, isPrepared, isPlaying, rootView) {
@@ -1947,9 +2121,11 @@ private fun ViewerVideoPlayer(
                         isPlaying = isPlaying,
                         onPlayPause = {
                             if (player.isPlaying) {
+                                playbackRequested = false
                                 foregroundPlaybackAllowed = false
                                 player.pause()
                             } else if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                                playbackRequested = true
                                 foregroundPlaybackAllowed = true
                                 player.play()
                             }
@@ -2024,6 +2200,7 @@ private fun ViewerVideoPlayer(
                         containerAlpha = 0.48f,
                         onClick = {
                             if (player.isPlaying) {
+                                playbackRequested = false
                                 foregroundPlaybackAllowed = false
                                 player.pause()
                             } else {
@@ -2031,6 +2208,7 @@ private fun ViewerVideoPlayer(
                                     lifecycleOwner.lifecycle.currentState
                                         .isAtLeast(Lifecycle.State.RESUMED)
                                 ) {
+                                    playbackRequested = true
                                     foregroundPlaybackAllowed = true
                                     player.play()
                                 }

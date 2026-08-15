@@ -3,8 +3,18 @@
 package com.example.nativegallery.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
 
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -18,6 +28,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -44,6 +55,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -52,15 +65,22 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.MediaSelectionTopBar
+import com.example.nativegallery.ui.components.mediaSelectionAccentColor
 
 private class LockedMediaBoundsRef(var value: Rect = Rect.Zero)
 
@@ -83,18 +103,23 @@ fun LockedMediaScreen(
     onBiometricUnlock: () -> Unit,
     onUnhideSelected: (List<MediaItem>) -> Unit,
     onDeleteSelected: (List<MediaItem>) -> Unit,
-    onOpenMedia: (MediaItem, Rect) -> Unit,
+    onOpenMedia: (MediaItem, Rect, Int) -> Unit,
     contentPadding: PaddingValues,
     gridColumns: Int = 4
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val tileBounds = remember { mutableMapOf<String, Rect>() }
     val rootBounds = remember { LockedMediaBoundsRef() }
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
     val isSelectionMode = selectedMediaIds.isNotEmpty()
+    var activeGridColumns by remember(gridColumns) {
+        mutableIntStateOf(gridColumns.coerceIn(2, 10))
+    }
+    var pinchPreviewScale by remember { mutableFloatStateOf(1f) }
     val mediaIds = remember(lockedMediaItems) { lockedMediaItems.map { it.id }.toSet() }
-    val gridRows = remember(lockedMediaItems, gridColumns) {
-        lockedMediaItems.chunked(gridColumns.coerceAtLeast(2))
+    val gridRows = remember(lockedMediaItems, activeGridColumns) {
+        lockedMediaItems.chunked(activeGridColumns)
     }
 
     BackHandler(enabled = isSelectionMode) {
@@ -112,6 +137,7 @@ fun LockedMediaScreen(
     }
 
     fun toggleSelection(mediaItem: MediaItem) {
+        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
         selectedMediaIds = if (mediaItem.id in selectedMediaIds) {
             selectedMediaIds - mediaItem.id
         } else {
@@ -132,6 +158,7 @@ fun LockedMediaScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .onGloballyPositioned { rootBounds.value = it.boundsInWindow() }
             .pointerInput(isSelectionMode, lockedMediaItems) {
                 var dragMode: LockedMediaDragSelectMode? = null
@@ -174,8 +201,42 @@ fun LockedMediaScreen(
                     )
                 }
             }
+            .pointerInput(activeGridColumns, isUnlocked) {
+                if (!isUnlocked) return@pointerInput
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var cumulativeZoom = 1f
+                    var densityChanged = false
+                    try {
+                        var gestureActive = true
+                        while (gestureActive) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.count { it.pressed } >= 2) {
+                                cumulativeZoom *= event.calculateZoom()
+                                pinchPreviewScale = (1f + (cumulativeZoom - 1f) * 0.22f)
+                                    .coerceIn(0.94f, 1.06f)
+                                if (!densityChanged && cumulativeZoom >= 1.16f) {
+                                    activeGridColumns = (activeGridColumns - 1).coerceAtLeast(2)
+                                    densityChanged = true
+                                } else if (!densityChanged && cumulativeZoom <= 0.86f) {
+                                    activeGridColumns = (activeGridColumns + 1).coerceAtMost(10)
+                                    densityChanged = true
+                                }
+                                event.changes.forEach { it.consume() }
+                            }
+                            gestureActive = event.changes.any { it.pressed }
+                        }
+                    } finally {
+                        pinchPreviewScale = 1f
+                    }
+                }
+            }
     ) {
         LazyColumn(
+            modifier = Modifier.graphicsLayer {
+                scaleX = pinchPreviewScale
+                scaleY = pinchPreviewScale
+            },
             contentPadding = PaddingValues(
                 start = 18.dp,
                 top = 48.dp,
@@ -228,14 +289,18 @@ fun LockedMediaScreen(
                     ) { rowItems ->
                         LockedMediaGridRow(
                             mediaItems = rowItems,
-                            columns = gridColumns.coerceAtLeast(2),
+                            columns = activeGridColumns,
                             selectedMediaIds = selectedMediaIds,
                             onMediaBoundsChanged = { mediaItem, bounds -> tileBounds[mediaItem.id] = bounds },
                             onMediaLongClick = { mediaItem ->
                                 if (mediaItem.id !in selectedMediaIds) toggleSelection(mediaItem)
                             },
                             onMediaClick = { mediaItem, bounds ->
-                                if (isSelectionMode) toggleSelection(mediaItem) else onOpenMedia(mediaItem, bounds)
+                                if (isSelectionMode) {
+                                    toggleSelection(mediaItem)
+                                } else {
+                                    onOpenMedia(mediaItem, bounds, activeGridColumns)
+                                }
                             }
                         )
                         Spacer(Modifier.height(1.dp))
@@ -244,12 +309,39 @@ fun LockedMediaScreen(
             }
         }
 
-        if (isSelectionMode) {
-            LockedMediaSelectionToolbar(
+        AnimatedVisibility(
+            visible = isSelectionMode,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .zIndex(4f),
+            enter = fadeIn(tween(140)) + slideInVertically(
+                animationSpec = tween(180),
+                initialOffsetY = { -it / 2 }
+            ),
+            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { -it / 2 })
+        ) {
+            MediaSelectionTopBar(
                 selectedCount = selectedMediaIds.size,
-                totalCount = lockedMediaItems.size,
+                canSelectAll = selectedMediaIds.size < lockedMediaItems.size,
                 onClear = { selectedMediaIds = emptySet() },
                 onSelectAll = { selectedMediaIds = mediaIds },
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(start = 12.dp, top = 8.dp, end = 12.dp)
+            )
+        }
+        AnimatedVisibility(
+            visible = isSelectionMode,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(4f),
+            enter = fadeIn(tween(140)) + slideInVertically(
+                animationSpec = tween(190),
+                initialOffsetY = { it / 2 + 24 }
+            ),
+            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { it / 2 + 24 })
+        ) {
+            LockedMediaSelectionToolbar(
                 onUnhide = {
                     val selectedItems = lockedMediaItems.filter { it.id in selectedMediaIds }
                     onUnhideSelected(selectedItems)
@@ -259,7 +351,6 @@ fun LockedMediaScreen(
                     selectedMediaIds = emptySet()
                     onDeleteSelected(selectedItems)
                 },
-                modifier = Modifier.align(Alignment.BottomCenter)
             )
         }
     }
@@ -519,51 +610,39 @@ private fun LockedMediaGridRow(
 
 @Composable
 private fun LockedMediaSelectionToolbar(
-    selectedCount: Int,
-    totalCount: Int,
-    onClear: () -> Unit,
-    onSelectAll: () -> Unit,
     onUnhide: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val accentColor = mediaSelectionAccentColor()
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
-        shape = RoundedCornerShape(8.dp),
-        shadowElevation = 14.dp
+            .padding(start = 12.dp, end = 12.dp, bottom = 2.dp),
+        color = Color(0xFF171717),
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 10.dp,
+        tonalElevation = 0.dp
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+        Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+            TextButton(
+                onClick = onUnhide,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColors(contentColor = accentColor)
             ) {
-                IconButton(onClick = onClear) {
-                    Icon(Icons.Filled.Close, contentDescription = "Cancel selection")
-                }
-                Text(
-                    text = "%1$,d selected".format(selectedCount),
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                )
-                IconButton(enabled = selectedCount < totalCount, onClick = onSelectAll) {
-                    Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
-                }
+                Icon(Icons.Filled.LockOpen, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Restore")
             }
-            Row(modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = onUnhide, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.LockOpen, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Restore")
-                }
-                TextButton(onClick = onDelete, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Delete")
-                }
+            TextButton(
+                onClick = onDelete,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Delete")
             }
         }
     }

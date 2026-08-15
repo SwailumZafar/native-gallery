@@ -3,7 +3,14 @@
 package com.example.nativegallery.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -30,6 +38,7 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,14 +56,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.example.nativegallery.model.RecentlyDeletedMedia
 import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.MediaSelectionTopBar
+import com.example.nativegallery.ui.components.mediaSelectionAccentColor
 
 private class RecentlyDeletedBoundsRef(var value: Rect = Rect.Zero)
 
@@ -83,6 +98,7 @@ fun RecentlyDeletedScreen(
     contentPadding: PaddingValues,
     gridColumns: Int = 4
 ) {
+    val hapticFeedback = LocalHapticFeedback.current
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var confirmation by remember { mutableStateOf<RecentlyDeletedConfirmation?>(null) }
     val tileBounds = remember { mutableMapOf<String, Rect>() }
@@ -101,6 +117,7 @@ fun RecentlyDeletedScreen(
     }
 
     fun toggleSelection(entry: RecentlyDeletedMedia) {
+        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
         val id = entry.mediaItem.id
         selectedMediaIds = if (id in selectedMediaIds) selectedMediaIds - id else selectedMediaIds + id
     }
@@ -167,6 +184,9 @@ fun RecentlyDeletedScreen(
             }
     ) {
         LazyVerticalGrid(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
             columns = GridCells.Fixed(gridColumns.coerceAtLeast(2)),
             contentPadding = PaddingValues(
                 start = 4.dp,
@@ -188,28 +208,18 @@ fun RecentlyDeletedScreen(
                         .padding(horizontal = 10.dp)
                 ) {
                     GalleryScreenHeader(
-                        title = if (isSelectionMode) {
-                            "%1$,d selected".format(selectedMediaIds.size)
-                        } else {
-                            "Recently deleted"
-                        },
-                        onBack = if (isSelectionMode) ({ selectedMediaIds = emptySet() }) else onBack,
-                        leadingIcon = if (isSelectionMode) {
-                            Icons.Filled.Close
-                        } else {
-                            Icons.AutoMirrored.Filled.ArrowBack
-                        },
-                        leadingContentDescription = if (isSelectionMode) {
-                            "Cancel selection"
-                        } else {
-                            "Back"
-                        },
+                        title = "Recently deleted",
+                        onBack = onBack,
+                        leadingIcon = Icons.AutoMirrored.Filled.ArrowBack,
+                        leadingContentDescription = "Back",
                         trailingContent = {
-                            IconButton(
-                                enabled = deletedItems.isNotEmpty() && selectedMediaIds.size < deletedItems.size,
-                                onClick = { selectedMediaIds = availableIds }
-                            ) {
-                                Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
+                            if (!isSelectionMode) {
+                                IconButton(
+                                    enabled = deletedItems.isNotEmpty(),
+                                    onClick = { selectedMediaIds = availableIds }
+                                ) {
+                                    Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
+                                }
                             }
                         }
                     )
@@ -265,12 +275,39 @@ fun RecentlyDeletedScreen(
             }
         }
 
-        if (isSelectionMode) {
-            RecentlyDeletedSelectionToolbar(
+        AnimatedVisibility(
+            visible = isSelectionMode,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .zIndex(4f),
+            enter = fadeIn(tween(140)) + slideInVertically(
+                animationSpec = tween(180),
+                initialOffsetY = { -it / 2 }
+            ),
+            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { -it / 2 })
+        ) {
+            MediaSelectionTopBar(
                 selectedCount = selectedMediaIds.size,
-                totalCount = deletedItems.size,
+                canSelectAll = selectedMediaIds.size < deletedItems.size,
                 onClear = { selectedMediaIds = emptySet() },
                 onSelectAll = { selectedMediaIds = availableIds },
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(start = 12.dp, top = 8.dp, end = 12.dp)
+            )
+        }
+        AnimatedVisibility(
+            visible = isSelectionMode,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(4f),
+            enter = fadeIn(tween(140)) + slideInVertically(
+                animationSpec = tween(190),
+                initialOffsetY = { it / 2 + 24 }
+            ),
+            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { it / 2 + 24 })
+        ) {
+            RecentlyDeletedSelectionToolbar(
                 onRestore = {
                     confirmation = RecentlyDeletedConfirmation(
                         mode = RecentlyDeletedConfirmationMode.Restore,
@@ -283,7 +320,6 @@ fun RecentlyDeletedScreen(
                         items = deletedItems.filter { it.mediaItem.id in selectedMediaIds }
                     )
                 },
-                modifier = Modifier.align(Alignment.BottomCenter)
             )
         }
     }
@@ -327,7 +363,7 @@ fun RecentlyDeletedScreen(
                     Text("Cancel")
                 }
             },
-            shape = RoundedCornerShape(8.dp)
+            shape = RoundedCornerShape(24.dp)
         )
     }
 }
@@ -359,51 +395,39 @@ private fun RecentlyDeletedTile(
 
 @Composable
 private fun RecentlyDeletedSelectionToolbar(
-    selectedCount: Int,
-    totalCount: Int,
-    onClear: () -> Unit,
-    onSelectAll: () -> Unit,
     onRestore: () -> Unit,
     onDeleteForever: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val accentColor = mediaSelectionAccentColor()
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
-        shape = RoundedCornerShape(8.dp),
-        shadowElevation = 14.dp
+            .padding(start = 12.dp, end = 12.dp, bottom = 2.dp),
+        color = Color(0xFF171717),
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 10.dp,
+        tonalElevation = 0.dp
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+        Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+            TextButton(
+                onClick = onRestore,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColors(contentColor = accentColor)
             ) {
-                IconButton(onClick = onClear) {
-                    Icon(Icons.Filled.Close, contentDescription = "Cancel selection")
-                }
-                Text(
-                    text = "%1$,d selected".format(selectedCount),
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                )
-                IconButton(enabled = selectedCount < totalCount, onClick = onSelectAll) {
-                    Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
-                }
+                Icon(Icons.Filled.Restore, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Restore")
             }
-            Row(modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = onRestore, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.Restore, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Restore")
-                }
-                TextButton(onClick = onDeleteForever, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.DeleteForever, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Delete forever")
-                }
+            TextButton(
+                onClick = onDeleteForever,
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Icon(Icons.Filled.DeleteForever, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Delete forever")
             }
         }
     }

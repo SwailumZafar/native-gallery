@@ -48,6 +48,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -122,14 +123,21 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
@@ -220,6 +228,7 @@ private data class AlbumTransitionSpec(
     val key: Int,
     val album: Album,
     val tileBounds: Rect,
+    val sourceCornerRadiusDp: Float,
     val mode: AlbumTransitionMode,
     val sortMode: AlbumDetailSortMode = AlbumDetailSortMode.Newest,
     val firstVisibleRow: Int = 0,
@@ -317,6 +326,7 @@ fun GalleryApp(
     onSettingsChange: (GallerySettings) -> Unit
 ) {
     val context = LocalContext.current
+    val hapticFeedback = LocalHapticFeedback.current
     val separatingFoldBounds = rememberSeparatingFoldBounds(context)
     val viewerConfiguration = LocalConfiguration.current
     val viewerDensity = LocalDensity.current
@@ -449,12 +459,12 @@ fun GalleryApp(
     var viewerSourceBounds by remember { mutableStateOf(Rect.Zero) }
     var viewerSourceGridColumns by remember { mutableIntStateOf(4) }
     var albumTransition by remember { mutableStateOf<AlbumTransitionSpec?>(null) }
+    var albumClosePreparing by remember { mutableStateOf(false) }
     var albumTransitionKey by remember { mutableIntStateOf(0) }
     var albumTransitionCommittedKey by remember { mutableIntStateOf(-1) }
     var albumTransitionAwaitingDestinationKey by remember { mutableIntStateOf(-1) }
     var mediaOpenTransition by remember { mutableStateOf<MediaOpenTransitionSpec?>(null) }
     var mediaOpenTransitionKey by remember { mutableIntStateOf(0) }
-    var mediaOpenWarmupReadyKey by remember { mutableIntStateOf(-1) }
     var mediaCloseTransition by remember { mutableStateOf<MediaCloseTransitionSpec?>(null) }
     var mediaCloseTransitionKey by remember { mutableIntStateOf(0) }
     var viewerCloseInProgress by remember { mutableStateOf(false) }
@@ -1039,13 +1049,19 @@ fun GalleryApp(
             !hiddenVaultUnlocked ||
             missingLockedPreviewIds.isEmpty()
         ) return@LaunchedEffect
-        val migratedAny = withContext(Dispatchers.IO) {
-            missingLockedPreviewIds.mapNotNull(storedLockedMediaById::get)
-                .fold(false) { migrated, mediaItem ->
-                    lockedVaultRepository.ensureEncryptedPreviewFromVault(mediaItem) || migrated
+        // Publish each recovered preview as soon as it is ready. Older installs may need to
+        // create these previews from the encrypted original; waiting for the entire vault made
+        // the grid look empty for many seconds after an update.
+        missingLockedPreviewIds.mapNotNull(storedLockedMediaById::get).forEach { mediaItem ->
+            val migrated = withContext(Dispatchers.IO) {
+                lockedVaultRepository.ensureEncryptedPreviewFromVault(mediaItem)
+            }
+            if (migrated) {
+                lockedVaultSnapshot = withContext(Dispatchers.IO) {
+                    lockedVaultRepository.loadSnapshot()
                 }
+            }
         }
-        if (migratedAny) vaultRefreshKey += 1
     }
     lateinit var launchSystemMediaStoreWrite: (PendingMediaStoreWriteAction) -> Unit
     lateinit var launchMediaStoreWrite: (PendingMediaStoreWriteAction) -> Unit
@@ -1244,6 +1260,11 @@ fun GalleryApp(
                 key = openingKey,
                 album = album,
                 tileBounds = tileBounds,
+                sourceCornerRadiusDp = when {
+                    albumLayoutMode == AlbumLayoutMode.Basic -> 18f
+                    tileBounds.width > tileBounds.height * 1.35f -> 24f
+                    else -> 22f
+                },
                 mode = AlbumTransitionMode.Opening,
                 sortMode = albumDetailSortModes[album.id] ?: AlbumDetailSortMode.Newest
             )
@@ -1258,6 +1279,7 @@ fun GalleryApp(
             }
             return
         }
+        navigationViewModel.showAlbumDetail()
         prefetchScope.launch {
             prefetchMediaThumbnails(
                 context = context.applicationContext,
@@ -1266,33 +1288,46 @@ fun GalleryApp(
                 maxItems = firstViewportMedia.size,
                 pinInMemory = true
             )
-            navigationViewModel.showAlbumDetail()
         }
     }
 
     fun closeAlbumDetail() {
-        if (albumTransition != null) return
+        if (albumTransition != null || albumClosePreparing) return
+        albumClosePreparing = true
         selectedMediaIds = emptySet()
         val closingAlbum = selectedAlbum
         val closingBounds = selectedAlbumId?.let(albumTileBounds::get)
-        if (closingAlbum != null && closingBounds?.isUsableTransitionBounds() == true) {
-            albumTransitionKey += 1
-            albumTransitionCommittedKey = -1
-            albumTransitionAwaitingDestinationKey = -1
-            albumTransition = AlbumTransitionSpec(
-                key = albumTransitionKey,
-                album = closingAlbum,
-                tileBounds = closingBounds,
-                mode = AlbumTransitionMode.Closing,
-                sortMode = albumDetailSortModes[closingAlbum.id] ?: AlbumDetailSortMode.Newest,
-                firstVisibleRow = albumDetailListState.firstVisibleItemIndex,
-                firstVisibleRowOffset = albumDetailListState.firstVisibleItemScrollOffset
-            )
-        } else {
-            albumTransitionCommittedKey = -1
-            albumTransitionAwaitingDestinationKey = -1
+        prefetchScope.launch {
+            try {
+                albumDetailListState.scroll(MutatePriority.PreventUserInput) { }
+                delay(32L)
+                if (closingAlbum != null && closingBounds?.isUsableTransitionBounds() == true) {
+                    albumTransitionKey += 1
+                    albumTransitionCommittedKey = -1
+                    albumTransitionAwaitingDestinationKey = -1
+                    albumTransition = AlbumTransitionSpec(
+                        key = albumTransitionKey,
+                        album = closingAlbum,
+                        tileBounds = closingBounds,
+                        sourceCornerRadiusDp = when {
+                            albumLayoutMode == AlbumLayoutMode.Basic -> 18f
+                            closingBounds.width > closingBounds.height * 1.35f -> 24f
+                            else -> 22f
+                        },
+                        mode = AlbumTransitionMode.Closing,
+                        sortMode = albumDetailSortModes[closingAlbum.id] ?: AlbumDetailSortMode.Newest,
+                        firstVisibleRow = albumDetailListState.firstVisibleItemIndex,
+                        firstVisibleRowOffset = albumDetailListState.firstVisibleItemScrollOffset
+                    )
+                } else {
+                    albumTransitionCommittedKey = -1
+                    albumTransitionAwaitingDestinationKey = -1
+                }
+                navigationViewModel.closeAlbumDetail()
+            } finally {
+                albumClosePreparing = false
+            }
         }
-        navigationViewModel.closeAlbumDetail()
     }
 
     LaunchedEffect(destination, selectedAlbumId, visibleAlbumIds) {
@@ -1309,6 +1344,22 @@ fun GalleryApp(
                 albumTransitionCommittedKey = -1
             }
             albumTransitionAwaitingDestinationKey = -1
+        }
+    }
+    LaunchedEffect(albumTransition?.key) {
+        val watchedTransition = albumTransition ?: return@LaunchedEffect
+        delay(900L)
+        if (albumTransition?.key != watchedTransition.key) return@LaunchedEffect
+
+        // A lifecycle interruption must not leave the source album invisible or block every
+        // subsequent album tap. Normal transitions finish long before this safety deadline.
+        albumTransition = null
+        albumTransitionCommittedKey = -1
+        albumTransitionAwaitingDestinationKey = -1
+        if (watchedTransition.mode == AlbumTransitionMode.Opening) {
+            navigationViewModel.showAlbumDetail()
+        } else {
+            navigationViewModel.closeAlbumDetail()
         }
     }
 
@@ -1332,6 +1383,7 @@ fun GalleryApp(
         bottomNavigationVisible = true
         val targetPage = tab.pageIndex()
         if (mainPagerState.currentPage != targetPage || mainPagerState.targetPage != targetPage) {
+            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             // This is non-suspending, so one tap cancels an in-flight swipe and schedules the
             // requested page for the next remeasure instead of waiting on a launched coroutine.
             mainPagerState.requestScrollToPage(targetPage)
@@ -1366,7 +1418,6 @@ fun GalleryApp(
     ) {
         mediaOpenTransitionKey += 1
         val openKey = mediaOpenTransitionKey
-        mediaOpenWarmupReadyKey = -1
         mediaTileBounds.clear()
         if (bounds.isUsableTransitionBounds()) {
             viewerReturnFallbackBounds = bounds
@@ -1385,6 +1436,16 @@ fun GalleryApp(
                 transitionMediaItem = transitionMediaItem,
                 mediaItems = mediaItems,
                 tileBounds = bounds,
+                sharedElementKey = sharedElementKey,
+                sharedElementKeyPrefix = sharedElementKeyPrefix,
+                actionMode = actionMode
+            )
+        } else {
+            // The viewer can paint its preview immediately and promote to full quality in the
+            // background. Do not hold its controls behind thumbnail or vault IO.
+            finishViewerOpen(
+                mediaItem = mediaItem,
+                mediaItems = mediaItems,
                 sharedElementKey = sharedElementKey,
                 sharedElementKeyPrefix = sharedElementKeyPrefix,
                 actionMode = actionMode
@@ -1424,29 +1485,6 @@ fun GalleryApp(
                     ),
                     maxItems = 1,
                     pinInMemory = true
-                )
-                if (mediaOpenTransitionKey == openKey) {
-                    mediaOpenWarmupReadyKey = openKey
-                    if (!hasTileTransition) {
-                        finishViewerOpen(
-                            mediaItem = mediaItem,
-                            mediaItems = mediaItems,
-                            sharedElementKey = sharedElementKey,
-                            sharedElementKeyPrefix = sharedElementKeyPrefix,
-                            actionMode = actionMode
-                        )
-                    }
-                }
-            }
-        } else {
-            mediaOpenWarmupReadyKey = openKey
-            if (!hasTileTransition) {
-                finishViewerOpen(
-                    mediaItem = mediaItem,
-                    mediaItems = mediaItems,
-                    sharedElementKey = sharedElementKey,
-                    sharedElementKeyPrefix = sharedElementKeyPrefix,
-                    actionMode = actionMode
                 )
             }
         }
@@ -1516,12 +1554,33 @@ fun GalleryApp(
             if (needsGridReveal) {
                 mediaTileBounds.remove(currentItem.id)
                 viewerRevealMediaId = currentItem.id
-                for (attempt in 0 until 8) {
+                val revealListState = when {
+                    destination == GalleryDestination.Main && selectedTab == GalleryTab.Photos -> photosListState
+                    destination == GalleryDestination.AlbumDetail -> albumDetailListState
+                    else -> null
+                }
+                var previousBounds = Rect.Zero
+                var stableFrames = 0
+                for (attempt in 0 until 16) {
                     delay(16)
                     val revealedBounds = mediaTileBounds[currentItem.id] ?: Rect.Zero
-                    if (revealedBounds.isVisibleWithin(transitionRootBoundsInWindow)) break
+                    val settled = revealListState?.isScrollInProgress != true
+                    if (
+                        settled &&
+                        revealedBounds.isVisibleWithin(transitionRootBoundsInWindow) &&
+                        revealedBounds == previousBounds
+                    ) {
+                        stableFrames += 1
+                        if (stableFrames >= 2) break
+                    } else {
+                        stableFrames = 0
+                    }
+                    previousBounds = revealedBounds
                 }
                 viewerRevealMediaId = null
+                // Allow the reveal-only tracking state to leave composition before freezing the
+                // immutable close target. This prevents a one-frame correction under the hero.
+                delay(16)
             }
 
             viewerSharedElementKeyPrefix?.let { keyPrefix ->
@@ -1589,9 +1648,8 @@ fun GalleryApp(
         val viewerItem = pending.viewerDirection?.let { pending.mediaItems.firstOrNull() }
         unhideMediaItems(pending.mediaItems) { restoredIds ->
             val restoredViewerItem = viewerItem?.takeIf { it.id in restoredIds }
-            val direction = pending.viewerDirection
-            if (restoredViewerItem != null && direction != null) {
-                advanceViewerAfterRemoval(restoredViewerItem, direction)
+            if (restoredViewerItem != null) {
+                advanceViewerAfterRemoval(restoredViewerItem, requireNotNull(pending.viewerDirection))
             }
         }
     }
@@ -2006,6 +2064,7 @@ fun GalleryApp(
         favoriteMediaIds = favoritesRepository.setFavorite(mediaItem.id, favorite)
     }
     fun toggleMediaSelection(mediaItem: MediaItem) {
+        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
         selectedMediaIds = if (selectedMediaIds.contains(mediaItem.id)) {
             selectedMediaIds - mediaItem.id
         } else {
@@ -2128,6 +2187,7 @@ fun GalleryApp(
     }
 
     val navigationTransitionIdle = albumTransition == null &&
+        !albumClosePreparing &&
         mediaOpenTransition == null &&
         mediaCloseTransition == null
     val backAction = resolveGalleryBackAction(
@@ -2135,7 +2195,7 @@ fun GalleryApp(
         selectedTab = selectedTab,
         viewerVisible = viewerVisible && viewerMediaItem != null,
         viewerClosing = viewerCloseInProgress,
-        albumTransitionActive = albumTransition != null,
+        albumTransitionActive = albumTransition != null || albumClosePreparing,
         albumTransitionCanCancel = albumTransition?.mode == AlbumTransitionMode.Opening,
         mediaTransitionActive = mediaOpenTransition != null || mediaCloseTransition != null,
         mediaTransitionCanCancel = mediaOpenTransition != null,
@@ -2640,7 +2700,7 @@ fun GalleryApp(
                                         selectedItems.map { fullItemsById[it.id] ?: it }
                                     )
                                 },
-                                onOpenMedia = { mediaItem, bounds ->
+                                onOpenMedia = { mediaItem, bounds, lockedGridColumns ->
                                     val lockedViewerItems = lockedDisplayMedia
                                     val lockedViewerItem = lockedViewerItems.firstOrNull { it.id == mediaItem.id }
                                         ?: mediaItem
@@ -2650,7 +2710,7 @@ fun GalleryApp(
                                         bounds = bounds,
                                         actionMode = ViewerActionMode.Locked,
                                         transitionMediaItem = mediaItem,
-                                        sourceGridColumns = adaptivePolicy.utilityGridColumns
+                                        sourceGridColumns = lockedGridColumns
                                     )
                                 },
                                 contentPadding = PaddingValues(),
@@ -2787,7 +2847,7 @@ fun GalleryApp(
                             }
                         }
                     }
-                ) { overlayAlbum, _ ->
+                ) { overlayAlbum ->
                     AlbumDetailTransitionPreview(
                         album = overlayAlbum,
                         mediaItems = if (overlayAlbum.id == selectedAlbumId) selectedAlbumMedia else mediaForAlbumFast(overlayAlbum, visibleMedia, visibleMediaByAlbum, favoriteMedia),
@@ -2801,7 +2861,6 @@ fun GalleryApp(
                 }
                 ReferenceMediaOpenOverlay(
                     transition = mediaOpenTransition,
-                    contentReady = mediaOpenTransition?.key == mediaOpenWarmupReadyKey,
                     photoDecodeSize = viewerPhotoDecodeSize,
                     rootWidthPx = rootWidthPx,
                     rootHeightPx = rootHeightPx,
@@ -2850,6 +2909,7 @@ fun GalleryApp(
                     favoriteMediaIds = favoriteMediaIds,
                     onFavoriteChange = ::setMediaFavorite,
                     onEdit = ::editPhoto,
+                    onMove = { mediaItem -> pendingMoveMediaItems = listOf(mediaItem) },
                     onCurrentMediaChanged = { currentItem ->
                         viewerMediaItem = currentItem
                         viewerSharedElementKey = viewerSharedElementKeyPrefix?.let { "$it-media-${currentItem.id}" }
@@ -2980,7 +3040,7 @@ fun GalleryApp(
                             Text("Cancel")
                         }
                     },
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(24.dp)
                 )
             }
 
@@ -2997,7 +3057,7 @@ fun GalleryApp(
             if (showMediaManagementExplanation) {
                 AlertDialog(
                     onDismissRequest = { showMediaManagementExplanation = false },
-                    title = { Text("Enable one-tap media changes?") },
+                    title = { Text("Allow direct media changes?") },
                     text = {
                         Text(
                             "Android requires one one-time switch. On the next screen, turn on 'Allow app to manage media', then return. Native Gallery can then move, trash, restore, and delete media without the large confirmation block. This is optional and can be revoked in Android Settings."
@@ -3020,7 +3080,7 @@ fun GalleryApp(
                             Text("Not now")
                         }
                     },
-                    shape = RoundedCornerShape(20.dp)
+                    shape = RoundedCornerShape(24.dp)
                 )
             }
 
@@ -3299,7 +3359,7 @@ private fun MediaManagementSettingsRow(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "One-tap media changes",
+                    text = "Direct media changes",
                     style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -3316,7 +3376,7 @@ private fun MediaManagementSettingsRow(
             if (granted) {
                 Icon(
                     imageVector = Icons.Filled.Check,
-                    contentDescription = "One-tap media changes enabled",
+                    contentDescription = "Direct media changes enabled",
                     tint = MaterialTheme.colorScheme.secondary,
                     modifier = Modifier.size(24.dp)
                 )
@@ -4120,7 +4180,7 @@ private fun PositionAwareAlbumTransitionOverlay(
     rootBoundsInWindow: Rect,
     onCommitted: (AlbumTransitionSpec) -> Unit,
     onFinished: (AlbumTransitionSpec) -> Unit,
-    content: @Composable (Album, Float) -> Unit
+    content: @Composable (Album) -> Unit
 ) {
     if (transition == null || rootWidthPx <= 0f || rootHeightPx <= 0f) return
 
@@ -4131,6 +4191,7 @@ private fun PositionAwareAlbumTransitionOverlay(
     )
     if (!sourceBounds.isUsableTransitionBounds()) {
         LaunchedEffect(transition.key) {
+            if (!committed) onCommitted(transition)
             onFinished(transition)
         }
         return
@@ -4174,8 +4235,17 @@ private fun PositionAwareAlbumTransitionOverlay(
     val heroHeight = heroBounds.height.coerceAtLeast(1f)
     val detailAlpha = GalleryMotion.smoothstep(0.34f, 0.68f, expansion)
     val coverAlpha = 1f - GalleryMotion.smoothstep(0.22f, 0.58f, expansion)
-    val cornerRadius = lerp(22f, 0f, expansion).dp
+    val cornerRadius = lerp(transition.sourceCornerRadiusDp, 0f, expansion).dp
     val scrimAlpha = GalleryMotion.smoothstep(0.04f, 0.70f, expansion) * 0.18f
+    val rootWidthDp = with(density) { rootWidthPx.toDp() }
+    val rootHeightDp = with(density) { rootHeightPx.toDp() }
+    val contentTranslationX = heroBounds.center.x - rootWidthPx / 2f
+    val contentTranslationY = heroBounds.center.y - rootHeightPx / 2f
+    val clipLeft = (rootWidthPx - heroWidth) / 2f
+    val clipTop = (rootHeightPx - heroHeight) / 2f
+    val clipRight = clipLeft + heroWidth
+    val clipBottom = clipTop + heroHeight
+    val cornerRadiusPx = with(density) { cornerRadius.toPx() }
 
     Box(
         modifier = Modifier
@@ -4192,32 +4262,45 @@ private fun PositionAwareAlbumTransitionOverlay(
     ) {
         Box(
             modifier = Modifier
+                .requiredWidth(rootWidthDp)
+                .requiredHeight(rootHeightDp)
+                .graphicsLayer {
+                    transformOrigin = TransformOrigin(0f, 0f)
+                    translationX = contentTranslationX
+                    translationY = contentTranslationY
+                    alpha = detailAlpha
+                }
+                .drawWithContent {
+                    val clippingPath = Path().apply {
+                        addRoundRect(
+                            RoundRect(
+                                rect = Rect(clipLeft, clipTop, clipRight, clipBottom),
+                                cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
+                            )
+                        )
+                    }
+                    clipPath(clippingPath) { this@drawWithContent.drawContent() }
+                }
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            content(transition.album)
+        }
+        // Keep the cover as a lightweight layer over the full-screen preview. The preview itself
+        // is now laid out once and transformed by the GPU instead of remeasuring a LazyColumn on
+        // every frame of both the open and close animations.
+        Box(
+            modifier = Modifier
                 .width(with(density) { heroWidth.toDp() })
                 .height(with(density) { heroHeight.toDp() })
                 .graphicsLayer {
                     transformOrigin = TransformOrigin(0f, 0f)
                     translationX = heroBounds.left
                     translationY = heroBounds.top
-                    shadowElevation = with(density) {
-                        14.dp.toPx() * liftProgress
-                    }
+                    shadowElevation = with(density) { 10.dp.toPx() * liftProgress }
                     clip = true
                     shape = RoundedCornerShape(cornerRadius)
                 }
-                .background(MaterialTheme.colorScheme.background)
         ) {
-            Box(
-                modifier = Modifier
-                    .requiredWidth(with(density) { rootWidthPx.toDp() })
-                    .requiredHeight(with(density) { rootHeightPx.toDp() })
-                    .graphicsLayer {
-                        alpha = detailAlpha
-                        translationX = (heroWidth - rootWidthPx) / 2f
-                        translationY = (heroHeight - rootHeightPx) / 2f
-                    }
-            ) {
-                content(transition.album, expansion)
-            }
             GalleryImage(
                 imageRes = transition.album.coverRes,
                 imageUri = transition.album.coverUri,
@@ -4242,7 +4325,6 @@ private val ReferenceViewerCloseEasing = CubicBezierEasing(0.30f, 0f, 0.58f, 1f)
 @Composable
 private fun ReferenceMediaOpenOverlay(
     transition: MediaOpenTransitionSpec?,
-    contentReady: Boolean,
     photoDecodeSize: Int,
     rootWidthPx: Float,
     rootHeightPx: Float,
@@ -4263,8 +4345,6 @@ private fun ReferenceMediaOpenOverlay(
         return
     }
     val progress = remember(transition.key) { Animatable(0f) }
-    val latestContentReady by rememberUpdatedState(contentReady)
-
     LaunchedEffect(transition.key) {
         progress.animateTo(
             targetValue = 1f,
@@ -4273,9 +4353,6 @@ private fun ReferenceMediaOpenOverlay(
                 easing = ReferenceViewerOpenEasing
             )
         )
-        if (!latestContentReady) {
-            snapshotFlow { latestContentReady }.first { it }
-        }
         onFinished(transition)
     }
 

@@ -1,5 +1,7 @@
 package com.example.nativegallery.ui.components
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -8,76 +10,119 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun MediaSelectionCapsule(
+fun MediaSelectionTopBar(
     selectedCount: Int,
     canSelectAll: Boolean,
     onClear: () -> Unit,
     onSelectAll: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val accentColor = mediaSelectionAccentColor()
+    Surface(
+        modifier = modifier
+            .widthIn(max = 420.dp)
+            .fillMaxWidth()
+            .height(58.dp),
+        color = Color(0xFF171717),
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 9.dp,
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            TextButton(onClick = onClear) {
+                Text(
+                    text = "Close",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+                )
+            }
+            Text(
+                text = "%1$,d selected".format(selectedCount),
+                modifier = Modifier
+                    .weight(1f)
+                    .clearAndSetSemantics {
+                        contentDescription = "$selectedCount selected"
+                },
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White.copy(alpha = 0.94f),
+                textAlign = TextAlign.Center
+            )
+            TextButton(onClick = onSelectAll, enabled = canSelectAll) {
+                Text(
+                    text = "Select all",
+                    color = if (canSelectAll) {
+                        accentColor
+                    } else {
+                        Color.White.copy(alpha = 0.38f)
+                    },
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun MediaSelectionActionBar(
     onShare: () -> Unit,
     onLock: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val accentColor = mediaSelectionAccentColor()
     Surface(
         modifier = modifier
             .widthIn(max = 420.dp)
             .fillMaxWidth()
-            .height(64.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
-        shape = RoundedCornerShape(percent = 50),
-        shadowElevation = 14.dp,
-        tonalElevation = 3.dp
+            .height(72.dp),
+        color = Color(0xFF171717),
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 10.dp,
+        tonalElevation = 0.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            CapsuleAction(Icons.Outlined.Close, "Cancel selection", onClear)
-            Text(
-                text = selectedCount.toString(),
-                modifier = Modifier
-                    .weight(1f)
-                    .clearAndSetSemantics {
-                        contentDescription = "$selectedCount selected"
-                    },
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            CapsuleAction(
-                icon = Icons.Outlined.SelectAll,
-                contentDescription = "Select all",
-                onClick = onSelectAll,
-                enabled = canSelectAll
-            )
-            CapsuleAction(Icons.Outlined.Share, "Share selected", onShare)
-            CapsuleAction(Icons.Outlined.Lock, "Lock selected", onLock)
-            CapsuleAction(Icons.Outlined.Folder, "Move selected", onMove)
+            CapsuleAction(Icons.Outlined.Share, "Share selected", "Share", onShare, Modifier.weight(1f), tint = accentColor)
+            CapsuleAction(Icons.Outlined.Lock, "Lock selected", "Lock", onLock, Modifier.weight(1f), tint = accentColor)
+            CapsuleAction(Icons.Outlined.Folder, "Move selected", "Move", onMove, Modifier.weight(1f), tint = accentColor)
             CapsuleAction(
                 icon = Icons.Outlined.Delete,
                 contentDescription = "Delete selected",
+                label = "Delete",
                 onClick = onDelete,
+                modifier = Modifier.weight(1f),
                 tint = MaterialTheme.colorScheme.error
             )
         }
@@ -85,23 +130,43 @@ fun MediaSelectionCapsule(
 }
 
 @Composable
+fun mediaSelectionAccentColor(): Color {
+    val backgroundLuminance = MaterialTheme.colorScheme.background.luminance()
+    val darkWeight = ((0.72f - backgroundLuminance) / 0.58f).coerceIn(0f, 1f)
+    return lerp(Color(0xFF32DCC6), MaterialTheme.colorScheme.primary, darkWeight)
+}
+
+@Composable
 private fun CapsuleAction(
     icon: ImageVector,
     contentDescription: String,
+    label: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface
+    tint: Color
 ) {
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.size(44.dp)
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = if (enabled) tint else tint.copy(alpha = 0.38f),
-            modifier = Modifier.size(21.dp)
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier.size(38.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = if (enabled) tint else tint.copy(alpha = 0.38f),
+                modifier = Modifier.size(21.dp)
+            )
+        }
+        Text(
+            text = label,
+            color = if (enabled) tint else tint.copy(alpha = 0.38f),
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium)
         )
     }
 }

@@ -17,6 +17,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -79,7 +80,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
-import com.example.nativegallery.ui.components.MediaSelectionCapsule
+import com.example.nativegallery.ui.components.MediaSelectionActionBar
+import com.example.nativegallery.ui.components.MediaSelectionTopBar
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.GalleryFastScroller
 import com.example.nativegallery.ui.components.MediaThumbnail
@@ -148,7 +150,8 @@ fun PhotosScreen(
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
     val isSelectionMode = selectedMediaIds.isNotEmpty()
     val showLoading = isLoading
-    val revealOffsetPx = with(LocalDensity.current) { 72.dp.roundToPx() }
+    val density = LocalDensity.current
+    val revealOffsetPx = with(density) { 72.dp.roundToPx() }
     var pinchPreviewScale by remember { mutableStateOf(1f) }
     val trackTileBounds = shouldTrackPhotoTileBounds(isSelectionMode, revealMediaId != null)
     val deferThumbnailLoads = remember(listState) {
@@ -249,11 +252,16 @@ fun PhotosScreen(
                 }
             }
     ) {
-        LazyColumn(
-            modifier = Modifier.graphicsLayer {
+        val gridTransformModifier = if (pinchPreviewScale != 1f) {
+            Modifier.graphicsLayer {
                 scaleX = pinchPreviewScale
                 scaleY = pinchPreviewScale
-            },
+            }
+        } else {
+            Modifier
+        }
+        LazyColumn(
+            modifier = gridTransformModifier,
             state = listState,
             contentPadding = PaddingValues(
                 start = 0.dp,
@@ -270,10 +278,7 @@ fun PhotosScreen(
                     onSearchQueryChange = onSearchQueryChange,
                     selectedCount = selectedMediaIds.size,
                     totalVisibleCount = mediaItems.size,
-                    onSelectionClear = onSelectionClear,
                     onSelectAllVisible = onSelectAllVisible,
-                    onDeleteSelected = onDeleteSelected,
-                    onHideSelected = onHideSelected,
                     onRefresh = onRefresh,
                     onOpenSettings = onOpenSettings
                 )
@@ -321,12 +326,30 @@ fun PhotosScreen(
             )
         }
 
+        AnimatedVisibility(
+            visible = isSelectionMode,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .zIndex(4f),
+            enter = fadeIn(tween(140)) + slideInVertically(
+                animationSpec = tween(180),
+                initialOffsetY = { -it / 2 }
+            ),
+            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { -it / 2 })
+        ) {
+            MediaSelectionTopBar(
+                selectedCount = selectedMediaIds.size,
+                canSelectAll = selectedMediaIds.size < mediaItems.size,
+                onClear = onSelectionClear,
+                onSelectAll = onSelectAllVisible,
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(start = 12.dp, top = 8.dp, end = 12.dp)
+            )
+        }
+
         SelectionBottomActionBar(
             visible = isSelectionMode,
-            selectedCount = selectedMediaIds.size,
-            totalVisibleCount = mediaItems.size,
-            onClear = onSelectionClear,
-            onSelectAll = onSelectAllVisible,
             onShare = onShareSelected,
             onHide = onHideSelected,
             onMove = onMoveSelected,
@@ -345,10 +368,7 @@ private fun PicturesHeader(
     onSearchQueryChange: (String) -> Unit,
     selectedCount: Int,
     totalVisibleCount: Int,
-    onSelectionClear: () -> Unit,
     onSelectAllVisible: () -> Unit,
-    onDeleteSelected: () -> Unit,
-    onHideSelected: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
@@ -361,12 +381,7 @@ private fun PicturesHeader(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (selectedCount > 0) {
-            Text(
-                text = "%1$,d selected".format(selectedCount),
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(28.dp))
         } else {
             Text(
                 text = "Photos",
@@ -475,10 +490,6 @@ private fun SearchCircle() {
 @Composable
 private fun SelectionBottomActionBar(
     visible: Boolean,
-    selectedCount: Int,
-    totalVisibleCount: Int,
-    onClear: () -> Unit,
-    onSelectAll: () -> Unit,
     onShare: () -> Unit,
     onHide: () -> Unit,
     onMove: () -> Unit,
@@ -488,21 +499,20 @@ private fun SelectionBottomActionBar(
     AnimatedVisibility(
         visible = visible,
         modifier = modifier,
-        enter = fadeIn(animationSpec = tween(100)) + slideInVertically(initialOffsetY = { it + GalleryMotion.BottomSelectionOffsetPx }),
-        exit = fadeOut(animationSpec = tween(GalleryMotion.ViewerChromeFadeMillis)) + slideOutVertically(targetOffsetY = { it + GalleryMotion.BottomSelectionOffsetPx })
+        enter = fadeIn(animationSpec = tween(140)) + slideInVertically(
+            animationSpec = tween(190),
+            initialOffsetY = { it / 2 + 24 }
+        ),
+        exit = fadeOut(animationSpec = tween(100)) + slideOutVertically(targetOffsetY = { it / 2 + 24 })
     ) {
-        MediaSelectionCapsule(
-            selectedCount = selectedCount,
-            canSelectAll = selectedCount < totalVisibleCount,
-            onClear = onClear,
-            onSelectAll = onSelectAll,
+        MediaSelectionActionBar(
             onShare = onShare,
             onLock = onHide,
             onMove = onMove,
             onDelete = onDelete,
             modifier = Modifier
                 .navigationBarsPadding()
-                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+                .padding(start = 12.dp, end = 12.dp, bottom = 2.dp)
         )
     }
 }

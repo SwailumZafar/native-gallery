@@ -84,6 +84,6 @@ class PhotoViewerCompactLayoutTest {
         val CompactWidth = 360.dp
         val CompactHeight = 240.dp
         const val ViewportTag = "compact-viewer-viewport"
-        val ViewerActions = listOf("Favorite", "Edit photo", "Share", "Info", "Lock", "Delete")
+        val ViewerActions = listOf("Favorite", "Edit photo", "Share", "Delete")
     }
 }
