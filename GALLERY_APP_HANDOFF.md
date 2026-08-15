@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-08-10
+Last updated: 2026-08-15
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -43,6 +43,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-30 slice: added media-management, two-phase vault rollback, viewer-session rotation, adaptive-viewer, fold-safe-pane, and legacy permission tests; the local suite now has 98 passing tests. Instrumentation coverage now exercises encrypted vault round trips, navigation, recreation, compact landscape, and three-button insets.
   - 2026-08-02 slice: added locked-restore confirmation/full-quality warmup and Photos fling/decode policy coverage; the local suite now has 114 passing tests. Debug lint, debug APK assembly, and instrumentation-test APK assembly all pass.
   - 2026-08-09 slice: added album drop-target/return animation and hidden-first ordering policy tests, and simplified the Locked Media restore confirmation contract; the local suite now has 116 passing tests. Debug lint and debug APK assembly pass.
+  - 2026-08-15 slice: updated compact-viewer and viewer-layout contracts for the streamlined action bar; all 116 local tests still pass, Android-test sources compile, and debug lint/APK assembly pass.
 - [ ] Gradually move screen state and business logic out of `GalleryApp.kt` into ViewModels and testable state holders.
   - 2026-07-15 slice: extracted viewer delete selection and Photos lazy-list indexing into `GalleryLogic.kt`.
   - 2026-07-15 slice: extracted normalized media/album search documents and matching into `GallerySearchIndex.kt`.
@@ -62,6 +63,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-19 slice: document-photo OCR runs sequentially off the UI thread, caches positive and negative results by media fingerprint, publishes progress in batches, and cancels while the screen/viewer is not active.
   - 2026-07-22 slice: first presentation waits for the newest MediaStore page and a timeout-bounded 12-thumbnail warmup; the complete album list stays in a loading state until full reconciliation so partial rows never reflow after opening. Album Detail warms 30 rows without blocking and stays 14 rows ahead while scrolling; Document Photos reuses unchanged version-2 OCR text under the stricter classifier rather than rescanning the entire library.
   - 2026-08-02 slice: cold start now queries 72 newest items before presentation, yields 220 ms before full reconciliation, and keeps uncached thumbnail decode/publication out of active Photos flings while still rendering memory-cache hits immediately.
+  - 2026-08-15 slice: Albums also defers uncached cover loads during active list motion, media grids avoid retaining identity graphics layers, and the fast scroller jumps directly to requested rows instead of measuring every intermediate row.
 - [x] Move large-library search indexing and expensive interaction lookup off the main UI path. Completed 2026-07-15.
   - 2026-07-15 slice: search indexing and query execution now run on `Dispatchers.Default`; remaining expensive interaction lookups stay queued.
   - 2026-07-15 slice: encrypted-vault inventory reads now run on `Dispatchers.IO` instead of during composition.
@@ -108,18 +110,18 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Latest pushed implementation baseline: 92cc6c9 Polish viewer opening and album reordering
-GitHub sync: implementation commit 92cc6c9 and this handoff are synchronized on origin/main
+Latest pushed implementation baseline: 7806667 Polish gallery interactions and theme transitions
+GitHub sync: implementation commit 7806667 and this handoff are synchronized on origin/main
 Repository visibility: private
 ```
 
 Recent saved work:
 
 ```text
+7806667 Polish gallery interactions and theme transitions
 92cc6c9 Polish viewer opening and album reordering
 8de211f Stabilize gallery scrolling and locked media restore
 b69c43b Improve gallery scrolling and media actions
-ab217ac Refine gallery motion and viewer controls
 ```
 
 Repository project-file status:
@@ -134,6 +136,43 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-08-15 Final Gallery Interaction and Theme Pass
+
+Completed locally on 2026-08-15 in implementation commit `7806667`:
+
+- Added one compact floating fast scroller to Photos, Albums, and Album Detail. Its paired up/down arrows remain close together, the thumb tracks direct dragging without measuring every intervening media row, haptics fire on grab, and the control fades out one second after scrolling stops. Its travel is clamped below the screen/header region and above bottom navigation.
+- Reworked album presentation and motion. Basic tiles are slightly larger but remain inside real list bounds so right-edge covers and names cannot be clipped. Album rows are present immediately instead of flowing in horizontally. Open/close uses a GPU-transformed full-screen detail preview, matches 18/22/24 dp source corners, waits for a stable return target, has a lifecycle safety release, and uses refined 400/350 ms easing.
+- Album reordering remains fully opaque through drag, target exchange, settle, and commit. Same-shape Basic tiles visibly exchange positions without a fade; the differently shaped Big hero and square cards preserve their aspect ratios and use a restrained target nudge instead of compressing into each other.
+- Replaced selection chrome in Photos, Album Detail, and Locked Media with sticky black top and bottom pills. The top bar says Close and Select all, the action bar labels Share/Lock/Move/Delete, only actionable icons use the adaptive theme accent, destructive actions stay red, and selection/tap/reorder paths provide haptic feedback.
+- Rebuilt photo-viewer chrome around smaller opaque back/more buttons, a compact overflow menu for Move to album, Information, and Lock, and evenly spaced Favorite/Edit/Share/Delete actions with labels. The large shared bottom container is gone; individual controls retain contrast over white photos, and the filmstrip sits closer to the action row.
+- Rotation is handled without recreating MainActivity, preserving the active Media3 player and its exact position instead of restarting or pausing video for one to two seconds. Double-tap zoom returning to 1x again restores horizontal paging.
+- Locked Media exposes its controls immediately, warms authenticated full-quality content behind its encrypted preview, supports pinch density changes, uses readable system-navigation treatment over white media, and avoids delayed low-quality replacement. Hidden Albums, Locked Media, and Recently Deleted paint complete destination backgrounds to prevent return overlap/ghost frames.
+- Grid/sort menus remain open while applying repeated density or newest/oldest choices and dismiss only when explicitly requested. Dialog corners are normalized to 24 dp, and Settings no longer presents the old “One-tap” wording.
+- Theme switching now mirrors a browser View Transition: the latest rendered Compose frame is frozen in a hardware graphics layer, the complete Material color scheme is replaced once underneath, two frames are allowed for the new theme to draw, and the old frame GPU-crossfades away over 360 ms. Saved theme selection is still loaded before first presentation, so cold launch has no wrong-theme flash.
+
+Verification:
+
+- `:app:compileDebugKotlin`: BUILD SUCCESSFUL
+- `:app:testDebugUnitTest`: BUILD SUCCESSFUL, 116 tests, 0 failures, 0 errors, 0 skipped
+- `:app:compileDebugAndroidTestKotlin`: BUILD SUCCESSFUL
+- `:app:lintDebug`: BUILD SUCCESSFUL
+- `:app:assembleDebug`: BUILD SUCCESSFUL
+- `git diff --check`: clean except expected CRLF conversion notices
+
+Latest APK:
+
+    F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+    Size: 66,481,501 bytes
+    Last write: 2026-08-15 19:59:29 Asia/Karachi
+    SHA-256: 94549E4BDECF0E9739075AE8A9AC71117A3213C27B735360C1D4E6136B7B8E13
+
+Physical-device checks still required:
+
+- No ADB device was connected for this final build. Install without clearing app data and switch Light/Dark/System several times from both settled and recently scrolled screens; confirm the old frame dissolves smoothly with no curtain, flash, or one-frame color mismatch.
+- Drag Basic tiles within and across rows, then drag between the Big hero and square cards; confirm the live exchange stays opaque and neither source card compresses or clips.
+- Stress Photos/Albums fast scrolling, including a thumb drag from end to end, and confirm it stays within the media/list track, follows the finger smoothly, and disappears one second after release.
+- Rotate a playing video repeatedly and confirm position/audio continue immediately. Also recheck viewer controls over pure white photos and returns from Locked Media, Recently Deleted, and Hidden Albums.
 
 ## 2026-08-09 Viewer Open, Album Reorder, and Hidden Albums Polish
 
