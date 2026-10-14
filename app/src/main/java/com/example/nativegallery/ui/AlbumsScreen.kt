@@ -91,6 +91,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -264,7 +265,7 @@ fun AlbumsScreen(
     onAlbumBoundsChanged: (Album, Rect) -> Unit,
     contentPadding: PaddingValues,
     listState: LazyListState,
-    activeTransitionAlbumId: String? = null,
+    activeTransitionAlbumId: State<String?>? = null,
     mediaAccessNotice: (@Composable () -> Unit)? = null,
     isLoading: Boolean = false,
     searchQuery: String = "",
@@ -994,7 +995,7 @@ private fun LayoutSelector(
 private fun LazyListScope.bigAlbumRows(
     albums: List<Album>,
     columns: Int,
-    activeTransitionAlbumId: String?,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1026,7 +1027,7 @@ private fun LazyListScope.bigAlbumRows(
 private fun LazyListScope.basicAlbumRows(
     albums: List<Album>,
     columns: Int,
-    activeTransitionAlbumId: String?,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1059,7 +1060,7 @@ private fun LazyListScope.basicAlbumRows(
 private fun AlbumHeroCard(
     album: Album,
     height: androidx.compose.ui.unit.Dp,
-    activeTransitionAlbumId: String?,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1082,7 +1083,7 @@ private fun AlbumHeroCard(
 private fun BigAlbumRow(
     albums: List<Album>,
     columns: Int,
-    activeTransitionAlbumId: String?,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1118,7 +1119,7 @@ private fun BigAlbumRow(
 private fun BasicAlbumRow(
     albums: List<Album>,
     columns: Int,
-    activeTransitionAlbumId: String?,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1138,8 +1139,8 @@ private fun BasicAlbumRow(
                             .width(cellWidth)
                             .albumReorderMotion(album, cardInteraction)
                             .albumReorderGesture(album, cardInteraction)
-                            .bouncyClickable(enabled = album.id != activeTransitionAlbumId) { onAlbumClick(album, albumBounds.value) }
-                            .hideForAlbumTransition(album.id == activeTransitionAlbumId)
+                            .bouncyClickable { onAlbumClick(album, albumBounds.value) }
+                            .hideForAlbumTransition(album.id, activeTransitionAlbumId)
                     ) {
                         Box {
                             GalleryImage(
@@ -1155,6 +1156,8 @@ private fun BasicAlbumRow(
                                 },
                                 cornerRadius = 18.dp,
                                 thumbnailSize = 384,
+                                animatedPlaceholder = false,
+                                isVideo = album.hasVideoBadge,
                                 deferUncachedLoad = deferThumbnailLoads
                             )
                             AlbumContextMenu(
@@ -1418,10 +1421,13 @@ fun AlbumDetailScreen(
             alpha = GalleryMotion.smoothstep(0.48f, 0.78f, revealProgress)
             scaleX = pinchScaleAnim.value
             scaleY = pinchScaleAnim.value
+            transformOrigin = TransformOrigin(0.5f, 0.35f)
         }
         LazyColumn(
             state = listState,
-            modifier = gridTransformModifier,
+            modifier = Modifier
+                .fillMaxSize()
+                .then(gridTransformModifier),
             contentPadding = PaddingValues(
                 start = 8.dp,
                 top = gridTopPadding,
@@ -1569,7 +1575,8 @@ fun AlbumDetailTransitionPreview(
     columnBoost: Int = 0,
     sortMode: AlbumDetailSortMode = AlbumDetailSortMode.Newest,
     initialFirstVisibleRow: Int = 0,
-    initialFirstVisibleRowOffset: Int = 0
+    initialFirstVisibleRowOffset: Int = 0,
+    onBack: () -> Unit = {}
 ) {
     val columns = when (gridMode) {
         AlbumDetailGridMode.Compact -> 4
@@ -1620,7 +1627,7 @@ fun AlbumDetailTransitionPreview(
             ) {
                 GalleryScreenHeader(
                     title = album.name,
-                    onBack = {},
+                    onBack = onBack,
                     leadingContentDescription = "",
                     trailingContent = {
                         Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
@@ -2098,7 +2105,7 @@ private fun AlbumImageCard(
     album: Album,
     modifier: Modifier,
     cornerRadius: androidx.compose.ui.unit.Dp,
-    activeTransitionAlbumId: String?,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -2116,8 +2123,8 @@ private fun AlbumImageCard(
             }
             .clip(RoundedCornerShape(cornerRadius))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .bouncyClickable(enabled = album.id != activeTransitionAlbumId) { onAlbumClick(album, albumBounds.value) }
-            .hideForAlbumTransition(album.id == activeTransitionAlbumId)
+            .bouncyClickable { onAlbumClick(album, albumBounds.value) }
+            .hideForAlbumTransition(album.id, activeTransitionAlbumId)
     ) {
         GalleryImage(
             imageRes = album.coverRes,
@@ -2126,6 +2133,8 @@ private fun AlbumImageCard(
             modifier = Modifier.fillMaxSize(),
             cornerRadius = 0.dp,
             thumbnailSize = 512,
+            animatedPlaceholder = false,
+            isVideo = album.hasVideoBadge,
             deferUncachedLoad = deferThumbnailLoads
         )
         Box(
@@ -2234,11 +2243,13 @@ private fun Modifier.albumReorderMotion(
         }
 }
 
-private fun Modifier.hideForAlbumTransition(hidden: Boolean): Modifier {
-    return if (hidden) {
-        graphicsLayer { alpha = 0f }.clearAndSetSemantics { }
-    } else {
-        this
+private fun Modifier.hideForAlbumTransition(
+    albumId: String,
+    activeAlbumIdState: State<String?>?
+): Modifier {
+    if (activeAlbumIdState == null) return this
+    return graphicsLayer {
+        alpha = if (activeAlbumIdState.value == albumId) 0f else 1f
     }
 }
 

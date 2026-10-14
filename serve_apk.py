@@ -365,9 +365,9 @@ class ApkServerHandler(http.server.BaseHTTPRequestHandler):
 </head>
 <body>
     <div class="card">
-        <div class="badge">Spring Animations &amp; Fluid Motion</div>
+        <div class="badge">ColorOS 17 Living Flow &bull; v{VERSION}</div>
         <h1>Native Gallery</h1>
-        <div class="subtitle">Version {VERSION} &bull; Build with 60/90/120Hz Spring Physics</div>
+        <div class="subtitle">Version {VERSION} &bull; ColorOS 17 Living Flow &bull; 60/90/120Hz</div>
 
         <a class="btn" href="/{PUBLIC_FILENAME}" download="{PUBLIC_FILENAME}">
             ⬇️ Download &amp; Install APK
@@ -391,12 +391,12 @@ class ApkServerHandler(http.server.BaseHTTPRequestHandler):
         </div>''' if qr_svg else ''}
 
         <div class="features">
-            <strong class="title">✨ What's Updated:</strong>
+            <strong class="title">✨ What's Updated in v{VERSION}:</strong>
             <ul>
-                <li>🌿 <strong>Spring Motion System</strong>: Android &amp; Solar Player-style harmonic physics springs on nav bar, menus, and controls.</li>
-                <li>🎯 <strong>Fluid Pull-Down Gesture</strong>: Zero-lag 1:1 image pull dismiss without abrupt jumping or offscreen snaps.</li>
-                <li>⚡ <strong>RenderThread Performance</strong>: GPU layer scaling prevents recompositions for silky 120Hz scrolling.</li>
-                <li>🔘 <strong>3-Dot Overflow Menu</strong>: Spring rotation and micro-scale tactile feedback on touch.</li>
+                <li>🌊 <strong>ColorOS 17 Living Flow Pinch</strong>: Pinch in/out scales pictures and videos content inside the grid, while header and search stay rock-solid.</li>
+                <li>📁 <strong>Ultra-Smooth Folder Transitions</strong>: Zero-lag opening and closing on folders with videos via GPU layer transforms.</li>
+                <li>🎬 <strong>Lag-Free Video Dismiss</strong>: Seamless 1:1 pull-down dismiss with paused playback and asynchronous release overhead.</li>
+                <li>⚡ <strong>Glitch-Free Folder Close</strong>: Interruptible closing animation with zero dropped taps and no folder refresh ripples.</li>
             </ul>
         </div>
 

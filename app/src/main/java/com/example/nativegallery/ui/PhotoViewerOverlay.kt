@@ -8,6 +8,8 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.LayoutInflater
@@ -709,6 +711,7 @@ fun PhotoViewerOverlay(
                 ZoomableViewerMedia(
                     mediaItem = pageItem,
                     isActive = page == currentPageForState,
+                    isViewerDragging = isViewerDragging || closeRequested,
                     controlsVisible = controlsVisible,
                     compactLandscape = compactLandscape,
                     activePhotoDecodeSize = activePhotoDecodeSize,
@@ -1376,6 +1379,7 @@ private fun PremiumDetailRow(
 private fun ZoomableViewerMedia(
     mediaItem: MediaItem,
     isActive: Boolean,
+    isViewerDragging: Boolean = false,
     controlsVisible: Boolean,
     compactLandscape: Boolean,
     activePhotoDecodeSize: Int,
@@ -1402,6 +1406,7 @@ private fun ZoomableViewerMedia(
             ViewerVideoPlayer(
                 mediaItem = mediaItem,
                 isActive = true,
+                isViewerDragging = isViewerDragging,
                 controlsVisible = controlsVisible,
                 compactLandscape = compactLandscape,
                 brightnessState = videoBrightnessState,
@@ -1621,6 +1626,7 @@ private fun ViewerVideoPoster(mediaItem: MediaItem) {
 private fun ViewerVideoPlayer(
     mediaItem: MediaItem,
     isActive: Boolean,
+    isViewerDragging: Boolean = false,
     controlsVisible: Boolean,
     compactLandscape: Boolean,
     brightnessState: MutableFloatState,
@@ -1847,12 +1853,27 @@ private fun ViewerVideoPlayer(
             positionMs = player.currentPosition
                 .coerceIn(0L, Int.MAX_VALUE.toLong())
                 .toInt()
+            (playerView?.videoSurfaceView as? TextureView)?.bitmap?.let { currentFrame ->
+                try {
+                    cacheVideoFrameThumbnail(context, uri, currentFrame)
+                } catch (_: Throwable) {
+                } finally {
+                    currentFrame.recycle()
+                }
+            }
             playerView?.player = null
             playerView = null
             player.removeListener(listener)
+            player.volume = 0f
             player.stop()
-            player.clearVideoSurface()
-            player.release()
+            val playerToRelease = player
+            Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                    playerToRelease.clearVideoSurface()
+                    playerToRelease.release()
+                } catch (_: Throwable) {
+                }
+            }, 300L)
         }
     }
 
@@ -1920,8 +1941,16 @@ private fun ViewerVideoPlayer(
             }
         }
     }
+    LaunchedEffect(isViewerDragging) {
+        if (isViewerDragging) {
+            player.playWhenReady = false
+            player.pause()
+        }
+    }
+
     LaunchedEffect(
         isActive,
+        isViewerDragging,
         isPrepared,
         foregroundPlaybackAllowed,
         lifecycleOwner.lifecycle.currentState
@@ -1929,7 +1958,7 @@ private fun ViewerVideoPlayer(
         if (!isPrepared) return@LaunchedEffect
 
         val shouldPlay = shouldVideoPlaybackRun(
-            isActive = isActive,
+            isActive = isActive && !isViewerDragging,
             isPrepared = isPrepared,
             foregroundPlaybackAllowed = foregroundPlaybackAllowed,
             lifecycleResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)

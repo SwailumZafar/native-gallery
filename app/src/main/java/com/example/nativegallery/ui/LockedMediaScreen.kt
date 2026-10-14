@@ -57,6 +57,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -70,6 +71,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.boundsInWindow
@@ -122,6 +124,7 @@ fun LockedMediaScreen(
     }
     val coroutineScope = rememberCoroutineScope()
     val pinchScaleAnim = remember { Animatable(1f) }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val mediaIds = remember(lockedMediaItems) { lockedMediaItems.map { it.id }.toSet() }
     val gridRows = remember(lockedMediaItems, activeGridColumns) {
         lockedMediaItems.chunked(activeGridColumns)
@@ -252,10 +255,19 @@ fun LockedMediaScreen(
             }
     ) {
         LazyColumn(
-            modifier = Modifier.graphicsLayer {
-                scaleX = pinchScaleAnim.value
-                scaleY = pinchScaleAnim.value
-            },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val scale = pinchScaleAnim.value
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin = if (listState.firstVisibleItemIndex == 0) {
+                        TransformOrigin(0.5f, 0f)
+                    } else {
+                        TransformOrigin(0.5f, 0.5f)
+                    }
+                },
+            state = listState,
             contentPadding = PaddingValues(
                 start = 18.dp,
                 top = 48.dp,
@@ -264,35 +276,79 @@ fun LockedMediaScreen(
             )
         ) {
             item(key = "locked-header", contentType = "locked-header") {
-                LockedMediaHeader(
-                    lockedItemCount = lockedMediaItems.size,
-                    isUnlocked = isUnlocked,
-                    onBack = onBack
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            val scale = pinchScaleAnim.value
+                            if (scale != 1f && scale > 0f) {
+                                val inv = 1f / scale
+                                scaleX = inv
+                                scaleY = inv
+                                transformOrigin = TransformOrigin(0.5f, 0f)
+                            }
+                        }
+                ) {
+                    LockedMediaHeader(
+                        lockedItemCount = lockedMediaItems.size,
+                        isUnlocked = isUnlocked,
+                        onBack = onBack
+                    )
+                }
                 Spacer(Modifier.height(30.dp))
             }
 
             if (!isUnlocked) {
                 item(key = "locked-auth", contentType = "locked-auth") {
-                    LockedMediaAuthCard(
-                        hasPin = hasPin,
-                        biometricAvailable = biometricAvailable,
-                        authMessage = authMessage,
-                        authInProgress = authInProgress,
-                        onPinCreated = onPinCreated,
-                        onPinUnlock = onPinUnlock,
-                        onBiometricUnlock = onBiometricUnlock
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                val scale = pinchScaleAnim.value
+                                if (scale != 1f && scale > 0f) {
+                                    val inv = 1f / scale
+                                    scaleX = inv
+                                    scaleY = inv
+                                    transformOrigin = TransformOrigin(0.5f, 0f)
+                                }
+                            }
+                    ) {
+                        LockedMediaAuthCard(
+                            hasPin = hasPin,
+                            biometricAvailable = biometricAvailable,
+                            authMessage = authMessage,
+                            authInProgress = authInProgress,
+                            onPinCreated = onPinCreated,
+                            onPinUnlock = onPinUnlock,
+                            onBiometricUnlock = onBiometricUnlock
+                        )
+                    }
                 }
             } else {
                 item(key = "locked-summary", contentType = "locked-summary") {
-                    LockedMediaSummary(lockedItemCount = lockedMediaItems.size)
-                    Spacer(Modifier.height(24.dp))
-                    Text(
-                        text = "Private photos and videos",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                val scale = pinchScaleAnim.value
+                                if (scale != 1f && scale > 0f) {
+                                    val inv = 1f / scale
+                                    scaleX = inv
+                                    scaleY = inv
+                                    transformOrigin = TransformOrigin(0.5f, 0f)
+                                }
+                            }
+                    ) {
+                        Column {
+                            LockedMediaSummary(lockedItemCount = lockedMediaItems.size)
+                            Spacer(Modifier.height(24.dp))
+                            Text(
+                                text = "Private photos and videos",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(12.dp))
                 }
 

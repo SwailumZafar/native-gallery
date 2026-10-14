@@ -281,10 +281,18 @@ fun PhotosScreen(
             }
     ) {
         LazyColumn(
-            modifier = Modifier.graphicsLayer {
-                scaleX = pinchScaleAnim.value
-                scaleY = pinchScaleAnim.value
-            },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val scale = pinchScaleAnim.value
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin = if (listState.firstVisibleItemIndex == 0) {
+                        TransformOrigin(0.5f, 0f)
+                    } else {
+                        TransformOrigin(0.5f, 0.5f)
+                    }
+                },
             state = listState,
             contentPadding = PaddingValues(
                 start = 0.dp,
@@ -294,22 +302,36 @@ fun PhotosScreen(
             )
         ) {
             item(key = "pictures-header", contentType = "pictures-header") {
-                PicturesHeader(
-                    mediaAccessNotice = mediaAccessNotice,
-                    collapseProgress = headerCollapse,
-                    searchQuery = searchQuery,
-                    onSearchQueryChange = onSearchQueryChange,
-                    selectedCount = selectedMediaIds.size,
-                    totalVisibleCount = mediaItems.size,
-                    onSelectAllVisible = onSelectAllVisible,
-                    onRefresh = onRefresh,
-                    onOpenSettings = onOpenSettings,
-                    onSearchClick = {
-                        coroutineScope.launch {
-                            listState.animateScrollToItem(0)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            val scale = pinchScaleAnim.value
+                            if (scale != 1f && scale > 0f) {
+                                val inv = 1f / scale
+                                scaleX = inv
+                                scaleY = inv
+                                transformOrigin = TransformOrigin(0.5f, 0f)
+                            }
                         }
-                    }
-                )
+                ) {
+                    PicturesHeader(
+                        mediaAccessNotice = mediaAccessNotice,
+                        collapseProgress = headerCollapse,
+                        searchQuery = searchQuery,
+                        onSearchQueryChange = onSearchQueryChange,
+                        selectedCount = selectedMediaIds.size,
+                        totalVisibleCount = mediaItems.size,
+                        onSelectAllVisible = onSelectAllVisible,
+                        onRefresh = onRefresh,
+                        onOpenSettings = onOpenSettings,
+                        onSearchClick = {
+                            coroutineScope.launch {
+                                listState.animateScrollToItem(0)
+                            }
+                        }
+                    )
+                }
             }
 
             if (showLoading) {

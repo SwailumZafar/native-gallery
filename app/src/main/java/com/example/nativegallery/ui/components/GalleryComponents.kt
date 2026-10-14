@@ -121,6 +121,7 @@ private class LayoutCoordinatesRef(var value: LayoutCoordinates? = null)
 
 private object ThumbnailLoadCoordinator {
     private val loadSemaphore = Semaphore(permits = 4)
+    val videoDecodeSemaphore = Semaphore(permits = 1)
     private val keyLocks = ConcurrentHashMap<String, KeyLock>()
 
     private class KeyLock {
@@ -128,7 +129,7 @@ private object ThumbnailLoadCoordinator {
         val users = AtomicInteger(0)
     }
 
-    suspend fun load(cacheKey: String, loader: () -> Bitmap?): Bitmap? {
+    suspend fun load(cacheKey: String, loader: suspend () -> Bitmap?): Bitmap? {
         ThumbnailMemoryCache.get(cacheKey)?.let { return it }
         val keyLock = keyLocks.compute(cacheKey) { _, existing ->
             (existing ?: KeyLock()).also { it.users.incrementAndGet() }
@@ -864,10 +865,24 @@ private suspend fun loadCachedBitmap(
             ThumbnailDiskCache.get(context, cacheKey)?.let { return@loader it }
         }
         val loaded = when (loadQuality) {
-            ImageLoadQuality.Thumbnail -> loadThumbnail(context, imageUri, thumbnailSize, isVideo)
+            ImageLoadQuality.Thumbnail -> {
+                if (isVideo) {
+                    ThumbnailLoadCoordinator.videoDecodeSemaphore.withPermit {
+                        loadThumbnail(context, imageUri, thumbnailSize, isVideo = true)
+                    }
+                } else {
+                    loadThumbnail(context, imageUri, thumbnailSize, isVideo = false)
+                }
+            }
             ImageLoadQuality.HighQuality -> loadHighQualityBitmap(context, imageUri, thumbnailSize)
                 ?: loadSampledBitmap(context, imageUri, thumbnailSize)
-                ?: loadThumbnail(context, imageUri, thumbnailSize, isVideo)
+                ?: if (isVideo) {
+                    ThumbnailLoadCoordinator.videoDecodeSemaphore.withPermit {
+                        loadThumbnail(context, imageUri, thumbnailSize, isVideo = true)
+                    }
+                } else {
+                    loadThumbnail(context, imageUri, thumbnailSize, isVideo = false)
+                }
         }
         if (diskCacheEligible) {
             loaded?.let { ThumbnailDiskCache.put(context, cacheKey, it) }
