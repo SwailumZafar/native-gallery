@@ -72,6 +72,46 @@ object MotionSpecs {
         dampingRatio = 0.82f,
         stiffness = 280f,
     )
+
+    /**
+     * Physics spring for folder opening expansion.
+     */
+    val AppleSpringFolder: SpringSpec<Float> = spring(
+        dampingRatio = 0.82f,
+        stiffness = 300f,
+    )
+
+    /**
+     * Physics spring for folder closing collapse.
+     */
+    val AppleSpringFolderClose: SpringSpec<Float> = spring(
+        dampingRatio = 0.84f,
+        stiffness = 320f,
+    )
+
+    /**
+     * Responsive spring for pinch-to-resize bounce recovery.
+     */
+    val AppleSpringPinch: SpringSpec<Float> = spring(
+        dampingRatio = 0.76f,
+        stiffness = 340f,
+    )
+
+    /**
+     * Fluid snap spring for photo viewer paging between media items.
+     */
+    val AppleSpringPager: SpringSpec<Float> = spring(
+        dampingRatio = 0.82f,
+        stiffness = 420f,
+    )
+
+    /**
+     * Bouncy spring for modal dialogs, popups, and settings overlays.
+     */
+    val AppleSpringModal: SpringSpec<Float> = spring(
+        dampingRatio = 0.78f,
+        stiffness = 400f,
+    )
 }
 
 object GalleryMotion {
@@ -85,20 +125,20 @@ object GalleryMotion {
     const val SecondaryOpenMillis = 260
     const val SecondaryCloseMillis = 230
 
-    const val ContainerOpenDamping = 0.86f
-    const val ContainerOpenStiffness = 360f
-    const val ContainerCloseDamping = 0.90f
+    const val ContainerOpenDamping = 0.82f
+    const val ContainerOpenStiffness = 300f
+    const val ContainerCloseDamping = 0.84f
     const val ContainerCloseStiffness = 320f
-    const val ViewerSpringBackDamping = 0.80f
+    const val ViewerSpringBackDamping = 0.78f
     const val ViewerSpringBackStiffness = 380f
 
     const val AlbumHeroOpenDamping = ContainerOpenDamping
     const val AlbumHeroOpenStiffness = ContainerOpenStiffness
-    const val MediaOpenDamping = 0.91f
-    const val MediaOpenStiffness = 260f
-    const val ViewerDismissDamping = 0.86f
+    const val MediaOpenDamping = 0.86f
+    const val MediaOpenStiffness = 280f
+    const val ViewerDismissDamping = 0.82f
     const val ViewerDismissStiffness = 360f
-    const val ViewerTransformDamping = 0.88f
+    const val ViewerTransformDamping = 0.84f
     const val ViewerTransformStiffness = 360f
     const val SkeletonVisibleMillis = 1600L
     const val SkeletonShimmerMillis = 1350
@@ -112,16 +152,16 @@ object GalleryMotion {
     const val BottomSelectionOffsetPx = 120
     const val BottomNavIndicatorStiffness = 520f
     const val BottomNavIndicatorDamping = 0.76f
-    const val BottomNavPressedScale = 0.92f
-    const val BottomNavPressStiffness = 450f
+    const val BottomNavPressedScale = 0.90f
+    const val BottomNavPressStiffness = 480f
     const val BottomNavPressDamping = 0.72f
-    const val TilePressedScale = 0.96f
-    const val PressDamping = 0.76f
-    const val PressStiffness = 450f
+    const val TilePressedScale = 0.94f
+    const val PressDamping = 0.72f
+    const val PressStiffness = 440f
 
     val ViewerHeroCloseSpring: SpringSpec<Float> = spring(
-        dampingRatio = 0.86f,
-        stiffness = 380f
+        dampingRatio = 0.84f,
+        stiffness = 360f
     )
 
     fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {

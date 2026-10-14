@@ -18,6 +18,7 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -52,6 +53,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -157,6 +159,7 @@ import com.example.nativegallery.ui.components.GalleryImage
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.MotionSpecs
 import com.example.nativegallery.ui.components.PremiumDropdownMenu
 import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -212,6 +215,7 @@ fun PhotoViewerOverlay(
     mediaItem: MediaItem?,
     visible: Boolean,
     onClose: (Offset, Float, Float) -> Unit,
+    onCloseWithMotion: ((Offset, Float, Float, Float, Float) -> Unit)? = null,
     onDelete: (MediaItem, Int) -> Unit,
     onHide: (MediaItem, Int) -> Unit = { _, _ -> },
     onRestore: (MediaItem, Int) -> Unit = { _, _ -> },
@@ -435,17 +439,30 @@ fun PhotoViewerOverlay(
         }
     }
 
-    fun closeViewerWithChromeFade(closeOffset: Offset = Offset.Zero, closeScale: Float = 1f, closeBackdropAlpha: Float = 1f) {
+    fun closeViewerWithChromeFade(
+        closeOffset: Offset = Offset.Zero,
+        closeScale: Float = 1f,
+        closeBackdropAlpha: Float = 1f,
+        closeRotationZ: Float = 0f,
+        closeRotationX: Float = 0f
+    ) {
         if (closeRequested) return
         closeRequested = true
         controlsVisible = false
         detailsVisible = false
+        val dispatch = {
+            if (onCloseWithMotion != null) {
+                onCloseWithMotion(closeOffset, closeScale, closeBackdropAlpha, closeRotationZ, closeRotationX)
+            } else {
+                onClose(closeOffset, closeScale, closeBackdropAlpha)
+            }
+        }
         if (closeOffset != Offset.Zero) {
-            onClose(closeOffset, closeScale, closeBackdropAlpha)
+            dispatch()
         } else {
             scope.launch {
                 delay(GalleryMotion.ViewerChromeCloseDelayMillis)
-                onClose(closeOffset, closeScale, closeBackdropAlpha)
+                dispatch()
             }
         }
     }
@@ -594,10 +611,14 @@ fun PhotoViewerOverlay(
                         } else if (isDownwardDrag) {
                             if (shouldDismissViewerDrag(dragOffset, dragVelocity, dismissThresholdPx)) {
                                 isViewerDragging = false
+                                val rotZ = (dragOffset.x / 38f).coerceIn(-7f, 7f)
+                                val rotX = (dragOffset.y / 80f).coerceIn(0f, 6f)
                                 closeViewerWithChromeFade(
                                     closeOffset = renderedViewerDragOffset(dragOffset),
                                     closeScale = viewerDismissScale(dragOffset, dismissThresholdPx),
-                                    closeBackdropAlpha = viewerBackdropAlpha(dragOffset, dismissThresholdPx)
+                                    closeBackdropAlpha = viewerBackdropAlpha(dragOffset, dismissThresholdPx),
+                                    closeRotationZ = rotZ,
+                                    closeRotationX = rotX
                                 )
                             } else {
                                 isViewerDragging = false
@@ -619,6 +640,12 @@ fun PhotoViewerOverlay(
                 }
             }
     ) {
+        val targetViewerBg = if (currentItem.isVideo) Color.Black else ViewerPhotoBackground
+        val viewerBgColor by animateColorAsState(
+            targetValue = targetViewerBg,
+            animationSpec = tween(180),
+            label = "viewerBgColor"
+        )
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -626,21 +653,36 @@ fun PhotoViewerOverlay(
                     val currentOffset = if (isViewerDragging) dragOffset else animatedDragOffset
                     alpha = viewerBackdropAlpha(currentOffset, dismissThresholdPx)
                 }
-                .background(if (currentItem.isVideo) Color.Black else ViewerPhotoBackground)
+                .background(viewerBgColor)
         )
         HorizontalPager(
             state = pagerState,
+            pageSpacing = 16.dp,
+            flingBehavior = PagerDefaults.flingBehavior(
+                state = pagerState,
+                snapAnimationSpec = MotionSpecs.AppleSpringPager
+            ),
             modifier = Modifier
                 .fillMaxSize()
-                .clipToBounds()
                 .testTag(ViewerMediaStageTestTag)
                 .graphicsLayer {
                     val currentOffset = if (isViewerDragging) dragOffset else animatedDragOffset
                     val pullScale = viewerDismissScale(currentOffset, dismissThresholdPx)
+                    val dismissFraction = ((1f - pullScale) / (1f - 0.72f)).coerceIn(0f, 1f)
+                    val cornerRadiusPx = with(density) { (28.dp.toPx() * dismissFraction) }
+                    val elevationPx = with(density) { (22.dp.toPx() * dismissFraction) }
+                    val rotZ = (currentOffset.x / 38f).coerceIn(-7f, 7f)
+                    val rotX = (currentOffset.y / 80f).coerceIn(0f, 6f)
                     translationX = currentOffset.x * 0.96f
                     translationY = currentOffset.y * 0.96f
                     scaleX = pullScale
                     scaleY = pullScale
+                    rotationZ = rotZ
+                    rotationX = rotX
+                    cameraDistance = 16f * density.density
+                    shadowElevation = elevationPx
+                    clip = cornerRadiusPx > 0f
+                    shape = RoundedCornerShape(with(density) { cornerRadiusPx.toDp() })
                 },
             beyondViewportPageCount = viewerBeyondViewportPageCount(),
             userScrollEnabled = !activePhotoZoomed &&
@@ -649,50 +691,66 @@ fun PhotoViewerOverlay(
             key = { page -> viewerItems[page].id }
         ) { page ->
             val pageItem = viewerItems[page]
-            ZoomableViewerMedia(
-                mediaItem = pageItem,
-                isActive = page == currentPageForState,
-                controlsVisible = controlsVisible,
-                compactLandscape = compactLandscape,
-                activePhotoDecodeSize = activePhotoDecodeSize,
-                videoBrightnessState = videoBrightnessState,
-                brightnessOverrideEnabled = brightnessOverrideEnabled,
-                videoPlaybackVolumeState = videoPlaybackVolumeState,
-                autoplayVideos = autoplayVideos,
-                initiallyMuted = startVideosMuted,
-                lastAudibleVolumeState = lastAudibleVolumeState,
-                sharedTransitionScope = sharedTransitionScope,
-                animatedVisibilityScope = animatedVisibilityScope,
-                sharedBoundsTransform = sharedBoundsTransform,
-                sharedElementKeyPrefix = sharedElementKeyPrefix,
-                isSharedTransitionReady = activeMediaPlaced,
-                onActiveMediaPlaced = {
-                    if (page == currentPageForState) {
-                        activeMediaPlaced = true
+            val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction)
+            val absOffset = kotlin.math.abs(pageOffset)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val scale = 1f - (absOffset * 0.08f).coerceIn(0f, 0.08f)
+                        val alphaVal = (1f - absOffset * 0.45f).coerceIn(0.55f, 1f)
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = alphaVal
+                        translationX = -pageOffset * 0.22f * size.width
+                        cameraDistance = 16f * density.density
                     }
-                },
-                onToggleControls = {
-                    if (activePhotoZoomed) return@ZoomableViewerMedia
-                    if (detailsVisible) {
-                        detailsVisible = false
-                        controlsVisible = true
-                    } else {
-                        controlsVisible = !controlsVisible
-                    }
-                },
-                onZoomStateChanged = { zoomed ->
-                    if (page == currentPageForState) {
-                        val wasZoomed = activePhotoZoomed
-                        activePhotoZoomed = zoomed
-                        if (zoomed) {
+            ) {
+                ZoomableViewerMedia(
+                    mediaItem = pageItem,
+                    isActive = page == currentPageForState,
+                    controlsVisible = controlsVisible,
+                    compactLandscape = compactLandscape,
+                    activePhotoDecodeSize = activePhotoDecodeSize,
+                    videoBrightnessState = videoBrightnessState,
+                    brightnessOverrideEnabled = brightnessOverrideEnabled,
+                    videoPlaybackVolumeState = videoPlaybackVolumeState,
+                    autoplayVideos = autoplayVideos,
+                    initiallyMuted = startVideosMuted,
+                    lastAudibleVolumeState = lastAudibleVolumeState,
+                    sharedTransitionScope = sharedTransitionScope,
+                    animatedVisibilityScope = animatedVisibilityScope,
+                    sharedBoundsTransform = sharedBoundsTransform,
+                    sharedElementKeyPrefix = sharedElementKeyPrefix,
+                    isSharedTransitionReady = activeMediaPlaced,
+                    onActiveMediaPlaced = {
+                        if (page == currentPageForState) {
+                            activeMediaPlaced = true
+                        }
+                    },
+                    onToggleControls = {
+                        if (activePhotoZoomed) return@ZoomableViewerMedia
+                        if (detailsVisible) {
                             detailsVisible = false
-                            controlsVisible = false
-                        } else if (wasZoomed) {
                             controlsVisible = true
+                        } else {
+                            controlsVisible = !controlsVisible
+                        }
+                    },
+                    onZoomStateChanged = { zoomed ->
+                        if (page == currentPageForState) {
+                            val wasZoomed = activePhotoZoomed
+                            activePhotoZoomed = zoomed
+                            if (zoomed) {
+                                detailsVisible = false
+                                controlsVisible = false
+                            } else if (wasZoomed) {
+                                controlsVisible = true
+                            }
                         }
                     }
-                }
-            )
+                )
+            }
         }
 
         AnimatedVisibility(

@@ -14,18 +14,27 @@ import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import android.util.Size
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -180,7 +189,10 @@ fun HeaderActionButton(
     contentDescription: String,
     onClick: () -> Unit
 ) {
-    IconButton(onClick = onClick) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.solarTactile(scaleDown = 0.88f, onClick = onClick)
+    ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
@@ -197,13 +209,49 @@ fun SearchPill(
     onQueryChange: ((String) -> Unit)? = null
 ) {
     val editable = onQueryChange != null
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.982f else 1f,
+        animationSpec = MotionSpecs.AppleSpringSnappy,
+        label = "searchPillPressScale"
+    )
+    val elevationDp by animateFloatAsState(
+        targetValue = if (isFocused || query.isNotBlank() || isPressed) 5f else 1.5f,
+        animationSpec = MotionSpecs.AppleSpringSnappy,
+        label = "searchPillElevation"
+    )
+    val iconTint by animateColorAsState(
+        targetValue = if (isFocused || query.isNotBlank()) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = tween(180),
+        label = "searchIconTint"
+    )
+    val borderAlpha by animateFloatAsState(
+        targetValue = if (isFocused) 0.38f else 0f,
+        animationSpec = MotionSpecs.AppleSpringSnappy,
+        label = "searchBorderAlpha"
+    )
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .height(64.dp),
+            .height(64.dp)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            },
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
         shape = RoundedCornerShape(36.dp),
-        shadowElevation = 1.dp
+        shadowElevation = elevationDp.dp,
+        border = if (borderAlpha > 0.01f) {
+            BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = borderAlpha))
+        } else {
+            null
+        }
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 22.dp),
@@ -212,8 +260,14 @@ fun SearchPill(
             Icon(
                 imageVector = Icons.Filled.Search,
                 contentDescription = "Search",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(28.dp)
+                tint = iconTint,
+                modifier = Modifier
+                    .size(28.dp)
+                    .graphicsLayer {
+                        val activeScale = if (isFocused || query.isNotBlank()) 1.08f else 1f
+                        scaleX = activeScale
+                        scaleY = activeScale
+                    }
             )
             Spacer(Modifier.width(16.dp))
             if (editable) {
@@ -221,6 +275,7 @@ fun SearchPill(
                     value = query,
                     onValueChange = { value -> onQueryChange?.invoke(value) },
                     singleLine = true,
+                    interactionSource = interactionSource,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 14.sp,
                         lineHeight = 18.sp,
@@ -245,8 +300,15 @@ fun SearchPill(
                         }
                     }
                 )
-                if (query.isNotBlank()) {
-                    IconButton(onClick = { onQueryChange?.invoke("") }) {
+                AnimatedVisibility(
+                    visible = query.isNotBlank(),
+                    enter = scaleIn(spring(dampingRatio = 0.72f, stiffness = 500f)) + fadeIn(tween(120)),
+                    exit = scaleOut(spring(dampingRatio = 0.85f, stiffness = 500f)) + fadeOut(tween(100))
+                ) {
+                    IconButton(
+                        onClick = { onQueryChange?.invoke("") },
+                        modifier = Modifier.solarTactile(scaleDown = 0.85f) { onQueryChange?.invoke("") }
+                    ) {
                         Icon(
                             imageVector = Icons.Filled.Close,
                             contentDescription = "Clear search",
@@ -321,7 +383,7 @@ fun MediaThumbnail(
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pressScaleState = animateFloatAsState(
-        targetValue = if (isPressed) 0.965f else 1f,
+        targetValue = if (isPressed) 0.93f else 1f,
         animationSpec = MotionSpecs.AppleSpringSnappy,
         label = "thumbnailPressScale"
     )
@@ -373,12 +435,18 @@ fun MediaThumbnail(
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.32f))
             )
+        }
+        AnimatedVisibility(
+            visible = selected,
+            enter = scaleIn(spring(dampingRatio = 0.72f, stiffness = 480f)) + fadeIn(tween(100)),
+            exit = scaleOut(spring(dampingRatio = 0.84f, stiffness = 480f)) + fadeOut(tween(80)),
+            modifier = Modifier.align(Alignment.TopEnd)
+        ) {
             Icon(
                 imageVector = Icons.Filled.CheckCircle,
                 contentDescription = "Selected",
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
                     .padding(7.dp)
                     .size(24.dp)
             )

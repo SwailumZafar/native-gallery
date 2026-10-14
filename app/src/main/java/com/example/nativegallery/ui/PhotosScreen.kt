@@ -7,9 +7,14 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.input.pointer.pointerInput
@@ -153,12 +158,17 @@ fun PhotosScreen(
     val isSelectionMode = selectedMediaIds.isNotEmpty()
     val showLoading = isLoading
     val density = LocalDensity.current
+    val hapticFeedback = LocalHapticFeedback.current
+    val coroutineScope = rememberCoroutineScope()
     val revealOffsetPx = with(density) { 72.dp.roundToPx() }
-    var pinchPreviewScale by remember { mutableStateOf(1f) }
+    val pinchScaleAnim = remember { Animatable(1f) }
     val trackTileBounds = shouldTrackPhotoTileBounds(isSelectionMode, revealMediaId != null)
     val deferThumbnailLoads = remember(listState) {
         derivedStateOf { shouldDeferPhotoThumbnailLoads(listState.isScrollInProgress) }
     }
+
+    val currentGridColumns by rememberUpdatedState(gridColumns)
+    val currentOnGridColumnsChange by rememberUpdatedState(onGridColumnsChange)
 
     LaunchedEffect(revealMediaId, sections, gridColumns) {
         val mediaId = revealMediaId ?: return@LaunchedEffect
@@ -224,7 +234,7 @@ fun PhotosScreen(
                     )
                 }
             }
-            .pointerInput(gridColumns) {
+            .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     var cumulativeZoom = 1f
@@ -233,37 +243,48 @@ fun PhotosScreen(
                         var gestureActive = true
                         while (gestureActive) {
                             val event = awaitPointerEvent()
-                            if (event.changes.count { it.pressed } >= 2) {
-                                cumulativeZoom *= event.calculateZoom()
-                                pinchPreviewScale = (1f + (cumulativeZoom - 1f) * 0.22f)
-                                    .coerceIn(0.94f, 1.06f)
-                                if (!densityChanged && cumulativeZoom >= 1.16f) {
-                                    onGridColumnsChange((gridColumns - 1).coerceAtLeast(2))
-                                    densityChanged = true
-                                } else if (!densityChanged && cumulativeZoom <= 0.86f) {
-                                    onGridColumnsChange((gridColumns + 1).coerceAtMost(10))
-                                    densityChanged = true
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.size >= 2) {
+                                val zoomChange = event.calculateZoom()
+                                cumulativeZoom *= zoomChange
+                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.38f)
+                                    .coerceIn(0.70f, 1.45f)
+                                coroutineScope.launch { pinchScaleAnim.snapTo(targetScale) }
+                                if (!densityChanged && cumulativeZoom >= 1.20f) {
+                                    val cols = currentGridColumns
+                                    if (cols > 2) {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        currentOnGridColumnsChange(cols - 1)
+                                        densityChanged = true
+                                    }
+                                } else if (!densityChanged && cumulativeZoom <= 0.82f) {
+                                    val cols = currentGridColumns
+                                    if (cols < 10) {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        currentOnGridColumnsChange(cols + 1)
+                                        densityChanged = true
+                                    }
                                 }
                                 event.changes.forEach { it.consume() }
                             }
                             gestureActive = event.changes.any { it.pressed }
                         }
                     } finally {
-                        pinchPreviewScale = 1f
+                        coroutineScope.launch {
+                            pinchScaleAnim.animateTo(
+                                targetValue = 1f,
+                                animationSpec = MotionSpecs.AppleSpringPinch
+                            )
+                        }
                     }
                 }
             }
     ) {
-        val gridTransformModifier = if (pinchPreviewScale != 1f) {
-            Modifier.graphicsLayer {
-                scaleX = pinchPreviewScale
-                scaleY = pinchPreviewScale
-            }
-        } else {
-            Modifier
-        }
         LazyColumn(
-            modifier = gridTransformModifier,
+            modifier = Modifier.graphicsLayer {
+                scaleX = pinchScaleAnim.value
+                scaleY = pinchScaleAnim.value
+            },
             state = listState,
             contentPadding = PaddingValues(
                 start = 0.dp,
@@ -282,7 +303,12 @@ fun PhotosScreen(
                     totalVisibleCount = mediaItems.size,
                     onSelectAllVisible = onSelectAllVisible,
                     onRefresh = onRefresh,
-                    onOpenSettings = onOpenSettings
+                    onOpenSettings = onOpenSettings,
+                    onSearchClick = {
+                        coroutineScope.launch {
+                            listState.animateScrollToItem(0)
+                        }
+                    }
                 )
             }
 
@@ -333,11 +359,14 @@ fun PhotosScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .zIndex(4f),
-            enter = fadeIn(tween(140)) + slideInVertically(
-                animationSpec = tween(180),
+            enter = fadeIn(MotionSpecs.AppleSpringSnappy) + slideInVertically(
+                animationSpec = MotionSpecs.AppleSpringSheetOffset,
                 initialOffsetY = { -it / 2 }
             ),
-            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { -it / 2 })
+            exit = fadeOut(tween(100)) + slideOutVertically(
+                animationSpec = MotionSpecs.AppleSpringSheetOffset,
+                targetOffsetY = { -it / 2 }
+            )
         ) {
             MediaSelectionTopBar(
                 selectedCount = selectedMediaIds.size,
@@ -372,8 +401,10 @@ private fun PicturesHeader(
     totalVisibleCount: Int,
     onSelectAllVisible: () -> Unit,
     onRefresh: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onSearchClick: () -> Unit = {}
 ) {
+    val density = LocalDensity.current
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
 
     Column(
@@ -389,10 +420,13 @@ private fun PicturesHeader(
                 text = "Photos",
                 modifier = Modifier.graphicsLayer {
                     val progress = collapseProgress.value.coerceIn(0f, 1f)
-                    alpha = interpolate(1f, 0.76f, progress)
+                    val easedProgress = GalleryMotion.easeOutCubic(progress)
+                    alpha = interpolate(1f, 0.76f, easedProgress)
                     transformOrigin = TransformOrigin(0.5f, 0f)
-                    scaleX = interpolate(1f, 0.5f, progress)
-                    scaleY = interpolate(1f, 0.5f, progress)
+                    scaleX = interpolate(1f, 0.58f, easedProgress)
+                    scaleY = interpolate(1f, 0.58f, easedProgress)
+                    translationY = -6f * easedProgress
+                    cameraDistance = 16f * density.density
                 },
                 style = MaterialTheme.typography.headlineLarge.copy(
                     fontSize = 52.sp,
@@ -415,7 +449,7 @@ private fun PicturesHeader(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    SearchCircle()
+                    SearchCircle(onClick = onSearchClick)
                     Box {
                         PremiumOverflowButton(
                             expanded = menuExpanded,
@@ -471,11 +505,13 @@ private fun PicturesHeader(
 }
 
 @Composable
-private fun SearchCircle() {
+private fun SearchCircle(
+    onClick: () -> Unit = {}
+) {
     Surface(
         modifier = Modifier
             .size(50.dp)
-            .solarTactile(scaleDown = 0.90f, onClick = {}),
+            .solarTactile(scaleDown = 0.90f, onClick = onClick),
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = CircleShape,
         shadowElevation = 0.dp

@@ -120,6 +120,7 @@ import com.example.nativegallery.ui.components.PremiumOverflowButton
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.MediaSelectionActionBar
 import com.example.nativegallery.ui.components.MediaSelectionTopBar
+import com.example.nativegallery.ui.components.MotionSpecs
 import com.example.nativegallery.ui.components.bouncyClickable
 import com.example.nativegallery.ui.components.ResourceImage
 import com.example.nativegallery.ui.components.ScreenHeader
@@ -1229,6 +1230,9 @@ fun AlbumDetailScreen(
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
     val hapticFeedback = LocalHapticFeedback.current
+    val coroutineScope = rememberCoroutineScope()
+    val currentGridMode by rememberUpdatedState(gridMode)
+    val currentOnGridModeChange by rememberUpdatedState(onGridModeChange)
     val sortedMediaItems = remember(mediaItems, sortMode) {
         sortAlbumMedia(mediaItems, sortMode)
     }
@@ -1255,7 +1259,7 @@ fun AlbumDetailScreen(
     }
     val trackMediaBounds = selectedMediaIds.isNotEmpty() || revealMediaId != null
     val isSelectionMode = selectedMediaIds.isNotEmpty()
-    var pinchPreviewScale by remember { mutableStateOf(1f) }
+    val pinchScaleAnim = remember(album.id) { Animatable(1f) }
 
     fun rootPoint(localPoint: Offset): Offset = Offset(
         rootBounds.value.left + localPoint.x,
@@ -1355,7 +1359,7 @@ fun AlbumDetailScreen(
                     )
                 }
             }
-            .pointerInput(gridMode) {
+            .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     var cumulativeZoom = 1f
@@ -1364,51 +1368,56 @@ fun AlbumDetailScreen(
                         var gestureActive = true
                         while (gestureActive) {
                             val event = awaitPointerEvent()
-                            if (event.changes.count { it.pressed } >= 2) {
-                                cumulativeZoom *= event.calculateZoom()
-                                pinchPreviewScale = (1f + (cumulativeZoom - 1f) * 0.22f)
-                                    .coerceIn(0.94f, 1.06f)
-                                if (!densityChanged && cumulativeZoom >= 1.16f) {
-                                    val nextMode = when (gridMode) {
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.size >= 2) {
+                                val zoomChange = event.calculateZoom()
+                                cumulativeZoom *= zoomChange
+                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.38f)
+                                    .coerceIn(0.70f, 1.45f)
+                                coroutineScope.launch { pinchScaleAnim.snapTo(targetScale) }
+                                val mode = currentGridMode
+                                if (!densityChanged && cumulativeZoom >= 1.20f) {
+                                    val nextMode = when (mode) {
                                         AlbumDetailGridMode.Compact -> AlbumDetailGridMode.Comfortable
                                         AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Spacious
                                         AlbumDetailGridMode.Spacious -> AlbumDetailGridMode.Spacious
                                     }
-                                    if (nextMode != gridMode) {
+                                    if (nextMode != mode) {
                                         hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        onGridModeChange(nextMode)
+                                        currentOnGridModeChange(nextMode)
+                                        densityChanged = true
                                     }
-                                    densityChanged = true
-                                } else if (!densityChanged && cumulativeZoom <= 0.86f) {
-                                    val nextMode = when (gridMode) {
+                                } else if (!densityChanged && cumulativeZoom <= 0.82f) {
+                                    val nextMode = when (mode) {
                                         AlbumDetailGridMode.Spacious -> AlbumDetailGridMode.Comfortable
                                         AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Compact
                                         AlbumDetailGridMode.Compact -> AlbumDetailGridMode.Compact
                                     }
-                                    if (nextMode != gridMode) {
+                                    if (nextMode != mode) {
                                         hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        onGridModeChange(nextMode)
+                                        currentOnGridModeChange(nextMode)
+                                        densityChanged = true
                                     }
-                                    densityChanged = true
                                 }
                                 event.changes.forEach { it.consume() }
                             }
                             gestureActive = event.changes.any { it.pressed }
                         }
                     } finally {
-                        pinchPreviewScale = 1f
+                        coroutineScope.launch {
+                            pinchScaleAnim.animateTo(
+                                targetValue = 1f,
+                                animationSpec = MotionSpecs.AppleSpringPinch
+                            )
+                        }
                     }
                 }
             }
     ) {
-        val gridTransformModifier = if (pinchPreviewScale != 1f || revealProgress < 1f) {
-            Modifier.graphicsLayer {
-                alpha = GalleryMotion.smoothstep(0.48f, 0.78f, revealProgress)
-                scaleX = pinchPreviewScale
-                scaleY = pinchPreviewScale
-            }
-        } else {
-            Modifier
+        val gridTransformModifier = Modifier.graphicsLayer {
+            alpha = GalleryMotion.smoothstep(0.48f, 0.78f, revealProgress)
+            scaleX = pinchScaleAnim.value
+            scaleY = pinchScaleAnim.value
         }
         LazyColumn(
             state = listState,

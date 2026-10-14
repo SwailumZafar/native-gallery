@@ -8,7 +8,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import com.example.nativegallery.ui.components.MotionSpecs
 
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -116,7 +120,8 @@ fun LockedMediaScreen(
     var activeGridColumns by remember(gridColumns) {
         mutableIntStateOf(gridColumns.coerceIn(2, 10))
     }
-    var pinchPreviewScale by remember { mutableFloatStateOf(1f) }
+    val coroutineScope = rememberCoroutineScope()
+    val pinchScaleAnim = remember { Animatable(1f) }
     val mediaIds = remember(lockedMediaItems) { lockedMediaItems.map { it.id }.toSet() }
     val gridRows = remember(lockedMediaItems, activeGridColumns) {
         lockedMediaItems.chunked(activeGridColumns)
@@ -201,7 +206,7 @@ fun LockedMediaScreen(
                     )
                 }
             }
-            .pointerInput(activeGridColumns, isUnlocked) {
+            .pointerInput(isUnlocked) {
                 if (!isUnlocked) return@pointerInput
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
@@ -211,31 +216,45 @@ fun LockedMediaScreen(
                         var gestureActive = true
                         while (gestureActive) {
                             val event = awaitPointerEvent()
-                            if (event.changes.count { it.pressed } >= 2) {
-                                cumulativeZoom *= event.calculateZoom()
-                                pinchPreviewScale = (1f + (cumulativeZoom - 1f) * 0.22f)
-                                    .coerceIn(0.94f, 1.06f)
-                                if (!densityChanged && cumulativeZoom >= 1.16f) {
-                                    activeGridColumns = (activeGridColumns - 1).coerceAtLeast(2)
-                                    densityChanged = true
-                                } else if (!densityChanged && cumulativeZoom <= 0.86f) {
-                                    activeGridColumns = (activeGridColumns + 1).coerceAtMost(10)
-                                    densityChanged = true
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.size >= 2) {
+                                val zoomChange = event.calculateZoom()
+                                cumulativeZoom *= zoomChange
+                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.38f)
+                                    .coerceIn(0.70f, 1.45f)
+                                coroutineScope.launch { pinchScaleAnim.snapTo(targetScale) }
+                                if (!densityChanged && cumulativeZoom >= 1.20f) {
+                                    if (activeGridColumns > 2) {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        activeGridColumns = (activeGridColumns - 1).coerceAtLeast(2)
+                                        densityChanged = true
+                                    }
+                                } else if (!densityChanged && cumulativeZoom <= 0.82f) {
+                                    if (activeGridColumns < 10) {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        activeGridColumns = (activeGridColumns + 1).coerceAtMost(10)
+                                        densityChanged = true
+                                    }
                                 }
                                 event.changes.forEach { it.consume() }
                             }
                             gestureActive = event.changes.any { it.pressed }
                         }
                     } finally {
-                        pinchPreviewScale = 1f
+                        coroutineScope.launch {
+                            pinchScaleAnim.animateTo(
+                                targetValue = 1f,
+                                animationSpec = MotionSpecs.AppleSpringPinch
+                            )
+                        }
                     }
                 }
             }
     ) {
         LazyColumn(
             modifier = Modifier.graphicsLayer {
-                scaleX = pinchPreviewScale
-                scaleY = pinchPreviewScale
+                scaleX = pinchScaleAnim.value
+                scaleY = pinchScaleAnim.value
             },
             contentPadding = PaddingValues(
                 start = 18.dp,
@@ -314,11 +333,14 @@ fun LockedMediaScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .zIndex(4f),
-            enter = fadeIn(tween(140)) + slideInVertically(
-                animationSpec = tween(180),
+            enter = fadeIn(MotionSpecs.AppleSpringSnappy) + slideInVertically(
+                animationSpec = MotionSpecs.AppleSpringSheetOffset,
                 initialOffsetY = { -it / 2 }
             ),
-            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { -it / 2 })
+            exit = fadeOut(tween(100)) + slideOutVertically(
+                animationSpec = MotionSpecs.AppleSpringSheetOffset,
+                targetOffsetY = { -it / 2 }
+            )
         ) {
             MediaSelectionTopBar(
                 selectedCount = selectedMediaIds.size,
@@ -335,11 +357,14 @@ fun LockedMediaScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(4f),
-            enter = fadeIn(tween(140)) + slideInVertically(
-                animationSpec = tween(190),
+            enter = fadeIn(MotionSpecs.AppleSpringSnappy) + slideInVertically(
+                animationSpec = MotionSpecs.AppleSpringSheetOffset,
                 initialOffsetY = { it / 2 + 24 }
             ),
-            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { it / 2 + 24 })
+            exit = fadeOut(tween(100)) + slideOutVertically(
+                animationSpec = MotionSpecs.AppleSpringSheetOffset,
+                targetOffsetY = { it / 2 + 24 }
+            )
         ) {
             LockedMediaSelectionToolbar(
                 onUnhide = {

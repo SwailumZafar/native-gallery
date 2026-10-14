@@ -29,6 +29,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 
@@ -41,6 +44,7 @@ fun PremiumDropdownMenu(
     offset: DpOffset = DpOffset.Zero,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val density = LocalDensity.current
     val reveal by animateFloatAsState(
         targetValue = if (expanded) 1f else 0f,
         animationSpec = if (expanded) {
@@ -75,6 +79,7 @@ fun PremiumDropdownMenu(
                 scaleX = 0.45f + 0.55f * reveal
                 scaleY = 0.35f + 0.65f * reveal
                 alpha = revealAlpha
+                cameraDistance = 16f * density.density
             },
         content = content
     )
@@ -90,9 +95,13 @@ fun PremiumDropdownMenuItem(
     enabled: Boolean = true
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    val hapticFeedback = LocalHapticFeedback.current
     DropdownMenuItem(
         text = text,
-        onClick = onClick,
+        onClick = {
+            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            onClick()
+        },
         interactionSource = interactionSource,
         modifier = modifier.solarScale(
             interactionSource = interactionSource,
