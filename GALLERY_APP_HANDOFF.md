@@ -198,6 +198,30 @@ Latest APK:
     Last write: 2026-09-01 21:07:21 Asia/Karachi
     SHA-256: 484D92C07C12849E81564D618DFB9E863D364B17FEECFD589CEFC83977CF9F64
 
+## 2026-10-14 ColorOS 17 Fluid Spring Motion and Touch-Responsive Interaction Pass
+
+Completed locally on 2026-10-14 and pushed to main in commits `29fe9fd`:
+
+- Introduced comprehensive Apple / ColorOS 17 grade spring physics across the entire UI in `GalleryMotion.kt` (`AppleSpringFolder`, `AppleSpringFolderClose`, `AppleSpringPinch`, `AppleSpringPager`, `AppleSpringModal`).
+- Rewrote folder/album transitions with liftProgress bell-curve shadow elevation (`18.dp * liftProgress`), smooth corner radius morphing, and centered fallback bounds.
+- Upgraded grid pinch-to-resize across PhotosScreen, AlbumsScreen, and LockedMediaScreen: switched to `pointerInput(Unit)` with `rememberUpdatedState` so pinch gestures never cancel when crossing column boundaries, and attached permanent RenderThread `Modifier.graphicsLayer` to eliminate composable node reconstruction jank.
+- Upgraded Search UI (`SearchPill`): wired `interactionSource` to `BasicTextField`, added active press scale (`0.982f`), smooth focus elevation lift (`1.5dp` -> `5dp`), dynamic primary border stroke highlight, animated icon tint & scale (`1.08f`), and spring `AnimatedVisibility` for the clear button.
+- Connected `PicturesHeader` `SearchCircle` to smoothly scroll to the top of the photo grid on tap, and added true 3D perspective via `cameraDistance = 16f * density.density` alongside `easeOutCubic` curve scaling on header collapse.
+- Upgraded `PhotoViewerOverlay` with `AppleSpringPager` snap fling behavior (`16.dp` page spacing), multi-layer depth parallax (`translationX = -pageOffset * 0.22f * size.width`), smooth background color blending, and 3D rotational tilt drag-to-dismiss (`rotX`, `rotZ`, `cameraDistance`, dynamic shadow elevation) with smooth decay on return.
+- Synchronized `GallerySettingsDialog` spring entry (`AppleSpringModal`) and graceful vertical slide exit with coroutine joins, added tactile touch scale to `GalleryRailItem`, and added haptic feedback to overflow menu items.
+
+Verification:
+
+- `:app:compileDebugKotlin`: BUILD SUCCESSFUL
+- `:app:testDebugUnitTest`: BUILD SUCCESSFUL, all unit tests passed
+- `:app:assembleDebug`: BUILD SUCCESSFUL
+
+Latest APK:
+
+    F:\App\Gallery\NativeGallery-v0.9.0.apk
+    Size: 66,509,127 bytes
+    Served via WiFi HTTP Server at http://192.168.18.184:8080/
+
 ## 2026-08-15 Final Gallery Interaction and Theme Pass
 
 Completed locally on 2026-08-15 in implementation commit `7806667`:
