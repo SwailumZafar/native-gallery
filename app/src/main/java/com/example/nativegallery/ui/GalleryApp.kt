@@ -1542,16 +1542,63 @@ fun GalleryApp(
             return
         }
 
-        viewerCloseInProgress = true
-        prefetchScope.launch {
-            val supportsGridReveal =
-                (destination == GalleryDestination.Main && selectedTab == GalleryTab.Photos) ||
-                    destination == GalleryDestination.AlbumDetail
-            val knownBounds = mediaTileBounds[currentItem.id] ?: Rect.Zero
-            val needsGridReveal = supportsGridReveal &&
-                !knownBounds.isVisibleWithin(transitionRootBoundsInWindow)
+        val supportsGridReveal =
+            (destination == GalleryDestination.Main && selectedTab == GalleryTab.Photos) ||
+                destination == GalleryDestination.AlbumDetail
+        val knownBounds = mediaTileBounds[currentItem.id] ?: Rect.Zero
+        val isDragDismiss = startOffset != Offset.Zero
+        val isKnownVisible = knownBounds.isVisibleWithin(transitionRootBoundsInWindow)
+        val needsGridReveal = supportsGridReveal && !isKnownVisible && !isDragDismiss
 
-            if (needsGridReveal) {
+        val performClose = {
+            viewerSharedElementKeyPrefix?.let { keyPrefix ->
+                viewerSharedElementKey = "$keyPrefix-media-${currentItem.id}"
+            }
+            viewerVisible = false
+
+            val calculatedReturnBounds = returnBoundsForMedia(currentItem)
+            val targetBounds = when {
+                needsGridReveal -> {
+                    mediaTileBounds[currentItem.id]
+                        ?.takeIf { it.isVisibleWithin(transitionRootBoundsInWindow) }
+                        ?: calculatedReturnBounds.takeIf { it.isUsableTransitionBounds() }
+                        ?: Rect.Zero
+                }
+                isKnownVisible -> knownBounds
+                calculatedReturnBounds.isUsableTransitionBounds() -> calculatedReturnBounds
+                isDragDismiss -> {
+                    val originX = if (transitionRootBoundsInWindow.isUsableTransitionBounds()) transitionRootBoundsInWindow.left else 0f
+                    val originY = if (transitionRootBoundsInWindow.isUsableTransitionBounds()) transitionRootBoundsInWindow.top else 0f
+                    val rootWidth = transitionRootBoundsInWindow.width.takeIf { it > 0f } ?: 1080f
+                    val rootHeight = transitionRootBoundsInWindow.height.takeIf { it > 0f } ?: 1920f
+                    Rect(
+                        left = originX + rootWidth * 0.15f,
+                        top = originY + rootHeight + 120f,
+                        right = originX + rootWidth * 0.85f,
+                        bottom = originY + rootHeight + 120f + (rootHeight * 0.4f)
+                    )
+                }
+                else -> viewerReturnFallbackBounds
+            }
+            if (targetBounds.isUsableTransitionBounds()) {
+                mediaCloseTransitionKey += 1
+                mediaCloseTransition = MediaCloseTransitionSpec(
+                    key = mediaCloseTransitionKey,
+                    mediaItem = currentItem,
+                    tileBounds = targetBounds,
+                    startOffset = startOffset,
+                    startScale = startScale.coerceIn(0.68f, 1f),
+                    startBackdropAlpha = startBackdropAlpha.coerceIn(0f, 1f)
+                )
+                viewerCloseInProgress = false
+            } else {
+                clearViewerAfterClose()
+            }
+        }
+
+        if (needsGridReveal) {
+            viewerCloseInProgress = true
+            prefetchScope.launch {
                 mediaTileBounds.remove(currentItem.id)
                 viewerRevealMediaId = currentItem.id
                 val revealListState = when {
@@ -1581,34 +1628,10 @@ fun GalleryApp(
                 // Allow the reveal-only tracking state to leave composition before freezing the
                 // immutable close target. This prevents a one-frame correction under the hero.
                 delay(16)
+                performClose()
             }
-
-            viewerSharedElementKeyPrefix?.let { keyPrefix ->
-                viewerSharedElementKey = "$keyPrefix-media-${currentItem.id}"
-            }
-            viewerVisible = false
-
-            val targetBounds = if (needsGridReveal) {
-                mediaTileBounds[currentItem.id]
-                    ?.takeIf { it.isVisibleWithin(transitionRootBoundsInWindow) }
-                    ?: Rect.Zero
-            } else {
-                returnBoundsForMedia(currentItem)
-            }
-            if (targetBounds.isUsableTransitionBounds()) {
-                mediaCloseTransitionKey += 1
-                mediaCloseTransition = MediaCloseTransitionSpec(
-                    key = mediaCloseTransitionKey,
-                    mediaItem = currentItem,
-                    tileBounds = targetBounds,
-                    startOffset = startOffset,
-                    startScale = startScale.coerceIn(0.68f, 1f),
-                    startBackdropAlpha = startBackdropAlpha.coerceIn(0f, 1f)
-                )
-                viewerCloseInProgress = false
-            } else {
-                clearViewerAfterClose()
-            }
+        } else {
+            performClose()
         }
     }
 
@@ -4209,16 +4232,16 @@ private fun PositionAwareAlbumTransitionOverlay(
         val targetValue = if (transition.mode == AlbumTransitionMode.Closing) 0f else 1f
         progress.animateTo(
             targetValue = targetValue,
-            animationSpec = tween(
-                durationMillis = if (transition.mode == AlbumTransitionMode.Opening) {
-                    GalleryMotion.AlbumOpenMillis
+            animationSpec = spring(
+                dampingRatio = if (transition.mode == AlbumTransitionMode.Opening) {
+                    GalleryMotion.AlbumHeroOpenDamping
                 } else {
-                    GalleryMotion.AlbumCloseMillis
+                    GalleryMotion.ContainerCloseDamping
                 },
-                easing = if (transition.mode == AlbumTransitionMode.Opening) {
-                    GalleryMotion.AlbumOpenEasing
+                stiffness = if (transition.mode == AlbumTransitionMode.Opening) {
+                    GalleryMotion.AlbumHeroOpenStiffness
                 } else {
-                    GalleryMotion.AlbumCloseEasing
+                    GalleryMotion.ContainerCloseStiffness
                 }
             )
         )
@@ -4348,9 +4371,9 @@ private fun ReferenceMediaOpenOverlay(
     LaunchedEffect(transition.key) {
         progress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(
-                durationMillis = GalleryMotion.ViewerHeroOpenMillis,
-                easing = ReferenceViewerOpenEasing
+            animationSpec = spring(
+                dampingRatio = GalleryMotion.MediaOpenDamping,
+                stiffness = GalleryMotion.MediaOpenStiffness
             )
         )
         onFinished(transition)
@@ -4393,7 +4416,8 @@ private fun ReferenceMediaCloseOverlay(
     val tileBounds = transition.tileBounds.relativeToRoot(
         rootBoundsInWindow = rootBoundsInWindow,
         fallbackRootWidth = rootWidthPx,
-        fallbackRootHeight = rootHeightPx
+        fallbackRootHeight = rootHeightPx,
+        clampToViewport = false
     )
     if (!tileBounds.isUsableTransitionBounds()) {
         LaunchedEffect(transition.key) {
@@ -4406,22 +4430,33 @@ private fun ReferenceMediaCloseOverlay(
     LaunchedEffect(transition.key) {
         progress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(
-                durationMillis = GalleryMotion.ViewerHeroCloseMillis,
-                easing = ReferenceViewerCloseEasing
-            )
+            animationSpec = GalleryMotion.ViewerHeroCloseSpring
         )
         onFinished(transition)
     }
 
+    val decodedHeroBitmap = transition.mediaItem.contentUri?.let { uri ->
+        ThumbnailMemoryCache.getNearest(uri, 512, ImageLoadQuality.HighQuality)
+            ?: ThumbnailMemoryCache.getNearest(uri, 512, ImageLoadQuality.Thumbnail)
+    }
+    val effectiveWidth = transition.mediaItem.width?.takeIf { it > 0 }
+        ?: decodedHeroBitmap?.width
+    val effectiveHeight = transition.mediaItem.height?.takeIf { it > 0 }
+        ?: decodedHeroBitmap?.height
+    val geometryMediaItem = if (effectiveWidth != null && effectiveHeight != null) {
+        transition.mediaItem.copy(width = effectiveWidth, height = effectiveHeight)
+    } else {
+        transition.mediaItem
+    }
+
     val collapse = progress.value.coerceIn(0f, 1f)
     val startBounds = scaledRectAroundCenter(
-        rect = fittedMediaRect(rootWidthPx, rootHeightPx, transition.mediaItem),
+        rect = fittedMediaRect(rootWidthPx, rootHeightPx, geometryMediaItem),
         scale = transition.startScale.coerceIn(0.68f, 1f),
         offset = transition.startOffset
     )
     ReferenceMediaHeroFrame(
-        mediaItem = transition.mediaItem,
+        mediaItem = geometryMediaItem,
         startBounds = startBounds,
         endBounds = tileBounds,
         progress = collapse,
@@ -4508,7 +4543,8 @@ private fun Rect.isVisibleWithin(viewport: Rect): Boolean {
 private fun Rect.relativeToRoot(
     rootBoundsInWindow: Rect,
     fallbackRootWidth: Float,
-    fallbackRootHeight: Float
+    fallbackRootHeight: Float,
+    clampToViewport: Boolean = true
 ): Rect {
     if (!isUsableTransitionBounds()) return Rect.Zero
 
@@ -4519,8 +4555,10 @@ private fun Rect.relativeToRoot(
     val originY = if (rootBoundsAreUsable) rootBoundsInWindow.top else 0f
     val width = width.coerceIn(1f, rootWidth)
     val height = height.coerceIn(1f, rootHeight)
-    val left = (this.left - originX).coerceIn(0f, (rootWidth - width).coerceAtLeast(0f))
-    val top = (this.top - originY).coerceIn(0f, (rootHeight - height).coerceAtLeast(0f))
+    val rawLeft = this.left - originX
+    val rawTop = this.top - originY
+    val left = if (clampToViewport) rawLeft.coerceIn(0f, (rootWidth - width).coerceAtLeast(0f)) else rawLeft
+    val top = if (clampToViewport) rawTop.coerceIn(0f, (rootHeight - height).coerceAtLeast(0f)) else rawTop
     return Rect(
         left = left,
         top = top,
@@ -4587,10 +4625,24 @@ private fun GalleryBottomBar(
     val contentWidth = tabWidth * 3 + tabGap * 2
     val density = LocalDensity.current
     val hideDistancePx = with(density) { 88.dp.toPx() }
+    val tabStepPx = with(density) { (tabWidth + tabGap).toPx() }
+
     val visibilityProgress by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(210, easing = FastOutSlowInEasing),
+        animationSpec = spring(dampingRatio = 0.84f, stiffness = 360f),
         label = "bottom nav visibility"
+    )
+
+    val targetPage = selectedTab.pageIndex().toFloat()
+    val headState = animateFloatAsState(
+        targetValue = targetPage,
+        animationSpec = spring(dampingRatio = 0.76f, stiffness = 650f),
+        label = "bottomNavHead"
+    )
+    val tailState = animateFloatAsState(
+        targetValue = targetPage,
+        animationSpec = spring(dampingRatio = 0.88f, stiffness = 320f),
+        label = "bottomNavTail"
     )
 
     Box(
@@ -4605,70 +4657,66 @@ private fun GalleryBottomBar(
         contentAlignment = Alignment.Center
     ) {
         Surface(
+            modifier = Modifier
+                .widthIn(min = 220.dp)
+                .clip(containerShape),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+            shape = containerShape,
+            tonalElevation = 0.dp,
+            shadowElevation = 14.dp
+        ) {
+            Box(
                 modifier = Modifier
-                    .widthIn(min = 220.dp)
-                    .clip(containerShape),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                shape = containerShape,
-                tonalElevation = 0.dp,
-                shadowElevation = 14.dp
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .width(contentWidth)
+                    .height(tabHeight)
             ) {
+                val baseTabWidthPx = with(density) { tabWidth.toPx() }
                 Box(
                     modifier = Modifier
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                        .width(contentWidth)
+                        .width(tabWidth)
                         .height(tabHeight)
+                        .graphicsLayer {
+                            val h = headState.value
+                            val t = tailState.value
+                            val stretchPx = kotlin.math.abs(h - t) * tabStepPx * 0.42f
+                            val minP = kotlin.math.min(h, t)
+                            translationX = minP * tabStepPx
+                            scaleX = 1f + (stretchPx / baseTabWidthPx)
+                            transformOrigin = TransformOrigin(0f, 0.5f)
+                        }
+                        .clip(tabShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(tabGap),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val density = LocalDensity.current
-                    val tabStepPx = with(density) { (tabWidth + tabGap).toPx() }
-                    val indicatorProgress by animateFloatAsState(
-                        targetValue = selectedTab.pageIndex().toFloat(),
-                        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
-                        label = "bottom nav pill progress"
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .graphicsLayer { translationX = tabStepPx * indicatorProgress }
-                            .width(tabWidth)
-                            .height(tabHeight)
-                            .clip(tabShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(tabGap),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    listOf(
+                        Triple(GalleryTab.Photos, Icons.Filled.Image, "Photos"),
+                        Triple(GalleryTab.Albums, Icons.Filled.Collections, "Albums"),
+                        Triple(GalleryTab.Menu, Icons.Filled.Menu, "Menu")
+                    ).forEachIndexed { index, (tab, icon, label) ->
                         GalleryNavigationItem(
                             modifier = Modifier
                                 .width(tabWidth)
-                                .height(tabHeight),
-                            selected = selectedTab == GalleryTab.Photos,
-                            icon = Icons.Filled.Image,
-                            label = "Photos",
-                            onClick = { onTabSelected(GalleryTab.Photos) }
-                        )
-                        GalleryNavigationItem(
-                            modifier = Modifier
-                                .width(tabWidth)
-                                .height(tabHeight),
-                            selected = selectedTab == GalleryTab.Albums,
-                            icon = Icons.Filled.Collections,
-                            label = "Albums",
-                            onClick = { onTabSelected(GalleryTab.Albums) }
-                        )
-                        GalleryNavigationItem(
-                            modifier = Modifier
-                                .width(tabWidth)
-                                .height(tabHeight),
-                            selected = selectedTab == GalleryTab.Menu,
-                            icon = Icons.Filled.Menu,
-                            label = "Menu",
-                            onClick = { onTabSelected(GalleryTab.Menu) }
+                                .height(tabHeight)
+                                .graphicsLayer {
+                                    val h = headState.value
+                                    val proximity = (1f - kotlin.math.abs(h - index)).coerceIn(0f, 1f)
+                                    val mag = 1f + proximity * 0.08f
+                                    scaleX = mag
+                                    scaleY = mag
+                                },
+                            selected = selectedTab == tab,
+                            icon = icon,
+                            label = label,
+                            onClick = { onTabSelected(tab) }
                         )
                     }
                 }
             }
+        }
     }
 }
 

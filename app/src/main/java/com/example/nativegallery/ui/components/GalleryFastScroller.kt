@@ -3,6 +3,7 @@ package com.example.nativegallery.ui.components
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -170,6 +171,11 @@ fun GalleryFastScroller(
             contentAlignment = Alignment.TopCenter
         ) {
             val travel = (trackHeightPx - thumbHeightPx).coerceAtLeast(0)
+            val thumbScale by animateFloatAsState(
+                targetValue = if (dragging) 1.12f else 1f,
+                animationSpec = MotionSpecs.AppleSpringSnappy,
+                label = "fastScrollerThumbScale"
+            )
             AnimatedVisibility(
                 visible = visible,
                 enter = fadeIn(tween(100)),
@@ -182,10 +188,14 @@ fun GalleryFastScroller(
                     modifier = Modifier
                         .width(34.dp)
                         .height(thumbHeight)
+                        .graphicsLayer {
+                            scaleX = thumbScale
+                            scaleY = thumbScale
+                        }
                         .systemGestureExclusion(),
                     color = Color(0xFF353535),
                     shape = RoundedCornerShape(20.dp),
-                    shadowElevation = 5.dp
+                    shadowElevation = if (dragging) 9.dp else 5.dp
                 ) {
                     Box(
                         modifier = Modifier.fillMaxSize(),

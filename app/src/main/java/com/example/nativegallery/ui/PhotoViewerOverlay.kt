@@ -9,6 +9,7 @@ import android.content.Intent
 import android.media.AudioManager
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.TextureView
 import android.widget.FrameLayout
@@ -136,10 +137,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.AudioAttributes
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.lifecycle.Lifecycle
@@ -155,6 +159,10 @@ import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.PremiumDropdownMenu
 import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.example.nativegallery.ui.components.bouncyClickable
+import com.example.nativegallery.ui.components.solarScale
+import com.example.nativegallery.ui.components.solarTactile
 import com.example.nativegallery.ui.components.cacheVideoFrameThumbnail
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import java.util.Locale
@@ -175,6 +183,7 @@ private val ViewerPhotoStageBackground = Color.Transparent
 private val ViewerVideoControlTextShadow = Shadow(Color.Black.copy(alpha = 0.90f), Offset(0f, 1f), 3f)
 private val ViewerActionLabelShadow = Shadow(Color.Black.copy(alpha = 0.96f), Offset(0f, 1.2f), 5f)
 private const val DEFAULT_AUDIBLE_MEDIA_VOLUME = 0.35f
+private const val VIDEO_PLAYBACK_LOG_TAG = "NativeGalleryVideo"
 internal const val ViewerMediaStageTestTag = "viewer-media-stage"
 internal const val ViewerZoomableMediaTestTag = "viewer-zoomable-media"
 internal const val ViewerFilmstripSectionTestTag = "viewer-filmstrip-section"
@@ -431,9 +440,13 @@ fun PhotoViewerOverlay(
         closeRequested = true
         controlsVisible = false
         detailsVisible = false
-        scope.launch {
-            delay(GalleryMotion.ViewerChromeCloseDelayMillis)
+        if (closeOffset != Offset.Zero) {
             onClose(closeOffset, closeScale, closeBackdropAlpha)
+        } else {
+            scope.launch {
+                delay(GalleryMotion.ViewerChromeCloseDelayMillis)
+                onClose(closeOffset, closeScale, closeBackdropAlpha)
+            }
         }
     }
 
@@ -443,17 +456,12 @@ fun PhotoViewerOverlay(
             snap()
         } else {
             spring(
-                dampingRatio = GalleryMotion.ViewerDismissDamping,
-                stiffness = GalleryMotion.ViewerDismissStiffness
+                dampingRatio = GalleryMotion.ViewerSpringBackDamping,
+                stiffness = GalleryMotion.ViewerSpringBackStiffness
             )
         },
         label = "viewer dismiss offset"
     )
-    val displayedDragOffset = if (isViewerDragging) {
-        dragOffset
-    } else {
-        animatedDragOffset
-    }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -469,13 +477,6 @@ fun PhotoViewerOverlay(
                 shape = RoundedCornerShape((28f * predictiveProgress).dp)
                 clip = predictiveProgress > 0f
             }
-            .background(
-                if (currentItem.isVideo) {
-                    Color.Black.copy(alpha = viewerBackdropAlpha(displayedDragOffset, dismissThresholdPx))
-                } else {
-                    ViewerPhotoBackground.copy(alpha = viewerBackdropAlpha(displayedDragOffset, dismissThresholdPx))
-                }
-            )
             .pointerInput(
                 currentItem.id,
                 currentItemHasVideoPlayer,
@@ -510,6 +511,8 @@ fun PhotoViewerOverlay(
                     var passedTouchSlop = false
                     var handlingViewerDrag = false
                     var closingDetailsGesture = false
+                    var isDownwardDrag = false
+                    var isDetailsDrag = false
 
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -540,33 +543,43 @@ fun PhotoViewerOverlay(
                                 break
                             }
                             closingDetailsGesture = dismissDetailsIntent
+                            isDownwardDrag = !dismissDetailsIntent && downwardIntent
+                            isDetailsDrag = !dismissDetailsIntent && detailsIntent
                             passedTouchSlop = true
                             handlingViewerDrag = true
                             isViewerDragging = true
+                            if (isDownwardDrag) {
+                                val slopOffsetY = totalDrag.y - touchSlop * 0.35f
+                                dragOffset = Offset(
+                                    x = totalDrag.x.coerceIn(-dismissThresholdPx * 1.55f, dismissThresholdPx * 1.55f),
+                                    y = slopOffsetY.coerceIn(0f, dismissThresholdPx * 1.85f)
+                                )
+                            }
                             change.consume()
-                        }
-
-                        if (handlingViewerDrag) {
+                        } else if (handlingViewerDrag) {
                             if (closingDetailsGesture) {
                                 dragOffset = Offset.Zero
                                 detailsDragOffset = 0f
                                 change.consume()
                                 continue
                             }
-                            val nextOffset = dragOffset + delta
-                            val detailsGestureActive = detailsDragOffset < 0f ||
-                                (nextOffset.y < 0f && abs(nextOffset.y) > abs(nextOffset.x) * 0.8f)
-                            if (detailsGestureActive) {
-                                dragOffset = Offset.Zero
-                                detailsDragOffset = (detailsDragOffset + delta.y)
-                                    .coerceIn(-detailsThresholdPx * 1.8f, 0f)
-                            } else {
+                            if (isDownwardDrag) {
+                                val nextOffset = dragOffset + delta
+                                val dampedY = if (nextOffset.y < 0f) {
+                                    nextOffset.y * 0.28f
+                                } else {
+                                    nextOffset.y.coerceIn(0f, dismissThresholdPx * 1.85f)
+                                }
                                 detailsVisible = false
                                 detailsDragOffset = 0f
                                 dragOffset = Offset(
                                     x = nextOffset.x.coerceIn(-dismissThresholdPx * 1.55f, dismissThresholdPx * 1.55f),
-                                    y = nextOffset.y.coerceIn(-dismissThresholdPx * 0.58f, dismissThresholdPx * 1.85f)
+                                    y = dampedY
                                 )
+                            } else if (isDetailsDrag) {
+                                dragOffset = Offset.Zero
+                                detailsDragOffset = (detailsDragOffset + delta.y)
+                                    .coerceIn(-detailsThresholdPx * 1.8f, 0f)
                             }
                             change.consume()
                         }
@@ -578,18 +591,26 @@ fun PhotoViewerOverlay(
                             controlsVisible = true
                             isViewerDragging = false
                             dragOffset = Offset.Zero
-                        } else if (shouldDismissViewerDrag(dragOffset, dragVelocity, dismissThresholdPx)) {
-                            isViewerDragging = false
-                            closeViewerWithChromeFade(
-                                closeOffset = renderedViewerDragOffset(dragOffset),
-                                closeScale = viewerDismissScale(dragOffset, dismissThresholdPx),
-                                closeBackdropAlpha = viewerBackdropAlpha(dragOffset, dismissThresholdPx)
-                            )
-                        } else {
+                        } else if (isDownwardDrag) {
+                            if (shouldDismissViewerDrag(dragOffset, dragVelocity, dismissThresholdPx)) {
+                                isViewerDragging = false
+                                closeViewerWithChromeFade(
+                                    closeOffset = renderedViewerDragOffset(dragOffset),
+                                    closeScale = viewerDismissScale(dragOffset, dismissThresholdPx),
+                                    closeBackdropAlpha = viewerBackdropAlpha(dragOffset, dismissThresholdPx)
+                                )
+                            } else {
+                                isViewerDragging = false
+                                dragOffset = Offset.Zero
+                            }
+                        } else if (isDetailsDrag) {
                             if (detailsDragOffset < -detailsThresholdPx) {
                                 detailsVisible = true
                                 controlsVisible = false
                             }
+                            isViewerDragging = false
+                            dragOffset = Offset.Zero
+                        } else {
                             isViewerDragging = false
                             dragOffset = Offset.Zero
                         }
@@ -598,6 +619,15 @@ fun PhotoViewerOverlay(
                 }
             }
     ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val currentOffset = if (isViewerDragging) dragOffset else animatedDragOffset
+                    alpha = viewerBackdropAlpha(currentOffset, dismissThresholdPx)
+                }
+                .background(if (currentItem.isVideo) Color.Black else ViewerPhotoBackground)
+        )
         HorizontalPager(
             state = pagerState,
             modifier = Modifier
@@ -605,17 +635,16 @@ fun PhotoViewerOverlay(
                 .clipToBounds()
                 .testTag(ViewerMediaStageTestTag)
                 .graphicsLayer {
-                    val pullProgress = viewerDismissProgress(displayedDragOffset, dismissThresholdPx)
-                    val pullScale = viewerDismissScale(displayedDragOffset, dismissThresholdPx)
-                    translationX = displayedDragOffset.x * 0.96f
-                    translationY = displayedDragOffset.y * 0.96f
+                    val currentOffset = if (isViewerDragging) dragOffset else animatedDragOffset
+                    val pullScale = viewerDismissScale(currentOffset, dismissThresholdPx)
+                    translationX = currentOffset.x * 0.96f
+                    translationY = currentOffset.y * 0.96f
                     scaleX = pullScale
                     scaleY = pullScale
                 },
             beyondViewportPageCount = viewerBeyondViewportPageCount(),
             userScrollEnabled = !activePhotoZoomed &&
                 !isViewerDragging &&
-                dragOffset == Offset.Zero &&
                 !closeRequested,
             key = { page -> viewerItems[page].id }
         ) { page ->
@@ -788,14 +817,16 @@ private fun ViewerTopBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Surface(
-            modifier = Modifier.size(38.dp),
+            modifier = Modifier
+                .size(38.dp)
+                .solarTactile(scaleDown = 0.88f, onClick = {
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onClose()
+                }),
             color = Color(0xFF1B1B1B),
             shape = CircleShape
         ) {
-            IconButton(onClick = {
-                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                onClose()
-            }) {
+            Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Close media",
@@ -806,14 +837,16 @@ private fun ViewerTopBar(
         }
         Box {
             Surface(
-                modifier = Modifier.size(38.dp),
+                modifier = Modifier
+                    .size(38.dp)
+                    .solarTactile(scaleDown = 0.88f, onClick = {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        menuExpanded = true
+                    }),
                 color = Color(0xFF1B1B1B),
                 shape = CircleShape
             ) {
-                IconButton(onClick = {
-                    hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    menuExpanded = true
-                }) {
+                Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Filled.MoreVert,
                         contentDescription = "More media options",
@@ -1027,6 +1060,12 @@ private fun ViewerActionButton(
         destructive -> Color(0xFFFFC1BB)
         else -> Color.White.copy(alpha = 0.96f)
     }
+    val iconScaleState = animateFloatAsState(
+        targetValue = if (selected) 1.14f else 1f,
+        animationSpec = com.example.nativegallery.ui.components.MotionSpecs.AppleSpringBouncy,
+        label = "actionIconScale"
+    )
+    val interactionSource = remember { MutableInteractionSource() }
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1038,11 +1077,19 @@ private fun ViewerActionButton(
                 onClick()
             },
             enabled = enabled,
-            modifier = Modifier.size(38.dp)
+            interactionSource = interactionSource,
+            modifier = Modifier
+                .size(38.dp)
+                .solarScale(interactionSource, scaleDown = 0.88f)
         ) {
             Box(
                 modifier = Modifier
                     .size(32.dp)
+                    .graphicsLayer {
+                        val scale = iconScaleState.value
+                        scaleX = scale
+                        scaleY = scale
+                    }
                     .background(
                         color = Color.Black.copy(alpha = if (enabled) 0.46f else 0.22f),
                         shape = RoundedCornerShape(10.dp)
@@ -1572,7 +1619,10 @@ private fun ViewerVideoPlayer(
         mediaItem.mimeType?.contains("matroska", ignoreCase = true) == true ||
             mediaItem.title.endsWith(".mkv", ignoreCase = true)
     }
-    val player = remember(context, uri, isMatroskaVideo) {
+    val renderersFactory = remember(context) {
+        viewerVideoRenderersFactory(context.applicationContext)
+    }
+    val player = remember(context, uri, isMatroskaVideo, renderersFactory) {
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 5_000,
@@ -1582,7 +1632,7 @@ private fun ViewerVideoPlayer(
             )
             .setBackBuffer(0, false)
             .build()
-        ExoPlayer.Builder(context.applicationContext)
+        ExoPlayer.Builder(context.applicationContext, renderersFactory)
             .setLoadControl(loadControl)
             .build()
             .apply {
@@ -1721,6 +1771,12 @@ private fun ViewerVideoPlayer(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                Log.e(
+                    VIDEO_PLAYBACK_LOG_TAG,
+                    "Playback failed: code=${error.errorCodeName}, " +
+                        "mime=${mediaItem.mimeType.orEmpty()}, hardware=${Build.HARDWARE}",
+                    error
+                )
                 hasPlaybackError = true
                 isPrepared = false
                 isPlaying = false
@@ -2235,7 +2291,49 @@ private fun ViewerVideoPlayer(
         }
     }
 }
+}
 
+@androidx.annotation.OptIn(UnstableApi::class)
+private fun viewerVideoRenderersFactory(context: Context): DefaultRenderersFactory {
+    val mediaTekCodecWorkaround = isMediaTekCodecPlatform(Build.HARDWARE)
+    val codecSelector = MediaCodecSelector {
+            mimeType,
+            requiresSecureDecoder,
+            requiresTunnelingDecoder ->
+        val defaultDecoders = MediaCodecSelector.DEFAULT.getDecoderInfos(
+            mimeType,
+            requiresSecureDecoder,
+            requiresTunnelingDecoder
+        )
+        if (shouldPreferHardwareAvcDecoder(Build.HARDWARE, mimeType)) {
+            defaultDecoders.filter { decoder -> decoder.hardwareAccelerated }
+                .ifEmpty { defaultDecoders }
+        } else {
+            defaultDecoders
+        }
+    }
+
+    return DefaultRenderersFactory(context)
+        .setEnableDecoderFallback(true)
+        .setMediaCodecSelector(codecSelector)
+        .apply {
+            // Older MediaTek/Lineage codec stacks can crash Codec2 and throw again while the
+            // asynchronous adapter flushes. Their vendor OMX decoder is reliable when driven via
+            // the synchronous adapter, which is also how the platform gallery handles camera AVC.
+            if (mediaTekCodecWorkaround) {
+                forceDisableMediaCodecAsynchronousQueueing()
+            }
+        }
+}
+
+internal fun isMediaTekCodecPlatform(hardware: String): Boolean {
+    val normalizedHardware = hardware.trim().lowercase(Locale.US)
+    return normalizedHardware.startsWith("mt") || normalizedHardware.contains("mediatek")
+}
+
+internal fun shouldPreferHardwareAvcDecoder(hardware: String, mimeType: String): Boolean {
+    return isMediaTekCodecPlatform(hardware) &&
+        mimeType.equals(MimeTypes.VIDEO_H264, ignoreCase = true)
 }
 
 @Composable
@@ -2423,10 +2521,13 @@ private fun VideoControlButton(
     containerAlpha: Float = 0.34f,
     onClick: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
     IconButton(
         onClick = onClick,
+        interactionSource = interactionSource,
         modifier = Modifier
             .size(size)
+            .solarScale(interactionSource, scaleDown = 0.88f)
             .background(Color.Black.copy(alpha = containerAlpha), CircleShape)
     ) {
         Icon(

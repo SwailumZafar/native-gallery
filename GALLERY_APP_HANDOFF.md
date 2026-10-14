@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-08-15
+Last updated: 2026-10-14
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -44,6 +44,8 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-08-02 slice: added locked-restore confirmation/full-quality warmup and Photos fling/decode policy coverage; the local suite now has 114 passing tests. Debug lint, debug APK assembly, and instrumentation-test APK assembly all pass.
   - 2026-08-09 slice: added album drop-target/return animation and hidden-first ordering policy tests, and simplified the Locked Media restore confirmation contract; the local suite now has 116 passing tests. Debug lint and debug APK assembly pass.
   - 2026-08-15 slice: updated compact-viewer and viewer-layout contracts for the streamlined action bar; all 116 local tests still pass, Android-test sources compile, and debug lint/APK assembly pass.
+  - 2026-09-01 slice: added MediaTek AVC decoder-selection policy coverage; all 117 local tests pass, Android-test sources compile, and debug lint/APK assembly pass.
+  - 2026-10-14 slice: added spring animation system (MotionSpecs), RenderThread graphicsLayer optimizations, and pull-down gesture smoothing; all 117 unit tests pass, and debug APK assembly passes.
 - [ ] Gradually move screen state and business logic out of `GalleryApp.kt` into ViewModels and testable state holders.
   - 2026-07-15 slice: extracted viewer delete selection and Photos lazy-list indexing into `GalleryLogic.kt`.
   - 2026-07-15 slice: extracted normalized media/album search documents and matching into `GallerySearchIndex.kt`.
@@ -136,6 +138,65 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-10-14 Spring Motion System, Gesture Smoothing, and Performance Pass
+
+Completed and verified locally:
+
+- Integrated Android and Solar Player-style harmonic oscillator spring motion system (MotionSpecs):
+  - Snappy (AppleSpringSnappy), fluid (AppleSpringFluid), bouncy (AppleSpringBouncy), and sheet offset (AppleSpringSheetOffset) specifications.
+  - Added solarTactile, solarScale, and bouncyClickable tactile touch feedback modifiers with micro-scale compression.
+- Enhanced 3-dot overflow menu:
+  - PremiumOverflowButton animates with spring rotation (0 to 90 degrees) and snappy touch scale.
+  - Menu items react with solarScale spring feedback on press without triggering duplicate click events.
+- Fluid bottom navigation bar:
+  - Rebuilt GalleryBottomBar with dual-head/tail spring physics (headState, tailState), elastic pill stretching, and proximity magnification for adjacent icons.
+  - Eliminated dynamic width layout re-measurements by offloading translation and scaling to GPU graphicsLayer transforms.
+- Pull-down dismiss gesture stabilization:
+  - Fixed initial ~30px visual jump/snap past touch slop by correcting unchained drag delta addition in PhotoViewerOverlay.
+  - Added upward drag damping to prevent accidental switches into details-view mode.
+  - Restored returnBoundsForMedia(currentItem) as the primary target during drag dismiss so swiped media returns directly into its grid tile rather than jumping or flying off-screen.
+  - Preserved true aspect ratio in ReferenceMediaCloseOverlay during dismiss animations.
+  - Removed 1-2 frame dispatch gap on release by executing state changes synchronously on the UI thread when grid reveal is not required.
+- RenderThread performance pass:
+  - Scale animations defer state reads strictly into graphicsLayer lambdas to eliminate composable recompositions across media grids during gestures.
+  - Decoupled viewer backdrop alpha calculations from composable recomposition.
+- Added WiFi APK installation server (serve_apk.py) supporting HTTP/1.1 Range requests (206 Partial Content) and QR code generation for direct over-the-air installation.
+- Verification:
+  - :app:testDebugUnitTest: BUILD SUCCESSFUL, 117 tests, 0 failures, 0 errors
+  - :app:assembleDebug: BUILD SUCCESSFUL
+
+## 2026-09-01 MediaTek Camera-Video Playback Fix
+
+Completed locally and verified on the connected Redmi Note 9 (`merlinx`, Android 13, MediaTek MT6768):
+
+- Reproduced “This video could not be played here” with the phone's newly recorded `PXL_20260901_204454968.ACTIVE.mp4`. The file is a valid 1920 x 1080 H.264 High Profile MP4 at about 13.2 Mbps; the failure was not corruption or missing MediaStore permission.
+- Live Media3 logs showed the ROM falsely reporting that `OMX.MTK.VIDEO.DECODER.AVC` did not support the stream. Media3 then selected `c2.android.avc.decoder`, whose Codec2 service died with `DEAD_OBJECT` and raised `MediaCodecVideoDecoderException`.
+- Added a deliberately narrow renderer policy: MediaTek devices prefer their hardware decoder for H.264/AVC, decoder fallback remains enabled, and asynchronous MediaCodec queueing is disabled only on the affected MediaTek codec platform. Other codecs and non-MediaTek devices retain Media3's normal decoder ordering.
+- Added an app-owned `NativeGalleryVideo` error log so any future decoder failure includes the Media3 error code, MIME type, and hardware platform instead of relying only on system codec logs.
+- Added focused policy tests for MediaTek detection and AVC-only hardware preference.
+
+Connected-device result:
+
+- Installed with `adb install -r`, preserving app data.
+- Replayed the exact failing video. The viewer reached `0:03 / 0:04` with the Pause control active, selected `OMX.MTK.VIDEO.DECODER.AVC`, completed playback, and never displayed the playback-error UI.
+- Post-playback logcat contained no `ExoPlaybackException`, `DEAD_OBJECT`, MediaCodec decoder exception, Codec2 component death, or fatal app exception.
+- The user confirmed playback is good on the phone.
+
+Verification:
+
+- `:app:testDebugUnitTest`: BUILD SUCCESSFUL, 117 tests, 0 failures, 0 errors
+- `:app:compileDebugAndroidTestKotlin`: BUILD SUCCESSFUL
+- `:app:lintDebug`: BUILD SUCCESSFUL
+- `:app:assembleDebug`: BUILD SUCCESSFUL
+- `git diff --check`: clean except expected CRLF conversion notices
+
+Latest APK:
+
+    F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+    Size: 66,482,835 bytes
+    Last write: 2026-09-01 21:07:21 Asia/Karachi
+    SHA-256: 484D92C07C12849E81564D618DFB9E863D364B17FEECFD589CEFC83977CF9F64
 
 ## 2026-08-15 Final Gallery Interaction and Theme Pass
 

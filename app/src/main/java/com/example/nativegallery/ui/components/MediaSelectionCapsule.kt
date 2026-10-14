@@ -19,8 +19,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -57,7 +59,12 @@ fun MediaSelectionTopBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            TextButton(onClick = onClear) {
+            val closeInteractionSource = remember { MutableInteractionSource() }
+            TextButton(
+                onClick = onClear,
+                interactionSource = closeInteractionSource,
+                modifier = Modifier.solarScale(closeInteractionSource, scaleDown = 0.92f)
+            ) {
                 Text(
                     text = "Close",
                     color = MaterialTheme.colorScheme.error,
@@ -75,7 +82,13 @@ fun MediaSelectionTopBar(
                 color = Color.White.copy(alpha = 0.94f),
                 textAlign = TextAlign.Center
             )
-            TextButton(onClick = onSelectAll, enabled = canSelectAll) {
+            val selectAllInteractionSource = remember { MutableInteractionSource() }
+            TextButton(
+                onClick = onSelectAll,
+                enabled = canSelectAll,
+                interactionSource = selectAllInteractionSource,
+                modifier = Modifier.solarScale(selectAllInteractionSource, scaleDown = 0.92f, enabled = canSelectAll)
+            ) {
                 Text(
                     text = "Select all",
                     color = if (canSelectAll) {
@@ -146,6 +159,7 @@ private fun CapsuleAction(
     enabled: Boolean = true,
     tint: Color
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -154,7 +168,10 @@ private fun CapsuleAction(
         IconButton(
             onClick = onClick,
             enabled = enabled,
-            modifier = Modifier.size(38.dp)
+            interactionSource = interactionSource,
+            modifier = Modifier
+                .size(38.dp)
+                .solarScale(interactionSource, scaleDown = 0.88f, enabled = enabled)
         ) {
             Icon(
                 imageVector = icon,

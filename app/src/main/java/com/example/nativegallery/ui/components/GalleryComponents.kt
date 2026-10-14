@@ -16,6 +16,7 @@ import androidx.compose.animation.SharedTransitionScope
 import android.util.Size
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -24,6 +25,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -317,19 +319,31 @@ fun MediaThumbnail(
         measuredModifier.onPlaced { coordinates -> coordinatesRef.value = coordinates }
     }
     val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressScaleState = animateFloatAsState(
+        targetValue = if (isPressed) 0.965f else 1f,
+        animationSpec = MotionSpecs.AppleSpringSnappy,
+        label = "thumbnailPressScale"
+    )
     val containerModifier = if (onClick != null || onClickWithBounds != null || onLongClick != null) {
-        positionedModifier.combinedClickable(
-            interactionSource = interactionSource,
-            indication = null,
-            onLongClick = onLongClick,
-            onClick = {
-                val bounds = coordinatesRef.value
-                    ?.takeIf { it.isAttached }
-                    ?.boundsInWindow()
-                    ?: Rect.Zero
-                onClickWithBounds?.invoke(bounds) ?: onClick?.invoke()
+        positionedModifier
+            .graphicsLayer {
+                val scale = pressScaleState.value
+                scaleX = scale
+                scaleY = scale
             }
-        )
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onLongClick = onLongClick,
+                onClick = {
+                    val bounds = coordinatesRef.value
+                        ?.takeIf { it.isAttached }
+                        ?.boundsInWindow()
+                        ?: Rect.Zero
+                    onClickWithBounds?.invoke(bounds) ?: onClick?.invoke()
+                }
+            )
     } else {
         measuredModifier
     }

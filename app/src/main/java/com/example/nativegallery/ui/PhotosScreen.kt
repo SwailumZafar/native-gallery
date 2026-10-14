@@ -85,11 +85,13 @@ import com.example.nativegallery.ui.components.MediaSelectionTopBar
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.GalleryFastScroller
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.MotionSpecs
 import com.example.nativegallery.ui.components.PremiumDropdownMenu
 import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
 import com.example.nativegallery.ui.components.PremiumOverflowButton
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
+import com.example.nativegallery.ui.components.solarTactile
 
 private enum class DragSelectMode {
     Add,
@@ -471,7 +473,9 @@ private fun PicturesHeader(
 @Composable
 private fun SearchCircle() {
     Surface(
-        modifier = Modifier.size(50.dp),
+        modifier = Modifier
+            .size(50.dp)
+            .solarTactile(scaleDown = 0.90f, onClick = {}),
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = CircleShape,
         shadowElevation = 0.dp
@@ -485,8 +489,6 @@ private fun SearchCircle() {
     }
 }
 
-
-
 @Composable
 private fun SelectionBottomActionBar(
     visible: Boolean,
@@ -499,11 +501,14 @@ private fun SelectionBottomActionBar(
     AnimatedVisibility(
         visible = visible,
         modifier = modifier,
-        enter = fadeIn(animationSpec = tween(140)) + slideInVertically(
-            animationSpec = tween(190),
+        enter = fadeIn(animationSpec = MotionSpecs.AppleSpringSnappy) + slideInVertically(
+            animationSpec = MotionSpecs.AppleSpringSheetOffset,
             initialOffsetY = { it / 2 + 24 }
         ),
-        exit = fadeOut(animationSpec = tween(100)) + slideOutVertically(targetOffsetY = { it / 2 + 24 })
+        exit = fadeOut(animationSpec = tween(100)) + slideOutVertically(
+            animationSpec = MotionSpecs.AppleSpringSheetOffset,
+            targetOffsetY = { it / 2 + 24 }
+        )
     ) {
         MediaSelectionActionBar(
             onShare = onShare,

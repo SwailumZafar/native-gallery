@@ -50,6 +50,16 @@ class PhotoViewerPolicyTest {
     }
 
     @Test
+    fun mediaTekCameraAvcPrefersVendorHardwareDecoder() {
+        assertTrue(isMediaTekCodecPlatform("mt6768"))
+        assertTrue(isMediaTekCodecPlatform("MediaTek-Dimensity"))
+        assertFalse(isMediaTekCodecPlatform("qcom"))
+        assertTrue(shouldPreferHardwareAvcDecoder("mt6768", "video/avc"))
+        assertFalse(shouldPreferHardwareAvcDecoder("mt6768", "video/hevc"))
+        assertFalse(shouldPreferHardwareAvcDecoder("qcom", "video/avc"))
+    }
+
+    @Test
     fun videoVolumeUsesTheCurrentMediaStreamAndCanRaiseItFromZero() {
         assertEquals(0f, normalizedMediaVolume(currentVolume = 0, maximumVolume = 16), 0.001f)
         assertEquals(0.25f, normalizedMediaVolume(currentVolume = 4, maximumVolume = 16), 0.001f)

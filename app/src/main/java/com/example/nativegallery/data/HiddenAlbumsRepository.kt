@@ -1,4 +1,4 @@
-﻿package com.example.nativegallery.data
+package com.example.nativegallery.data
 
 import android.content.Context
 
