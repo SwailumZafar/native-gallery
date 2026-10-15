@@ -127,6 +127,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
@@ -365,6 +366,7 @@ fun PhotoViewerOverlay(
     var motionVideoUri by remember(currentItem.id) { mutableStateOf<Uri?>(currentItem.motionVideoUri) }
     var isExtractingMotion by remember(currentItem.id) { mutableStateOf(false) }
     var isBurstReviewOpen by remember { mutableStateOf(false) }
+    BackHandler(enabled = isBurstReviewOpen) { isBurstReviewOpen = false }
     var burstShots by remember(currentItem.id) {
         mutableStateOf(currentItem.burstItems.ifEmpty { listOf(currentItem) })
     }
@@ -2266,14 +2268,16 @@ private fun ViewerVideoPlayer(
             positionMs = player.currentPosition
                 .coerceIn(0L, Int.MAX_VALUE.toLong())
                 .toInt()
-            val textureView = playerView?.videoSurfaceView as? TextureView
-            val frame = runCatching { textureView?.bitmap }.getOrNull()
-            if (frame != null) {
-                try {
-                    cacheVideoFrameThumbnail(context, uri, frame)
-                } catch (_: Throwable) {
-                } finally {
-                    frame.recycle()
+            if (hasRenderedFirstFrame) {
+                val textureView = playerView?.videoSurfaceView as? TextureView
+                val frame = runCatching { textureView?.bitmap }.getOrNull()
+                if (frame != null) {
+                    try {
+                        cacheVideoFrameThumbnail(context, uri, frame)
+                    } catch (_: Throwable) {
+                    } finally {
+                        frame.recycle()
+                    }
                 }
             }
             playerView?.player = null
@@ -2359,15 +2363,17 @@ private fun ViewerVideoPlayer(
         if (isViewerDragging) {
             player.playWhenReady = false
             player.pause()
-            val textureView = playerView?.videoSurfaceView as? TextureView
-            if (textureView != null) {
-                val frame = runCatching { textureView.bitmap }.getOrNull()
-                if (frame != null) {
-                    try {
-                        cacheVideoFrameThumbnail(context, uri, frame)
-                    } catch (_: Throwable) {
-                    } finally {
-                        frame.recycle()
+            if (hasRenderedFirstFrame) {
+                val textureView = playerView?.videoSurfaceView as? TextureView
+                if (textureView != null) {
+                    val frame = runCatching { textureView.bitmap }.getOrNull()
+                    if (frame != null) {
+                        try {
+                            cacheVideoFrameThumbnail(context, uri, frame)
+                        } catch (_: Throwable) {
+                        } finally {
+                            frame.recycle()
+                        }
                     }
                 }
             }

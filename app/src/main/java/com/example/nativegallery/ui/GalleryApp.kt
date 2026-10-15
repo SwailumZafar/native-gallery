@@ -1545,13 +1545,14 @@ fun GalleryApp(
         } else {
             mediaItem
         }).takeIf { it.contentUri != null }
-        if (warmupItem != null && !warmupItem.isVideo) {
+        if (warmupItem != null) {
             prefetchScope.launch {
                 prefetchMediaThumbnails(
                     context = context.applicationContext,
                     mediaItems = listOf(warmupItem),
                     thumbnailSizes = listOf(
                         if (actionMode == ViewerActionMode.Locked) 512
+                        else if (warmupItem.isVideo) 512
                         else viewerPhotoDecodeSize
                     ),
                     maxItems = 1,
@@ -4986,6 +4987,8 @@ private fun GalleryBottomBar(
     val density = LocalDensity.current
     val hideDistancePx = with(density) { 88.dp.toPx() }
     val tabStepPx = with(density) { (tabWidth + tabGap).toPx() }
+    val halfTabWidthPx = with(density) { (tabWidth / 2f).toPx() }
+    val hapticFeedback = LocalHapticFeedback.current
 
     val visibilityProgress by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
@@ -5057,16 +5060,22 @@ private fun GalleryBottomBar(
                     .width(contentWidth)
                     .height(tabHeight)
                     .pointerInput(Unit) {
+                        fun tabForX(x: Float): GalleryTab {
+                            val idx = kotlin.math.round((x - halfTabWidthPx) / tabStepPx).toInt().coerceIn(0, 2)
+                            return tabs[idx].first
+                        }
+                        fun pageForX(x: Float): Float {
+                            return ((x - halfTabWidthPx) / tabStepPx).coerceIn(0f, 2f)
+                        }
+
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             isDragging = true
-                            val startX = down.position.x
-                            val page = (startX / tabStepPx).coerceIn(0f, 2f)
-                            dragPage = page
-                            val initialIdx = (page + 0.35f).toInt().coerceIn(0, 2)
-                            val initialTab = tabs[initialIdx].first
-                            if (initialTab != selectedTab) {
-                                onTabSelected(initialTab)
+                            val targetTab = tabForX(down.position.x)
+                            dragPage = pageForX(down.position.x)
+                            if (targetTab != selectedTab) {
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onTabSelected(targetTab)
                             }
                             val pointerId = down.id
                             while (true) {
@@ -5076,11 +5085,10 @@ private fun GalleryBottomBar(
                                     break
                                 }
                                 val currentX = change.position.x
-                                val curPage = (currentX / tabStepPx).coerceIn(0f, 2f)
-                                dragPage = curPage
-                                val curIdx = (curPage + 0.35f).toInt().coerceIn(0, 2)
-                                val curTab = tabs[curIdx].first
+                                val curTab = tabForX(currentX)
+                                dragPage = pageForX(currentX)
                                 if (curTab != selectedTab) {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     onTabSelected(curTab)
                                 }
                             }
@@ -5098,11 +5106,11 @@ private fun GalleryBottomBar(
                             val h = headState.value
                             val t = tailState.value
                             val stretchPx = kotlin.math.abs(h - t) * tabStepPx * 0.42f
-                            val minP = kotlin.math.min(h, t)
-                            translationX = minP * tabStepPx
+                            val centerP = (h + t) / 2f
+                            translationX = centerP * tabStepPx
                             scaleX = (1f + (stretchPx / baseTabWidthPx)) * pressScale
                             scaleY = pressScale
-                            transformOrigin = TransformOrigin(0f, 0.5f)
+                            transformOrigin = TransformOrigin(0.5f, 0.5f)
                         }
                         .clip(tabShape)
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))

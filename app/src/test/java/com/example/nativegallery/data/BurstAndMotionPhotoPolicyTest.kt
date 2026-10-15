@@ -141,4 +141,17 @@ class BurstAndMotionPhotoPolicyTest {
         assertEquals("Fast Enhanced", fast.label)
         assertEquals(ViewerTransitionStyle.Normal, GallerySettings().viewerTransitionStyle)
     }
+
+    @Test
+    fun isBurstClutterAlbum_detectsVariations() {
+        assertTrue(isBurstClutterAlbum("Burst", "DCIM/Camera/"))
+        assertTrue(isBurstClutterAlbum("Burst photos", "DCIM/Camera/"))
+        assertTrue(isBurstClutterAlbum("burst_shots", "Pictures/"))
+        assertTrue(isBurstClutterAlbum("Camera", "DCIM/Burst/"))
+        assertTrue(isBurstClutterAlbum("Camera", "DCIM/burst_shots/"))
+
+        assertFalse(isBurstClutterAlbum("Camera", "DCIM/Camera/"))
+        assertFalse(isBurstClutterAlbum("Screenshots", "Pictures/Screenshots/"))
+        assertFalse(isBurstClutterAlbum("Downloads", "Download/"))
+    }
 }

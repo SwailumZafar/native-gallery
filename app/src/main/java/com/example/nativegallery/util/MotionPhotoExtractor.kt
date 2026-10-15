@@ -39,10 +39,16 @@ object MotionPhotoExtractor {
             val streamForExtract = contentResolver.openInputStream(imageUri) ?: return@withContext null
             streamForExtract.use { input ->
                 var skipped = 0L
+                val dummy = ByteArray(4096)
                 while (skipped < offset) {
                     val s = input.skip(offset - skipped)
-                    if (s <= 0) break
-                    skipped += s
+                    if (s > 0) {
+                        skipped += s
+                    } else {
+                        val r = input.read(dummy, 0, (offset - skipped).coerceAtMost(dummy.size.toLong()).toInt())
+                        if (r < 0) break
+                        skipped += r
+                    }
                 }
                 FileOutputStream(cachedVideoFile).use { output ->
                     input.copyTo(output)

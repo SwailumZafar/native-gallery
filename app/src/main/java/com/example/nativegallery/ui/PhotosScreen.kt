@@ -16,6 +16,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
@@ -177,6 +178,7 @@ fun PhotosScreen(
     val currentGridColumns by rememberUpdatedState(gridColumns)
     val currentOnGridColumnsChange by rememberUpdatedState(onGridColumnsChange)
     val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
     val isRefreshing = remember { mutableStateOf(false) }
 
     LaunchedEffect(revealMediaId, sections, gridColumns) {
@@ -291,7 +293,7 @@ fun PhotosScreen(
             }
     ) {
         PullToRefreshBox(
-            isRefreshing = isRefreshing.value || (isLoading && mediaItems.isEmpty()),
+            isRefreshing = isRefreshing.value,
             onRefresh = {
                 isRefreshing.value = true
                 onRefresh()
@@ -353,6 +355,7 @@ fun PhotosScreen(
                                     listState.animateScrollToItem(0)
                                     delay(100)
                                     searchFocusRequester.requestFocus()
+                                    keyboardController?.show()
                                 }
                             }
                         )

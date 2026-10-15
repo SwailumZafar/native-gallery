@@ -626,7 +626,7 @@ fun AlbumsScreen(
             }
     ) {
         PullToRefreshBox(
-            isRefreshing = isRefreshing.value || (isLoading && albums.isEmpty()),
+            isRefreshing = isRefreshing.value,
             onRefresh = {
                 isRefreshing.value = true
                 onRefresh()

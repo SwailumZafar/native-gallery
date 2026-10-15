@@ -405,8 +405,7 @@ class MediaStoreGalleryRepository(
             isAllPhotos = true
         )
         val nonClutterRows = rows.filterNot { row ->
-            row.albumName.equals("Burst", ignoreCase = true) ||
-                row.mediaItem.relativePath?.contains("/Burst/", ignoreCase = true) == true
+            isBurstClutterAlbum(row.albumName, row.mediaItem.relativePath)
         }
         val regularAlbums = nonClutterRows
             .groupBy { it.mediaItem.albumId }
@@ -440,7 +439,7 @@ class MediaStoreGalleryRepository(
         )
         val nonClutterMedia = mediaItems.filterNot { item ->
             val name = albumNames[item.albumId].orEmpty()
-            name.equals("Burst", ignoreCase = true) || item.relativePath?.contains("/Burst/", ignoreCase = true) == true
+            isBurstClutterAlbum(name, item.relativePath)
         }
         val regularAlbums = nonClutterMedia
             .groupBy { it.albumId }
@@ -540,11 +539,16 @@ internal fun extractBurstGroupKey(item: MediaItem, albumName: String): String? {
         val prefix = title.substring(0, (idx + 5).coerceAtMost(title.length))
         return "burst-${prefix.lowercase(Locale.US)}"
     }
-    if (albumName.equals("Burst", ignoreCase = true) || path.contains("/Burst/", ignoreCase = true)) {
+    if (isBurstClutterAlbum(albumName, path)) {
         val timeCluster = item.sortTimestampMillis / 4000L
         return "burst-folder-$timeCluster"
     }
     return null
+}
+
+internal fun isBurstClutterAlbum(albumName: String, relativePath: String?): Boolean {
+    return albumName.contains("Burst", ignoreCase = true) ||
+        relativePath?.contains("Burst", ignoreCase = true) == true
 }
 
 internal fun isMotionPhotoCandidate(title: String, mimeType: String?, path: String?): Boolean {
