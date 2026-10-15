@@ -393,10 +393,13 @@ class ApkServerHandler(http.server.BaseHTTPRequestHandler):
         <div class="features">
             <strong class="title">✨ What's Updated in v{VERSION}:</strong>
             <ul>
-                <li>🌊 <strong>ColorOS 17 Living Flow Pinch</strong>: Pinch in/out scales pictures and videos content inside the grid, while header and search stay rock-solid.</li>
-                <li>📁 <strong>Ultra-Smooth Folder Transitions</strong>: Zero-lag opening and closing on folders with videos via GPU layer transforms.</li>
-                <li>🎬 <strong>Lag-Free Video Dismiss</strong>: Seamless 1:1 pull-down dismiss with paused playback and asynchronous release overhead.</li>
-                <li>⚡ <strong>Glitch-Free Folder Close</strong>: Interruptible closing animation with zero dropped taps and no folder refresh ripples.</li>
+                <li>⚡ <strong>Photo Transition Speeds</strong>: Configurable Normal and Fast Enhanced animation options for viewing and dismissing photos, matching folder animations.</li>
+                <li>📸 <strong>Burst Photos Grouping & Review</strong>: Burst shots automatically group into stacks with indicator badges; tap to open interactive scrubbing review and choose the best shot.</li>
+                <li>🎞️ <strong>Motion Pictures (Live Photos)</strong>: Detection badge, background MP4 extraction, and press-and-hold to play live motion loops.</li>
+                <li>🔄 <strong>Pull to Refresh</strong>: Fluid drag-down pull-to-refresh on both Photos and Albums views.</li>
+                <li>🧭 <strong>Fluid Responsive Navigation Bar</strong>: Live touch tracking, horizontal finger drag switching across tabs, and tactile press scaling.</li>
+                <li>🔍 <strong>Instant Search Focus</strong>: Magnifier glass directly jumps to and activates the search bar with keyboard ready.</li>
+                <li>🎬 <strong>Zero-Glitch Video Dismissal</strong>: Fixed abrupt video dismissal when closing early before initialization by deferring teardown and leveraging multi-size thumbnail caches.</li>
             </ul>
         </div>
 

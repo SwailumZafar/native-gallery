@@ -92,6 +92,22 @@ object MotionSpecs {
     )
 
     /**
+     * Snappy physics spring for fast folder opening expansion.
+     */
+    val AppleSpringFolderFast: SpringSpec<Float> = spring(
+        dampingRatio = 0.84f,
+        stiffness = 620f,
+    )
+
+    /**
+     * Snappy physics spring for fast folder closing collapse.
+     */
+    val AppleSpringFolderCloseFast: SpringSpec<Float> = spring(
+        dampingRatio = 0.86f,
+        stiffness = 680f,
+    )
+
+    /**
      * Responsive spring for pinch-to-resize bounce recovery.
      */
     val AppleSpringPinch: SpringSpec<Float> = spring(
@@ -139,6 +155,8 @@ object GalleryMotion {
     const val AlbumHeroOpenStiffness = ContainerOpenStiffness
     const val MediaOpenDamping = 0.86f
     const val MediaOpenStiffness = 280f
+    const val MediaOpenDampingFast = 0.84f
+    const val MediaOpenStiffnessFast = 620f
     const val ViewerDismissDamping = 0.82f
     const val ViewerDismissStiffness = 360f
     const val ViewerTransformDamping = 0.84f
@@ -165,6 +183,11 @@ object GalleryMotion {
     val ViewerHeroCloseSpring: SpringSpec<Float> = spring(
         dampingRatio = 0.84f,
         stiffness = 360f
+    )
+
+    val ViewerHeroCloseSpringFast: SpringSpec<Float> = spring(
+        dampingRatio = 0.86f,
+        stiffness = 680f
     )
 
     fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {

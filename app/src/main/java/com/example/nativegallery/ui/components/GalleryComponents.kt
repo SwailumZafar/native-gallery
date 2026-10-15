@@ -49,11 +49,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MotionPhotosOn
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -106,6 +110,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.min
@@ -207,6 +213,7 @@ fun SearchPill(
     modifier: Modifier = Modifier,
     placeholder: String = "Search",
     query: String = "",
+    focusRequester: FocusRequester? = null,
     onQueryChange: ((String) -> Unit)? = null
 ) {
     val editable = onQueryChange != null
@@ -283,7 +290,9 @@ fun SearchPill(
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
                     ),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
                     decorationBox = { innerTextField ->
                         Box(contentAlignment = Alignment.CenterStart) {
                             if (query.isBlank()) {
@@ -455,6 +464,19 @@ fun MediaThumbnail(
         if (mediaItem.isVideo && mediaItem.contentUri != null) {
             VideoBadge(
                 duration = mediaItem.durationLabel.orEmpty(),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+            )
+        } else if (mediaItem.isBurst && mediaItem.burstCount > 1) {
+            BurstBadge(
+                count = mediaItem.burstCount,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+            )
+        } else if (mediaItem.isMotionPhoto) {
+            MotionBadge(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(6.dp)
@@ -720,6 +742,65 @@ fun VideoBadge(
     }
 }
 
+@Composable
+fun BurstBadge(
+    count: Int,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        color = Color.Black.copy(alpha = 0.54f),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.BurstMode,
+                contentDescription = "Burst photo",
+                tint = Color.White,
+                modifier = Modifier.size(13.dp)
+            )
+            if (count > 1) {
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    text = count.toString(),
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 10.sp,
+                        lineHeight = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun MotionBadge(
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        color = Color.Black.copy(alpha = 0.54f),
+        shape = CircleShape
+    ) {
+        Box(
+            modifier = Modifier.padding(4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.MotionPhotosOn,
+                contentDescription = "Motion photo",
+                tint = Color.White,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+    }
+}
+
 suspend fun prefetchMediaThumbnails(
     context: Context,
     mediaItems: List<MediaItem>,
@@ -767,9 +848,11 @@ suspend fun prefetchMediaThumbnails(
         }
     }
 }
+private val VideoFrameCacheScope = CoroutineScope(Dispatchers.IO)
+
 fun cacheVideoFrameThumbnail(context: Context, uri: Uri, frame: Bitmap) {
     val appContext = context.applicationContext
-    listOf(384, 512).forEach { size ->
+    val entries = listOf(384, 512).map { size ->
         val scale = (size.toFloat() / max(frame.width, frame.height)).coerceAtMost(1f)
         val width = (frame.width * scale).roundToInt().coerceAtLeast(1)
         val height = (frame.height * scale).roundToInt().coerceAtLeast(1)
@@ -780,7 +863,12 @@ fun cacheVideoFrameThumbnail(context: Context, uri: Uri, frame: Bitmap) {
         }
         val cacheKey = ThumbnailMemoryCache.key(uri, size)
         ThumbnailMemoryCache.replace(cacheKey, cachedFrame)
-        ThumbnailDiskCache.replace(appContext, cacheKey, cachedFrame)
+        cacheKey to cachedFrame
+    }
+    VideoFrameCacheScope.launch {
+        entries.forEach { (cacheKey, cachedFrame) ->
+            ThumbnailDiskCache.replace(appContext, cacheKey, cachedFrame)
+        }
     }
 }
 

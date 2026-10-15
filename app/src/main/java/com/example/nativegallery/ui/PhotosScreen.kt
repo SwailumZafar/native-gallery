@@ -1,4 +1,8 @@
-@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+@file:OptIn(
+    androidx.compose.animation.ExperimentalSharedTransitionApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class
+)
 
 package com.example.nativegallery.ui
 
@@ -15,6 +19,9 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.input.pointer.pointerInput
@@ -169,6 +176,8 @@ fun PhotosScreen(
 
     val currentGridColumns by rememberUpdatedState(gridColumns)
     val currentOnGridColumnsChange by rememberUpdatedState(onGridColumnsChange)
+    val searchFocusRequester = remember { FocusRequester() }
+    val isRefreshing = remember { mutableStateOf(false) }
 
     LaunchedEffect(revealMediaId, sections, gridColumns) {
         val mediaId = revealMediaId ?: return@LaunchedEffect
@@ -238,7 +247,6 @@ fun PhotosScreen(
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     var cumulativeZoom = 1f
-                    var densityChanged = false
                     try {
                         var gestureActive = true
                         while (gestureActive) {
@@ -247,22 +255,24 @@ fun PhotosScreen(
                             if (pressed.size >= 2) {
                                 val zoomChange = event.calculateZoom()
                                 cumulativeZoom *= zoomChange
-                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.38f)
-                                    .coerceIn(0.70f, 1.45f)
+                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.12f)
+                                    .coerceIn(0.95f, 1.05f)
                                 coroutineScope.launch { pinchScaleAnim.snapTo(targetScale) }
-                                if (!densityChanged && cumulativeZoom >= 1.20f) {
+                                if (cumulativeZoom >= 1.09f) {
                                     val cols = currentGridColumns
-                                    if (cols > 2) {
+                                    if (cols > 1) {
                                         hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         currentOnGridColumnsChange(cols - 1)
-                                        densityChanged = true
+                                        cumulativeZoom = 1f
+                                        coroutineScope.launch { pinchScaleAnim.snapTo(1f) }
                                     }
-                                } else if (!densityChanged && cumulativeZoom <= 0.82f) {
+                                } else if (cumulativeZoom <= 0.91f) {
                                     val cols = currentGridColumns
-                                    if (cols < 10) {
+                                    if (cols < 6) {
                                         hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         currentOnGridColumnsChange(cols + 1)
-                                        densityChanged = true
+                                        cumulativeZoom = 1f
+                                        coroutineScope.launch { pinchScaleAnim.snapTo(1f) }
                                     }
                                 }
                                 event.changes.forEach { it.consume() }
@@ -280,59 +290,74 @@ fun PhotosScreen(
                 }
             }
     ) {
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    val scale = pinchScaleAnim.value
-                    scaleX = scale
-                    scaleY = scale
-                    transformOrigin = if (listState.firstVisibleItemIndex == 0) {
-                        TransformOrigin(0.5f, 0f)
-                    } else {
-                        TransformOrigin(0.5f, 0.5f)
-                    }
-                },
-            state = listState,
-            contentPadding = PaddingValues(
-                start = 0.dp,
-                top = 0.dp,
-                end = 0.dp,
-                bottom = contentPadding.calculateBottomPadding() + if (isSelectionMode) 132.dp else 34.dp
-            )
-        ) {
-            item(key = "pictures-header", contentType = "pictures-header") {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .graphicsLayer {
-                            val scale = pinchScaleAnim.value
-                            if (scale != 1f && scale > 0f) {
-                                val inv = 1f / scale
-                                scaleX = inv
-                                scaleY = inv
-                                transformOrigin = TransformOrigin(0.5f, 0f)
-                            }
-                        }
-                ) {
-                    PicturesHeader(
-                        mediaAccessNotice = mediaAccessNotice,
-                        collapseProgress = headerCollapse,
-                        searchQuery = searchQuery,
-                        onSearchQueryChange = onSearchQueryChange,
-                        selectedCount = selectedMediaIds.size,
-                        totalVisibleCount = mediaItems.size,
-                        onSelectAllVisible = onSelectAllVisible,
-                        onRefresh = onRefresh,
-                        onOpenSettings = onOpenSettings,
-                        onSearchClick = {
-                            coroutineScope.launch {
-                                listState.animateScrollToItem(0)
-                            }
-                        }
-                    )
+        PullToRefreshBox(
+            isRefreshing = isRefreshing.value || (isLoading && mediaItems.isEmpty()),
+            onRefresh = {
+                isRefreshing.value = true
+                onRefresh()
+                coroutineScope.launch {
+                    delay(800)
+                    isRefreshing.value = false
                 }
-            }
+            },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val scale = pinchScaleAnim.value
+                        scaleX = scale
+                        scaleY = scale
+                        transformOrigin = if (listState.firstVisibleItemIndex == 0) {
+                            TransformOrigin(0.5f, 0f)
+                        } else {
+                            TransformOrigin(0.5f, 0.5f)
+                        }
+                    },
+                state = listState,
+                contentPadding = PaddingValues(
+                    start = 0.dp,
+                    top = 0.dp,
+                    end = 0.dp,
+                    bottom = contentPadding.calculateBottomPadding() + if (isSelectionMode) 132.dp else 34.dp
+                )
+            ) {
+                item(key = "pictures-header", contentType = "pictures-header") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                val scale = pinchScaleAnim.value
+                                if (scale != 1f && scale > 0f) {
+                                    val inv = 1f / scale
+                                    scaleX = inv
+                                    scaleY = inv
+                                    transformOrigin = TransformOrigin(0.5f, 0f)
+                                }
+                            }
+                    ) {
+                        PicturesHeader(
+                            mediaAccessNotice = mediaAccessNotice,
+                            collapseProgress = headerCollapse,
+                            searchQuery = searchQuery,
+                            onSearchQueryChange = onSearchQueryChange,
+                            selectedCount = selectedMediaIds.size,
+                            totalVisibleCount = mediaItems.size,
+                            onSelectAllVisible = onSelectAllVisible,
+                            onRefresh = onRefresh,
+                            onOpenSettings = onOpenSettings,
+                            searchFocusRequester = searchFocusRequester,
+                            onSearchClick = {
+                                coroutineScope.launch {
+                                    listState.animateScrollToItem(0)
+                                    delay(100)
+                                    searchFocusRequester.requestFocus()
+                                }
+                            }
+                        )
+                    }
+                }
 
             if (showLoading) {
                 loadingPhotoSections(columns = gridColumns)
@@ -364,8 +389,7 @@ fun PhotosScreen(
                 }
             }
         }
-
-
+        }
 
         if (!showLoading && !isSelectionMode) {
             GalleryFastScroller(
@@ -424,6 +448,7 @@ private fun PicturesHeader(
     onSelectAllVisible: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
+    searchFocusRequester: FocusRequester? = null,
     onSearchClick: () -> Unit = {}
 ) {
     val density = LocalDensity.current
@@ -515,7 +540,8 @@ private fun PicturesHeader(
             SearchPill(
                 placeholder = "Search photos and videos",
                 query = searchQuery,
-                onQueryChange = onSearchQueryChange
+                onQueryChange = onSearchQueryChange,
+                focusRequester = searchFocusRequester
             )
         }
         if (mediaAccessNotice != null) {
@@ -611,38 +637,54 @@ private fun LazyListScope.photoSection(
     }
 
     item(key = "section-$title", contentType = "photo-section-title") {
-        Text(
-            text = title,
-            modifier = Modifier.padding(horizontal = 10.dp),
-            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Normal),
-            color = MaterialTheme.colorScheme.onBackground
-        )
+        Box(
+            modifier = Modifier.animateItem(
+                fadeInSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 380f),
+                fadeOutSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 380f),
+                placementSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 350f)
+            )
+        ) {
+            Text(
+                text = title,
+                modifier = Modifier.padding(horizontal = 10.dp),
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Normal),
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
         Spacer(Modifier.height(8.dp))
     }
     val rowCount = (mediaItems.size + columns - 1) / columns
     items(
         count = rowCount,
-        key = { rowIndex -> "row-$title-${mediaItems[rowIndex * columns].id}" },
+        key = { rowIndex -> "photo-row-$title-$rowIndex" },
         contentType = { "photo-grid-row" }
     ) { rowIndex ->
         val startIndex = rowIndex * columns
         val rowItems = mediaItems.subList(startIndex, minOf(startIndex + columns, mediaItems.size))
-        PhotoGridRow(
-            mediaItems = rowItems,
-            columns = columns,
-            spacing = 1.dp,
-            selectedMediaIds = selectedMediaIds,
-            sharedTransitionScope = sharedTransitionScope,
-            animatedVisibilityScope = animatedVisibilityScope,
-            sharedBoundsTransform = sharedBoundsTransform,
-            activeSharedElementKey = activeSharedElementKey,
-            onMediaBoundsChanged = onMediaBoundsChanged,
-            onMediaLongClick = onMediaLongClick,
-            trackTileBounds = trackTileBounds,
-            deferThumbnailLoads = deferThumbnailLoads,
-            onMediaSelectionToggle = onMediaSelectionToggle,
-            onMediaClick = onMediaClick
-        )
+        Box(
+            modifier = Modifier.animateItem(
+                fadeInSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 380f),
+                fadeOutSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 380f),
+                placementSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 350f)
+            )
+        ) {
+            PhotoGridRow(
+                mediaItems = rowItems,
+                columns = columns,
+                spacing = 1.dp,
+                selectedMediaIds = selectedMediaIds,
+                sharedTransitionScope = sharedTransitionScope,
+                animatedVisibilityScope = animatedVisibilityScope,
+                sharedBoundsTransform = sharedBoundsTransform,
+                activeSharedElementKey = activeSharedElementKey,
+                onMediaBoundsChanged = onMediaBoundsChanged,
+                onMediaLongClick = onMediaLongClick,
+                trackTileBounds = trackTileBounds,
+                deferThumbnailLoads = deferThumbnailLoads,
+                onMediaSelectionToggle = onMediaSelectionToggle,
+                onMediaClick = onMediaClick
+            )
+        }
         Spacer(Modifier.height(1.dp))
     }
     item(key = "section-end-$title", contentType = "photo-section-end") {

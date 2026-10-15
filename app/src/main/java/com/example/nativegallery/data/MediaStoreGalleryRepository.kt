@@ -37,7 +37,8 @@ class MediaStoreGalleryRepository(
                 return@trace GallerySnapshot(emptyList(), emptyList())
             }
 
-            val rows = queryMedia(mediaKinds)
+            val rawRows = queryMedia(mediaKinds)
+            val rows = groupBurstRows(rawRows)
             val snapshot = GallerySnapshot(
                 mediaItems = rows.map { it.mediaItem },
                 albums = buildAlbums(rows)
@@ -105,17 +106,19 @@ class MediaStoreGalleryRepository(
                     MediaStore.MediaColumns.DATE_TAKEN
                 )
             )
-            val rows = (captureDatedRows + modifiedDatedRows + addedDatedRows)
+            val rawRows = (captureDatedRows + modifiedDatedRows + addedDatedRows)
                 .distinctBy { it.mediaItem.id }
                 .sortedWith(
                     compareByDescending<MediaStoreRow> { it.mediaItem.sortTimestampMillis }
                         .thenByDescending { it.mediaItem.id }
                 )
+            val groupedRows = groupBurstRows(rawRows)
+            val rows = groupedRows
                 .drop(offset.coerceAtLeast(0))
                 .take(limit)
             GallerySnapshot(
                 mediaItems = rows.map { it.mediaItem },
-                albums = buildAlbums(rows)
+                albums = buildAlbums(groupedRows)
             )
         }
     }
@@ -317,6 +320,7 @@ class MediaStoreGalleryRepository(
                 } else {
                     null
                 }
+                val isMotion = mediaType == MediaType.Photo && isMotionPhotoCandidate(title, mimeType, path)
                 val mediaItem = MediaItem(
                     id = "${mediaType.name.lowercase(Locale.US)}-$id",
                     albumId = bucketId,
@@ -332,7 +336,9 @@ class MediaStoreGalleryRepository(
                     width = width,
                     height = height,
                     relativePath = path,
-                    sortTimestampMillis = sortTimestampMillis
+                    sortTimestampMillis = sortTimestampMillis,
+                    isMotionPhoto = isMotion,
+                    motionVideoUri = if (isMotion) contentUri else null
                 )
                 rows += MediaStoreRow(mediaItem, bucketName, dateExpiresSeconds)
             }
@@ -398,7 +404,11 @@ class MediaStoreGalleryRepository(
             coverUri = allCover.contentUri,
             isAllPhotos = true
         )
-        val regularAlbums = rows
+        val nonClutterRows = rows.filterNot { row ->
+            row.albumName.equals("Burst", ignoreCase = true) ||
+                row.mediaItem.relativePath?.contains("/Burst/", ignoreCase = true) == true
+        }
+        val regularAlbums = nonClutterRows
             .groupBy { it.mediaItem.albumId }
             .map { (albumId, albumRows) ->
                 val cover = albumRows.first().mediaItem
@@ -428,7 +438,11 @@ class MediaStoreGalleryRepository(
             coverUri = allCover.contentUri,
             isAllPhotos = true
         )
-        val regularAlbums = mediaItems
+        val nonClutterMedia = mediaItems.filterNot { item ->
+            val name = albumNames[item.albumId].orEmpty()
+            name.equals("Burst", ignoreCase = true) || item.relativePath?.contains("/Burst/", ignoreCase = true) == true
+        }
+        val regularAlbums = nonClutterMedia
             .groupBy { it.albumId }
             .map { (albumId, albumMedia) ->
                 val cover = albumMedia.first()
@@ -490,7 +504,7 @@ class MediaStoreGalleryRepository(
         }
     }
 
-    private data class MediaStoreRow(
+    internal data class MediaStoreRow(
         val mediaItem: MediaItem,
         val albumName: String,
         val dateExpiresSeconds: Long? = null
@@ -511,3 +525,74 @@ class MediaStoreGalleryRepository(
 
     }
 }
+
+internal fun extractBurstGroupKey(item: MediaItem, albumName: String): String? {
+    if (item.isVideo) return null
+    val title = item.title
+    val path = item.relativePath.orEmpty()
+    val burstRegex = Regex("""^(.*?(?:BURST|burst)[0-9_]*?)(?:_COVER|_\d+|\d+)?(?:\.[a-zA-Z0-9]+)?$""", RegexOption.IGNORE_CASE)
+    val match = burstRegex.find(title)
+    if (match != null && match.groupValues[1].length >= 4) {
+        return "burst-${match.groupValues[1].lowercase(Locale.US)}"
+    }
+    if (title.contains("BURST", ignoreCase = true)) {
+        val idx = title.indexOf("BURST", ignoreCase = true)
+        val prefix = title.substring(0, (idx + 5).coerceAtMost(title.length))
+        return "burst-${prefix.lowercase(Locale.US)}"
+    }
+    if (albumName.equals("Burst", ignoreCase = true) || path.contains("/Burst/", ignoreCase = true)) {
+        val timeCluster = item.sortTimestampMillis / 4000L
+        return "burst-folder-$timeCluster"
+    }
+    return null
+}
+
+internal fun isMotionPhotoCandidate(title: String, mimeType: String?, path: String?): Boolean {
+    if (title.startsWith("MVIMG_", ignoreCase = true)) return true
+    if (title.contains("_MP.", ignoreCase = true) || title.endsWith("_MP", ignoreCase = true)) return true
+    if (title.contains("MOTION", ignoreCase = true) || path?.contains("Motion", ignoreCase = true) == true) return true
+    return false
+}
+
+internal fun groupBurstRows(rows: List<MediaStoreGalleryRepository.MediaStoreRow>): List<MediaStoreGalleryRepository.MediaStoreRow> {
+    if (rows.isEmpty()) return emptyList()
+    val result = mutableListOf<MediaStoreGalleryRepository.MediaStoreRow>()
+    val burstGroups = mutableMapOf<String, MutableList<MediaStoreGalleryRepository.MediaStoreRow>>()
+    val rowBurstKey = mutableMapOf<String, String>()
+
+    for (row in rows) {
+        val key = extractBurstGroupKey(row.mediaItem, row.albumName)
+        if (key != null) {
+            burstGroups.getOrPut(key) { mutableListOf() }.add(row)
+            rowBurstKey[row.mediaItem.id] = key
+        }
+    }
+
+    val handledBurstKeys = mutableSetOf<String>()
+    for (row in rows) {
+        val burstKey = rowBurstKey[row.mediaItem.id]
+        if (burstKey != null) {
+            val group = burstGroups[burstKey]
+            if (group != null && group.size > 1) {
+                if (burstKey !in handledBurstKeys) {
+                    handledBurstKeys += burstKey
+                    val sortedGroup = group.sortedBy { it.mediaItem.sortTimestampMillis }
+                    val coverRow = sortedGroup.firstOrNull { it.mediaItem.title.contains("COVER", ignoreCase = true) }
+                        ?: sortedGroup.first()
+                    val burstItems = sortedGroup.map { it.mediaItem }
+                    val coverMedia = coverRow.mediaItem.copy(
+                        isBurst = true,
+                        burstCount = sortedGroup.size,
+                        burstGroupId = burstKey,
+                        burstItems = burstItems
+                    )
+                    result += coverRow.copy(mediaItem = coverMedia)
+                }
+                continue
+            }
+        }
+        result += row
+    }
+    return result
+}
+

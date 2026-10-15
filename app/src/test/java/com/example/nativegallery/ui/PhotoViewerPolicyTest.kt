@@ -160,4 +160,14 @@ class PhotoViewerPolicyTest {
         assertEquals(1f, viewerDoubleTapTargetScale(currentScale = 2.8f), 0.001f)
         assertEquals(1f, viewerDoubleTapTargetScale(currentScale = 1.06f), 0.001f)
     }
+
+    @Test
+    fun dismissDragProgressAndScaleAreBounded() {
+        assertEquals(0f, viewerDismissProgress(Offset.Zero, 100f), 0.001f)
+        val halfOffset = Offset(0f, 140f)
+        val progress = viewerDismissProgress(halfOffset, 100f)
+        assertTrue(progress in 0.45f..0.55f)
+        val scale = viewerDismissScale(halfOffset, 100f)
+        assertTrue(scale in 0.80f..0.90f)
+    }
 }

@@ -1,9 +1,14 @@
-@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+@file:OptIn(
+    androidx.compose.animation.ExperimentalSharedTransitionApi::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class
+)
 
 package com.example.nativegallery.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
@@ -13,9 +18,12 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,6 +34,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -119,6 +128,7 @@ import com.example.nativegallery.ui.components.PremiumDropdownMenu
 import com.example.nativegallery.ui.components.PremiumDropdownMenuItem
 import com.example.nativegallery.ui.components.PremiumOverflowButton
 import com.example.nativegallery.ui.components.MediaThumbnail
+import com.example.nativegallery.ui.components.VideoBadge
 import com.example.nativegallery.ui.components.MediaSelectionActionBar
 import com.example.nativegallery.ui.components.MediaSelectionTopBar
 import com.example.nativegallery.ui.components.MotionSpecs
@@ -135,10 +145,49 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.max
 import kotlin.math.min
 
-enum class AlbumDetailGridMode {
-    Compact,
-    Comfortable,
-    Spacious
+enum class AlbumDetailGridMode(val columns: Int) {
+    Single(1),
+    Spacious(2),
+    Comfortable(3),
+    Compact(4),
+    Dense(5),
+    Micro(6);
+
+    fun label(): String = when (this) {
+        Single -> "Single"
+        Spacious -> "Spacious"
+        Comfortable -> "Comfort"
+        Compact -> "Compact"
+        Dense -> "Dense"
+        Micro -> "Micro"
+    }
+
+    fun next(): AlbumDetailGridMode = when (this) {
+        Single -> Spacious
+        Spacious -> Comfortable
+        Comfortable -> Compact
+        Compact -> Dense
+        Dense -> Micro
+        Micro -> Single
+    }
+
+    fun zoomIn(): AlbumDetailGridMode = when (this) {
+        Micro -> Dense
+        Dense -> Compact
+        Compact -> Comfortable
+        Comfortable -> Spacious
+        Spacious -> Single
+        Single -> Single
+    }
+
+    fun zoomOut(): AlbumDetailGridMode = when (this) {
+        Single -> Spacious
+        Spacious -> Comfortable
+        Comfortable -> Compact
+        Compact -> Dense
+        Dense -> Micro
+        Micro -> Micro
+    }
 }
 
 enum class AlbumDetailSortMode {
@@ -258,6 +307,7 @@ fun AlbumsScreen(
     onDeleteAlbum: (Album) -> Unit = {},
     canDeleteAlbum: (Album) -> Boolean = { !it.isAllPhotos },
     onOpenSettings: () -> Unit = {},
+    onRefresh: () -> Unit = {},
     hiddenAlbumCount: Int = 0,
     hiddenItemCount: Int = 0,
     lockedItemCount: Int = 0,
@@ -323,6 +373,7 @@ fun AlbumsScreen(
     var dropSettling by remember { mutableStateOf(false) }
     var dropSettleStartOffset by remember { mutableStateOf(Offset.Zero) }
     var dropSettleTargetOffset by remember { mutableStateOf(Offset.Zero) }
+    val isRefreshing = remember { mutableStateOf(false) }
 
 
     fun recordAlbumBounds(album: Album, bounds: Rect) {
@@ -507,31 +558,135 @@ fun AlbumsScreen(
         }
     )
 
-    Box(modifier = Modifier.fillMaxSize()) {
-    LazyColumn(
+    val pinchScaleAnim = remember { Animatable(1f) }
+    val layoutModeOrder = remember {
+        listOf(
+            AlbumLayoutMode.Hero,
+            AlbumLayoutMode.BigTiles,
+            AlbumLayoutMode.Medium,
+            AlbumLayoutMode.Basic,
+            AlbumLayoutMode.Compact,
+            AlbumLayoutMode.List
+        )
+    }
+    val currentLayoutMode by rememberUpdatedState(layoutMode)
+    val currentOnLayoutModeChange by rememberUpdatedState(onLayoutModeChange)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                scaleX = pinchScaleAnim.value
+                scaleY = pinchScaleAnim.value
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var cumulativeZoom = 1f
+                    try {
+                        var gestureActive = true
+                        while (gestureActive) {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.size >= 2) {
+                                val zoomChange = event.calculateZoom()
+                                cumulativeZoom *= zoomChange
+                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.12f).coerceIn(0.95f, 1.05f)
+                                reorderScope.launch { pinchScaleAnim.snapTo(targetScale) }
+                                if (cumulativeZoom >= 1.09f) {
+                                    val currIdx = layoutModeOrder.indexOf(currentLayoutMode)
+                                    if (currIdx > 0) {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        currentOnLayoutModeChange(layoutModeOrder[currIdx - 1])
+                                        cumulativeZoom = 1f
+                                        reorderScope.launch { pinchScaleAnim.snapTo(1f) }
+                                    }
+                                } else if (cumulativeZoom <= 0.91f) {
+                                    val currIdx = layoutModeOrder.indexOf(currentLayoutMode)
+                                    if (currIdx < layoutModeOrder.lastIndex) {
+                                        hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        currentOnLayoutModeChange(layoutModeOrder[currIdx + 1])
+                                        cumulativeZoom = 1f
+                                        reorderScope.launch { pinchScaleAnim.snapTo(1f) }
+                                    }
+                                }
+                                event.changes.forEach { it.consume() }
+                            }
+                            gestureActive = event.changes.any { it.pressed }
+                        }
+                    } finally {
+                        reorderScope.launch {
+                            pinchScaleAnim.animateTo(
+                                targetValue = 1f,
+                                animationSpec = MotionSpecs.AppleSpringPinch
+                            )
+                        }
+                    }
+                }
+            }
+    ) {
+        PullToRefreshBox(
+            isRefreshing = isRefreshing.value || (isLoading && albums.isEmpty()),
+            onRefresh = {
+                isRefreshing.value = true
+                onRefresh()
+                reorderScope.launch {
+                    delay(800)
+                    isRefreshing.value = false
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            LazyColumn(
         state = listState,
         contentPadding = PaddingValues(
-            start = if (layoutMode == AlbumLayoutMode.Basic) 8.dp else 18.dp,
+            start = when (layoutMode) {
+                AlbumLayoutMode.Basic, AlbumLayoutMode.Compact -> 8.dp
+                AlbumLayoutMode.List -> 14.dp
+                else -> 18.dp
+            },
             top = 58.dp,
-            end = if (layoutMode == AlbumLayoutMode.Basic) 8.dp else 18.dp,
+            end = when (layoutMode) {
+                AlbumLayoutMode.Basic, AlbumLayoutMode.Compact -> 8.dp
+                AlbumLayoutMode.List -> 14.dp
+                else -> 18.dp
+            },
             bottom = contentPadding.calculateBottomPadding() + 6.dp
         )
     ) {
         item(key = "albums-header", contentType = "albums-header") {
-            ScreenHeader(title = "Albums") {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        val scale = pinchScaleAnim.value
+                        if (scale != 1f && scale > 0f) {
+                            val inv = 1f / scale
+                            scaleX = inv
+                            scaleY = inv
+                            transformOrigin = TransformOrigin(0.5f, 0f)
+                        }
+                    }
+            ) {
+                Column {
+                    ScreenHeader(title = "Albums") {
                 HeaderActionButton(
                     icon = Icons.Filled.Add,
                     contentDescription = "Create album",
                     onClick = { showCreateDialog = true }
                 )
                 HeaderActionButton(
-                    icon = if (layoutMode == AlbumLayoutMode.BigTiles) Icons.Filled.GridView else Icons.Filled.Apps,
+                    icon = when (layoutMode) {
+                        AlbumLayoutMode.Hero, AlbumLayoutMode.BigTiles -> Icons.Filled.GridView
+                        AlbumLayoutMode.Medium, AlbumLayoutMode.Basic, AlbumLayoutMode.Compact -> Icons.Filled.Apps
+                        AlbumLayoutMode.List -> Icons.Filled.Folder
+                    },
                     contentDescription = "Switch layout",
                     onClick = {
                         hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onLayoutModeChange(
-                            if (layoutMode == AlbumLayoutMode.BigTiles) AlbumLayoutMode.Basic else AlbumLayoutMode.BigTiles
-                        )
+                        val modes = AlbumLayoutMode.entries
+                        val nextIndex = (modes.indexOf(layoutMode) + 1) % modes.size
+                        onLayoutModeChange(modes[nextIndex])
                     }
                 )
                 Box {
@@ -595,6 +750,8 @@ fun AlbumsScreen(
                 )
             }
             Spacer(Modifier.height(18.dp))
+                }
+            }
         }
 
         if (isLoading) {
@@ -610,42 +767,98 @@ fun AlbumsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        } else if (layoutMode == AlbumLayoutMode.BigTiles) {
-            if (leadingAlbum != null) {
-                item(key = "album-hero", contentType = "album-hero") {
-                    key(leadingAlbum.id) {
-                        AlbumHeroCard(
-                            album = leadingAlbum,
-                            height = heroHeight,
-                            activeTransitionAlbumId = activeTransitionAlbumId,
-                            cardInteraction = cardInteraction,
-                            deferThumbnailLoads = deferAlbumCoverLoads,
-                            onAlbumClick = onAlbumClick,
-                            onAlbumBoundsChanged = ::recordAlbumBounds
-                        )
+        } else {
+            when (layoutMode) {
+                AlbumLayoutMode.Hero -> {
+                    heroAlbumRows(
+                        albums = sortedAlbums,
+                        height = 200.dp,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
+                        cardInteraction = cardInteraction,
+                        deferThumbnailLoads = deferAlbumCoverLoads,
+                        onAlbumClick = onAlbumClick,
+                        onAlbumBoundsChanged = ::recordAlbumBounds
+                    )
+                }
+                AlbumLayoutMode.BigTiles -> {
+                    if (leadingAlbum != null) {
+                        item(key = "album-hero", contentType = "album-hero") {
+                            Box(
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                                    fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                                    placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
+                                )
+                            ) {
+                                key(leadingAlbum.id) {
+                                    AlbumHeroCard(
+                                        album = leadingAlbum,
+                                        height = heroHeight,
+                                        activeTransitionAlbumId = activeTransitionAlbumId,
+                                        cardInteraction = cardInteraction,
+                                        deferThumbnailLoads = deferAlbumCoverLoads,
+                                        onAlbumClick = onAlbumClick,
+                                        onAlbumBoundsChanged = ::recordAlbumBounds
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                        }
                     }
-                    Spacer(Modifier.height(12.dp))
+                    bigAlbumRows(
+                        albums = remainingAlbums,
+                        columns = bigTileColumns,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
+                        cardInteraction = cardInteraction,
+                        deferThumbnailLoads = deferAlbumCoverLoads,
+                        onAlbumClick = onAlbumClick,
+                        onAlbumBoundsChanged = ::recordAlbumBounds
+                    )
+                }
+                AlbumLayoutMode.Medium -> {
+                    bigAlbumRows(
+                        albums = sortedAlbums,
+                        columns = 2,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
+                        cardInteraction = cardInteraction,
+                        deferThumbnailLoads = deferAlbumCoverLoads,
+                        onAlbumClick = onAlbumClick,
+                        onAlbumBoundsChanged = ::recordAlbumBounds
+                    )
+                }
+                AlbumLayoutMode.Basic -> {
+                    basicAlbumRows(
+                        albums = sortedAlbums,
+                        columns = basicTileColumns,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
+                        cardInteraction = cardInteraction,
+                        deferThumbnailLoads = deferAlbumCoverLoads,
+                        onAlbumClick = onAlbumClick,
+                        onAlbumBoundsChanged = ::recordAlbumBounds
+                    )
+                }
+                AlbumLayoutMode.Compact -> {
+                    basicAlbumRows(
+                        albums = sortedAlbums,
+                        columns = 4,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
+                        cardInteraction = cardInteraction,
+                        deferThumbnailLoads = deferAlbumCoverLoads,
+                        onAlbumClick = onAlbumClick,
+                        onAlbumBoundsChanged = ::recordAlbumBounds
+                    )
+                }
+                AlbumLayoutMode.List -> {
+                    listAlbumRows(
+                        albums = sortedAlbums,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
+                        cardInteraction = cardInteraction,
+                        deferThumbnailLoads = deferAlbumCoverLoads,
+                        onAlbumClick = onAlbumClick,
+                        onAlbumBoundsChanged = ::recordAlbumBounds
+                    )
                 }
             }
-            bigAlbumRows(
-                albums = remainingAlbums,
-                columns = bigTileColumns,
-                activeTransitionAlbumId = activeTransitionAlbumId,
-                cardInteraction = cardInteraction,
-                deferThumbnailLoads = deferAlbumCoverLoads,
-                onAlbumClick = onAlbumClick,
-                onAlbumBoundsChanged = ::recordAlbumBounds
-            )
-        } else {
-            basicAlbumRows(
-                albums = sortedAlbums,
-                columns = basicTileColumns,
-                activeTransitionAlbumId = activeTransitionAlbumId,
-                cardInteraction = cardInteraction,
-                deferThumbnailLoads = deferAlbumCoverLoads,
-                onAlbumClick = onAlbumClick,
-                onAlbumBoundsChanged = ::recordAlbumBounds
-            )
         }
         if (!isLoading) {
             item(key = "recently-deleted-pill", contentType = "album-list-action") {
@@ -654,6 +867,7 @@ fun AlbumsScreen(
             }
         }
     }
+        }
         if (!isLoading) {
             GalleryFastScroller(
                 listState = listState,
@@ -909,6 +1123,16 @@ private fun LayoutSelector(
     onExpandedChange: (Boolean) -> Unit,
     onLayoutModeChange: (AlbumLayoutMode) -> Unit
 ) {
+    val layoutModes = listOf(
+        Triple(AlbumLayoutMode.Hero, "Hero", "Single large card"),
+        Triple(AlbumLayoutMode.BigTiles, "Big tiles", "Featured hero + large tiles"),
+        Triple(AlbumLayoutMode.Medium, "Medium", "2-column album covers"),
+        Triple(AlbumLayoutMode.Basic, "Basic", "Standard 3-column view"),
+        Triple(AlbumLayoutMode.Compact, "Compact", "Dense 4-column tiles"),
+        Triple(AlbumLayoutMode.List, "List", "Detailed vertical list")
+    )
+    val currentLabel = layoutModes.firstOrNull { it.first == layoutMode }?.second ?: "Layout"
+
     Box {
         Surface(
             modifier = Modifier.clickable { onExpandedChange(true) },
@@ -922,14 +1146,18 @@ private fun LayoutSelector(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Filled.GridView,
+                    imageVector = when (layoutMode) {
+                        AlbumLayoutMode.Hero, AlbumLayoutMode.BigTiles -> Icons.Filled.GridView
+                        AlbumLayoutMode.Medium, AlbumLayoutMode.Basic, AlbumLayoutMode.Compact -> Icons.Filled.Apps
+                        AlbumLayoutMode.List -> Icons.Filled.Folder
+                    },
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    text = if (layoutMode == AlbumLayoutMode.BigTiles) "Big tiles" else "Basic",
+                    text = currentLabel,
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 14.sp,
                         lineHeight = 18.sp,
@@ -950,45 +1178,73 @@ private fun LayoutSelector(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
             offset = DpOffset(0.dp, 8.dp),
-            modifier = Modifier.width(220.dp)
+            modifier = Modifier.width(230.dp)
         ) {
-            PremiumDropdownMenuItem(
-                text = {
-                    Column {
-                        Text("Big tiles", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                        Text("Large album covers", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            layoutModes.forEach { (mode, label, desc) ->
+                PremiumDropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(label, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text(desc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = when (mode) {
+                                AlbumLayoutMode.Hero, AlbumLayoutMode.BigTiles -> Icons.Filled.GridView
+                                AlbumLayoutMode.Medium, AlbumLayoutMode.Basic, AlbumLayoutMode.Compact -> Icons.Filled.Apps
+                                AlbumLayoutMode.List -> Icons.Filled.Folder
+                            },
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    trailingIcon = {
+                        if (layoutMode == mode) Icon(Icons.Filled.Check, contentDescription = null)
+                    },
+                    onClick = {
+                        onLayoutModeChange(mode)
+                        onExpandedChange(false)
                     }
-                },
-                leadingIcon = {
-                    Icon(Icons.Filled.GridView, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                },
-                trailingIcon = {
-                    if (layoutMode == AlbumLayoutMode.BigTiles) Icon(Icons.Filled.Check, contentDescription = null)
-                },
-                onClick = {
-                    onLayoutModeChange(AlbumLayoutMode.BigTiles)
-                    onExpandedChange(false)
-                }
+                )
+            }
+        }
+    }
+}
+
+private fun LazyListScope.heroAlbumRows(
+    albums: List<Album>,
+    height: androidx.compose.ui.unit.Dp,
+    activeTransitionAlbumId: State<String?>?,
+    cardInteraction: AlbumCardInteraction,
+    deferThumbnailLoads: State<Boolean>,
+    onAlbumClick: (Album, Rect) -> Unit,
+    onAlbumBoundsChanged: (Album, Rect) -> Unit
+) {
+    items(
+        count = albums.size,
+        key = { index -> "hero-album-${albums[index].id}" },
+        contentType = { "hero-album-row" }
+    ) { index ->
+        val album = albums[index]
+        Box(
+            modifier = Modifier.animateItem(
+                fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
             )
-            PremiumDropdownMenuItem(
-                text = {
-                    Column {
-                        Text("Basic", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                        Text("More albums per row", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
-                leadingIcon = {
-                    Icon(Icons.Filled.Apps, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                },
-                trailingIcon = {
-                    if (layoutMode == AlbumLayoutMode.Basic) Icon(Icons.Filled.Check, contentDescription = null)
-                },
-                onClick = {
-                    onLayoutModeChange(AlbumLayoutMode.Basic)
-                    onExpandedChange(false)
-                }
+        ) {
+            AlbumHeroCard(
+                album = album,
+                height = height,
+                activeTransitionAlbumId = activeTransitionAlbumId,
+                cardInteraction = cardInteraction,
+                deferThumbnailLoads = deferThumbnailLoads,
+                onAlbumClick = onAlbumClick,
+                onAlbumBoundsChanged = onAlbumBoundsChanged
             )
         }
+        Spacer(Modifier.height(14.dp))
     }
 }
 
@@ -999,27 +1255,36 @@ private fun LazyListScope.bigAlbumRows(
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit
+) {
     val safeColumns = columns.coerceAtLeast(1)
     val rowCount = (albums.size + safeColumns - 1) / safeColumns
     items(
         count = rowCount,
         key = { rowIndex ->
-            "big-album-row-$safeColumns-${albums[rowIndex * safeColumns].id}"
+            "big-album-row-$safeColumns-$rowIndex"
         },
         contentType = { "big-album-row" }
     ) { rowIndex ->
         val startIndex = rowIndex * safeColumns
         val rowAlbums = albums.subList(startIndex, minOf(startIndex + safeColumns, albums.size))
-        BigAlbumRow(
-            albums = rowAlbums,
-            columns = safeColumns,
-            activeTransitionAlbumId = activeTransitionAlbumId,
-            cardInteraction = cardInteraction,
-            deferThumbnailLoads = deferThumbnailLoads,
-            onAlbumClick = onAlbumClick,
-            onAlbumBoundsChanged = onAlbumBoundsChanged
-        )
+        Box(
+            modifier = Modifier.animateItem(
+                fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
+            )
+        ) {
+            BigAlbumRow(
+                albums = rowAlbums,
+                columns = safeColumns,
+                activeTransitionAlbumId = activeTransitionAlbumId,
+                cardInteraction = cardInteraction,
+                deferThumbnailLoads = deferThumbnailLoads,
+                onAlbumClick = onAlbumClick,
+                onAlbumBoundsChanged = onAlbumBoundsChanged
+            )
+        }
         Spacer(Modifier.height(12.dp))
     }
 }
@@ -1031,28 +1296,71 @@ private fun LazyListScope.basicAlbumRows(
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit
+) {
     val safeColumns = columns.coerceAtLeast(1)
     val rowCount = (albums.size + safeColumns - 1) / safeColumns
     items(
         count = rowCount,
         key = { rowIndex ->
-            "basic-album-row-$safeColumns-${albums[rowIndex * safeColumns].id}"
+            "basic-album-row-$safeColumns-$rowIndex"
         },
         contentType = { "basic-album-row" }
     ) { rowIndex ->
         val startIndex = rowIndex * safeColumns
         val rowAlbums = albums.subList(startIndex, minOf(startIndex + safeColumns, albums.size))
-        BasicAlbumRow(
-            albums = rowAlbums,
-            columns = safeColumns,
-            activeTransitionAlbumId = activeTransitionAlbumId,
-            cardInteraction = cardInteraction,
-            deferThumbnailLoads = deferThumbnailLoads,
-            onAlbumClick = onAlbumClick,
-            onAlbumBoundsChanged = onAlbumBoundsChanged
-        )
-        Spacer(Modifier.height(20.dp))
+        Box(
+            modifier = Modifier.animateItem(
+                fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
+            )
+        ) {
+            BasicAlbumRow(
+                albums = rowAlbums,
+                columns = safeColumns,
+                activeTransitionAlbumId = activeTransitionAlbumId,
+                cardInteraction = cardInteraction,
+                deferThumbnailLoads = deferThumbnailLoads,
+                onAlbumClick = onAlbumClick,
+                onAlbumBoundsChanged = onAlbumBoundsChanged
+            )
+        }
+        Spacer(Modifier.height(if (columns >= 4) 14.dp else 20.dp))
+    }
+}
+
+private fun LazyListScope.listAlbumRows(
+    albums: List<Album>,
+    activeTransitionAlbumId: State<String?>?,
+    cardInteraction: AlbumCardInteraction,
+    deferThumbnailLoads: State<Boolean>,
+    onAlbumClick: (Album, Rect) -> Unit,
+    onAlbumBoundsChanged: (Album, Rect) -> Unit
+) {
+    items(
+        count = albums.size,
+        key = { index -> "list-album-${albums[index].id}" },
+        contentType = { "list-album-row" }
+    ) { index ->
+        val album = albums[index]
+        Box(
+            modifier = Modifier.animateItem(
+                fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+                placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
+            )
+        ) {
+            AlbumListRow(
+                album = album,
+                activeTransitionAlbumId = activeTransitionAlbumId,
+                cardInteraction = cardInteraction,
+                deferThumbnailLoads = deferThumbnailLoads,
+                onAlbumClick = onAlbumClick,
+                onAlbumBoundsChanged = onAlbumBoundsChanged
+            )
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -1064,12 +1372,18 @@ private fun AlbumHeroCard(
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit
+) {
+    val animatedHeight by animateDpAsState(
+        targetValue = height,
+        animationSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+        label = "heroAlbumHeight"
+    )
     AlbumImageCard(
         album = album,
         modifier = Modifier
             .fillMaxWidth()
-            .height(height),
+            .height(animatedHeight),
         cornerRadius = 24.dp,
         activeTransitionAlbumId = activeTransitionAlbumId,
         cardInteraction = cardInteraction,
@@ -1087,10 +1401,21 @@ private fun BigAlbumRow(
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit
+) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val spacing = 12.dp
-        val cellWidth = (maxWidth - spacing * (columns - 1)) / columns
+        val targetCellWidth = (maxWidth - spacing * (columns - 1)) / columns
+        val cellWidth by animateDpAsState(
+            targetValue = targetCellWidth,
+            animationSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+            label = "bigAlbumCellWidth"
+        )
+        val cellHeight by animateDpAsState(
+            targetValue = targetCellWidth.coerceAtMost(176.dp),
+            animationSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+            label = "bigAlbumCellHeight"
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
             albums.forEach { album ->
                 key(album.id) {
@@ -1098,7 +1423,7 @@ private fun BigAlbumRow(
                         album = album,
                         modifier = Modifier
                             .width(cellWidth)
-                            .height(cellWidth.coerceAtMost(176.dp)),
+                            .height(cellHeight),
                         cornerRadius = 22.dp,
                         activeTransitionAlbumId = activeTransitionAlbumId,
                         cardInteraction = cardInteraction,
@@ -1123,10 +1448,16 @@ private fun BasicAlbumRow(
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
-    onAlbumBoundsChanged: (Album, Rect) -> Unit) {
+    onAlbumBoundsChanged: (Album, Rect) -> Unit
+) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val spacing = 6.dp
-        val cellWidth = (maxWidth - spacing * (columns - 1)) / columns
+        val targetCellWidth = (maxWidth - spacing * (columns - 1)) / columns
+        val cellWidth by animateDpAsState(
+            targetValue = targetCellWidth,
+            animationSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
+            label = "basicAlbumCellWidth"
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(spacing)
@@ -1137,6 +1468,7 @@ private fun BasicAlbumRow(
                     Column(
                         modifier = Modifier
                             .width(cellWidth)
+                            .animateContentSize(spring(dampingRatio = 0.82f, stiffness = 380f))
                             .albumReorderMotion(album, cardInteraction)
                             .albumReorderGesture(album, cardInteraction)
                             .bouncyClickable { onAlbumClick(album, albumBounds.value) }
@@ -1153,8 +1485,8 @@ private fun BasicAlbumRow(
                                         val bounds = coordinates.boundsInWindow()
                                         albumBounds.value = bounds
                                         onAlbumBoundsChanged(album, bounds)
-                                },
-                                cornerRadius = 18.dp,
+                                    },
+                                cornerRadius = if (columns >= 4) 14.dp else 18.dp,
                                 thumbnailSize = 384,
                                 animatedPlaceholder = false,
                                 isVideo = album.hasVideoBadge,
@@ -1165,15 +1497,15 @@ private fun BasicAlbumRow(
                                 interaction = cardInteraction,
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
-                                    .padding(6.dp)
+                                    .padding(if (columns >= 4) 4.dp else 6.dp)
                             )
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(
                             text = album.name,
                             style = MaterialTheme.typography.bodyMedium.copy(
-                                fontSize = 14.sp,
-                                lineHeight = 18.sp,
+                                fontSize = if (columns >= 4) 12.sp else 14.sp,
+                                lineHeight = if (columns >= 4) 15.sp else 18.sp,
                                 fontWeight = FontWeight.SemiBold
                             ),
                             modifier = Modifier.fillMaxWidth(),
@@ -1183,8 +1515,8 @@ private fun BasicAlbumRow(
                         Text(
                             text = album.itemCount.toString(),
                             style = MaterialTheme.typography.bodyMedium.copy(
-                                fontSize = 11.5.sp,
-                                lineHeight = 15.sp,
+                                fontSize = if (columns >= 4) 10.sp else 11.5.sp,
+                                lineHeight = if (columns >= 4) 13.sp else 15.sp,
                                 fontWeight = FontWeight.Medium
                             ),
                             modifier = Modifier.fillMaxWidth(),
@@ -1196,6 +1528,87 @@ private fun BasicAlbumRow(
             repeat(columns - albums.size) {
                 Spacer(Modifier.width(cellWidth))
             }
+        }
+    }
+}
+
+@Composable
+private fun AlbumListRow(
+    album: Album,
+    activeTransitionAlbumId: State<String?>?,
+    cardInteraction: AlbumCardInteraction,
+    deferThumbnailLoads: State<Boolean>,
+    onAlbumClick: (Album, Rect) -> Unit,
+    onAlbumBoundsChanged: (Album, Rect) -> Unit
+) {
+    val albumBounds = remember(album.id) { AlbumBoundsRef() }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(spring(dampingRatio = 0.82f, stiffness = 380f))
+            .albumReorderMotion(album, cardInteraction)
+            .albumReorderGesture(album, cardInteraction)
+            .bouncyClickable { onAlbumClick(album, albumBounds.value) }
+            .hideForAlbumTransition(album.id, activeTransitionAlbumId),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            GalleryImage(
+                imageRes = album.coverRes,
+                imageUri = album.coverUri,
+                contentDescription = album.name,
+                modifier = Modifier
+                    .size(60.dp)
+                    .onGloballyPositioned { coordinates ->
+                        val bounds = coordinates.boundsInWindow()
+                        albumBounds.value = bounds
+                        onAlbumBoundsChanged(album, bounds)
+                    },
+                cornerRadius = 12.dp,
+                thumbnailSize = 256,
+                animatedPlaceholder = false,
+                isVideo = album.hasVideoBadge,
+                deferUncachedLoad = deferThumbnailLoads
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = album.name,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (cardInteraction.pinnedAlbumId == album.id) {
+                        Spacer(Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Filled.PushPin,
+                            contentDescription = "Pinned",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "${album.itemCount} ${if (album.itemCount == 1) "item" else "items"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            AlbumContextMenu(
+                album = album,
+                interaction = cardInteraction,
+                modifier = Modifier.padding(start = 4.dp)
+            )
         }
     }
 }
@@ -1239,11 +1652,7 @@ fun AlbumDetailScreen(
     val sortedMediaItems = remember(mediaItems, sortMode) {
         sortAlbumMedia(mediaItems, sortMode)
     }
-    val columns = when (gridMode) {
-        AlbumDetailGridMode.Compact -> 4
-        AlbumDetailGridMode.Comfortable -> 3
-        AlbumDetailGridMode.Spacious -> 2
-    } + columnBoost.coerceAtLeast(0)
+    val columns = (gridMode.columns + columnBoost.coerceAtLeast(0)).coerceIn(1, 10)
     val context = LocalContext.current.applicationContext
     val mediaGeneration = remember(sortedMediaItems) {
         listOf(
@@ -1273,6 +1682,25 @@ fun AlbumDetailScreen(
         val point = rootPoint(localPoint)
         return sortedMediaItems.firstOrNull { mediaItem ->
             tileBounds[mediaItem.id]?.contains(point) == true
+        }
+    }
+
+    var lastColumns by remember(album.id) { mutableStateOf(columns) }
+    LaunchedEffect(columns) {
+        if (lastColumns != columns) {
+            val targetRow = calculateAlbumGridAnchorRow(
+                firstVisibleRow = listState.firstVisibleItemIndex,
+                oldColumns = lastColumns,
+                newColumns = columns,
+                totalItems = sortedMediaItems.size
+            )
+            val scaledOffset = if (lastColumns > 0 && columns > 0) {
+                (listState.firstVisibleItemScrollOffset.toLong() * lastColumns / columns).toInt()
+            } else {
+                listState.firstVisibleItemScrollOffset
+            }
+            listState.scrollToItem(targetRow, scaledOffset)
+            lastColumns = columns
         }
     }
 
@@ -1319,6 +1747,7 @@ fun AlbumDetailScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .onGloballyPositioned { rootBounds.value = it.boundsInWindow() }
             .pointerInput(isSelectionMode, sortedMediaItems) {
                 var dragMode: AlbumDragSelectMode? = null
@@ -1366,7 +1795,6 @@ fun AlbumDetailScreen(
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     var cumulativeZoom = 1f
-                    var densityChanged = false
                     try {
                         var gestureActive = true
                         while (gestureActive) {
@@ -1375,31 +1803,25 @@ fun AlbumDetailScreen(
                             if (pressed.size >= 2) {
                                 val zoomChange = event.calculateZoom()
                                 cumulativeZoom *= zoomChange
-                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.38f)
-                                    .coerceIn(0.70f, 1.45f)
+                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.12f)
+                                    .coerceIn(0.95f, 1.05f)
                                 coroutineScope.launch { pinchScaleAnim.snapTo(targetScale) }
                                 val mode = currentGridMode
-                                if (!densityChanged && cumulativeZoom >= 1.20f) {
-                                    val nextMode = when (mode) {
-                                        AlbumDetailGridMode.Compact -> AlbumDetailGridMode.Comfortable
-                                        AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Spacious
-                                        AlbumDetailGridMode.Spacious -> AlbumDetailGridMode.Spacious
-                                    }
+                                if (cumulativeZoom >= 1.09f) {
+                                    val nextMode = mode.zoomIn()
                                     if (nextMode != mode) {
                                         hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         currentOnGridModeChange(nextMode)
-                                        densityChanged = true
+                                        cumulativeZoom = 1f
+                                        coroutineScope.launch { pinchScaleAnim.snapTo(1f) }
                                     }
-                                } else if (!densityChanged && cumulativeZoom <= 0.82f) {
-                                    val nextMode = when (mode) {
-                                        AlbumDetailGridMode.Spacious -> AlbumDetailGridMode.Comfortable
-                                        AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Compact
-                                        AlbumDetailGridMode.Compact -> AlbumDetailGridMode.Compact
-                                    }
+                                } else if (cumulativeZoom <= 0.91f) {
+                                    val nextMode = mode.zoomOut()
                                     if (nextMode != mode) {
                                         hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         currentOnGridModeChange(nextMode)
-                                        densityChanged = true
+                                        cumulativeZoom = 1f
+                                        coroutineScope.launch { pinchScaleAnim.snapTo(1f) }
                                     }
                                 }
                                 event.changes.forEach { it.consume() }
@@ -1419,9 +1841,14 @@ fun AlbumDetailScreen(
     ) {
         val gridTransformModifier = Modifier.graphicsLayer {
             alpha = GalleryMotion.smoothstep(0.48f, 0.78f, revealProgress)
-            scaleX = pinchScaleAnim.value
-            scaleY = pinchScaleAnim.value
-            transformOrigin = TransformOrigin(0.5f, 0.35f)
+            val scale = pinchScaleAnim.value
+            scaleX = scale
+            scaleY = scale
+            transformOrigin = if (listState.firstVisibleItemIndex == 0) {
+                TransformOrigin(0.5f, 0f)
+            } else {
+                TransformOrigin(0.5f, 0.5f)
+            }
         }
         LazyColumn(
             state = listState,
@@ -1553,6 +1980,17 @@ fun AlbumDetailScreen(
     }
 }
 
+internal fun calculateAlbumGridAnchorRow(
+    firstVisibleRow: Int,
+    oldColumns: Int,
+    newColumns: Int,
+    totalItems: Int
+): Int {
+    if (totalItems <= 0 || oldColumns <= 0 || newColumns <= 0) return 0
+    val anchorItem = (firstVisibleRow * oldColumns).coerceIn(0, totalItems - 1)
+    return anchorItem / newColumns
+}
+
 internal fun sortAlbumMedia(
     mediaItems: List<MediaItem>,
     sortMode: AlbumDetailSortMode
@@ -1578,17 +2016,19 @@ fun AlbumDetailTransitionPreview(
     initialFirstVisibleRowOffset: Int = 0,
     onBack: () -> Unit = {}
 ) {
-    val columns = when (gridMode) {
-        AlbumDetailGridMode.Compact -> 4
-        AlbumDetailGridMode.Comfortable -> 3
-        AlbumDetailGridMode.Spacious -> 2
-    } + columnBoost.coerceAtLeast(0)
+    val columns = (gridMode.columns + columnBoost.coerceAtLeast(0)).coerceIn(1, 10)
     val sortedMediaItems = remember(mediaItems, sortMode) { sortAlbumMedia(mediaItems, sortMode) }
     val rowCount = (sortedMediaItems.size + columns - 1) / columns
     val previewListState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialFirstVisibleRow.coerceIn(0, (rowCount - 1).coerceAtLeast(0)),
         initialFirstVisibleItemScrollOffset = initialFirstVisibleRowOffset.coerceAtLeast(0)
     )
+
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val horizontalPadding = 16.dp
+    val spacing = 1.dp
+    val safeColumns = columns.coerceAtLeast(1)
+    val cellSize = (configuration.screenWidthDp.dp - horizontalPadding - spacing * (safeColumns - 1)) / safeColumns
 
     Box(
         modifier = Modifier
@@ -1609,7 +2049,8 @@ fun AlbumDetailTransitionPreview(
         ) {
             albumDetailTransitionRows(
                 mediaItems = sortedMediaItems,
-                columns = columns
+                columns = safeColumns,
+                cellSize = cellSize
             )
         }
 
@@ -1620,33 +2061,24 @@ fun AlbumDetailTransitionPreview(
             color = MaterialTheme.colorScheme.background,
             shadowElevation = 3.dp
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 10.dp, top = 48.dp, end = 10.dp, bottom = 14.dp)
-            ) {
-                GalleryScreenHeader(
-                    title = album.name,
-                    onBack = onBack,
-                    leadingContentDescription = "",
-                    trailingContent = {
-                        Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = null)
-                        }
-                    }
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "%1$,d items, %2\$s, %3\$s".format(
-                        sortedMediaItems.size,
-                        sortMode.label(),
-                        gridMode.label()
-                    ),
-                    modifier = Modifier.padding(horizontal = 10.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            AlbumDetailHeader(
+                album = album,
+                itemCount = sortedMediaItems.size,
+                sortMode = sortMode,
+                gridMode = gridMode,
+                onSortModeChange = {},
+                onGridModeChange = {},
+                selectedCount = 0,
+                totalVisibleCount = sortedMediaItems.size,
+                onSelectionClear = {},
+                onSelectAllVisible = {},
+                onDeleteSelected = {},
+                onShareSelected = {},
+                onHideSelected = {},
+                onHideAlbum = null,
+                onBack = onBack,
+                modifier = Modifier.padding(start = 10.dp, top = 48.dp, end = 10.dp, bottom = 14.dp)
+            )
         }
     }
 }
@@ -1718,13 +2150,7 @@ private fun AlbumDetailHeader(
                         trailingIcon = { Icon(Icons.Filled.ExpandMore, contentDescription = null) },
                         onClick = {
                             hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onGridModeChange(
-                                when (gridMode) {
-                                    AlbumDetailGridMode.Compact -> AlbumDetailGridMode.Comfortable
-                                    AlbumDetailGridMode.Comfortable -> AlbumDetailGridMode.Spacious
-                                    AlbumDetailGridMode.Spacious -> AlbumDetailGridMode.Compact
-                                }
-                            )
+                            onGridModeChange(gridMode.next())
                         }
                     )
                     if (onHideAlbum != null && !album.isAllPhotos) {
@@ -1792,28 +2218,36 @@ private fun LazyListScope.albumDetailRows(
     val rowCount = (mediaItems.size + columns - 1) / columns
     items(
         count = rowCount,
-        key = { rowIndex -> "album-media-row-$columns-${mediaItems[rowIndex * columns].id}" },
+        key = { rowIndex -> "album-detail-row-$columns-$rowIndex" },
         contentType = { "album-media-row" }
     ) { rowIndex ->
         val startIndex = rowIndex * columns
         val rowItems = mediaItems.subList(startIndex, minOf(startIndex + columns, mediaItems.size))
-        AlbumDetailRow(
-            mediaItems = rowItems,
-            columns = columns,
-            spacing = spacing,
-            sharedTransitionScope = sharedTransitionScope,
-            animatedVisibilityScope = animatedVisibilityScope,
-            sharedBoundsTransform = sharedBoundsTransform,
-            sharedElementPrefix = sharedElementPrefix,
-            activeSharedElementKey = activeSharedElementKey,
-            selectedMediaIds = selectedMediaIds,
-            trackMediaBounds = trackMediaBounds,
-            deferThumbnailLoads = deferThumbnailLoads,
-            onMediaBoundsChanged = onMediaBoundsChanged,
-            onMediaLongClick = onMediaLongClick,
-            onMediaSelectionToggle = onMediaSelectionToggle,
-            onMediaClick = onMediaClick
-        )
+        Box(
+            modifier = Modifier.animateItem(
+                fadeInSpec = null,
+                fadeOutSpec = null,
+                placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
+            )
+        ) {
+            AlbumDetailRow(
+                mediaItems = rowItems,
+                columns = columns,
+                spacing = spacing,
+                sharedTransitionScope = sharedTransitionScope,
+                animatedVisibilityScope = animatedVisibilityScope,
+                sharedBoundsTransform = sharedBoundsTransform,
+                sharedElementPrefix = sharedElementPrefix,
+                activeSharedElementKey = activeSharedElementKey,
+                selectedMediaIds = selectedMediaIds,
+                trackMediaBounds = trackMediaBounds,
+                deferThumbnailLoads = deferThumbnailLoads,
+                onMediaBoundsChanged = onMediaBoundsChanged,
+                onMediaLongClick = onMediaLongClick,
+                onMediaSelectionToggle = onMediaSelectionToggle,
+                onMediaClick = onMediaClick
+            )
+        }
         Spacer(Modifier.height(spacing))
     }
 }
@@ -1836,42 +2270,44 @@ private fun AlbumDetailRow(
     onMediaSelectionToggle: (MediaItem) -> Unit,
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
 ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-            mediaItems.forEach { mediaItem ->
-                val sharedElementKey = "$sharedElementPrefix-media-${mediaItem.id}"
-                val selectionMode = selectedMediaIds.isNotEmpty()
-                MediaThumbnail(
-                    mediaItem = mediaItem,
-                    modifier = Modifier.size(cellSize),
-                    cornerRadius = 0.dp,
-                    sharedTransitionScope = sharedTransitionScope,
-                    animatedVisibilityScope = animatedVisibilityScope,
-                    sharedElementKey = sharedElementKey,
-                    sharedBoundsTransform = sharedBoundsTransform,
-                    isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
-                    selected = selectedMediaIds.contains(mediaItem.id),
-                    deferUncachedLoad = deferThumbnailLoads,
-                    onBoundsChanged = if (trackMediaBounds) {
-                        { bounds -> onMediaBoundsChanged(mediaItem, bounds) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing)
+    ) {
+        mediaItems.forEach { mediaItem ->
+            val sharedElementKey = "$sharedElementPrefix-media-${mediaItem.id}"
+            val selectionMode = selectedMediaIds.isNotEmpty()
+            MediaThumbnail(
+                mediaItem = mediaItem,
+                modifier = Modifier
+                    .weight(1f)
+                    .aspectRatio(1f),
+                cornerRadius = 0.dp,
+                sharedTransitionScope = sharedTransitionScope,
+                animatedVisibilityScope = animatedVisibilityScope,
+                sharedElementKey = sharedElementKey,
+                sharedBoundsTransform = sharedBoundsTransform,
+                isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
+                selected = selectedMediaIds.contains(mediaItem.id),
+                deferUncachedLoad = deferThumbnailLoads,
+                onBoundsChanged = if (trackMediaBounds) {
+                    { bounds -> onMediaBoundsChanged(mediaItem, bounds) }
+                } else {
+                    null
+                },
+                onLongClick = { onMediaLongClick(mediaItem) },
+                onClickWithBounds = { bounds ->
+                    onMediaBoundsChanged(mediaItem, bounds)
+                    if (selectionMode) {
+                        onMediaSelectionToggle(mediaItem)
                     } else {
-                        null
-                    },
-                    onLongClick = { onMediaLongClick(mediaItem) },
-                    onClickWithBounds = { bounds ->
-                        onMediaBoundsChanged(mediaItem, bounds)
-                        if (selectionMode) {
-                            onMediaSelectionToggle(mediaItem)
-                        } else {
-                            onMediaClick(mediaItem, bounds, sharedElementKey, sharedElementPrefix)
-                        }
+                        onMediaClick(mediaItem, bounds, sharedElementKey, sharedElementPrefix)
                     }
-                )
-            }
-            repeat(columns - mediaItems.size) {
-                Spacer(Modifier.size(cellSize))
-            }
+                }
+            )
+        }
+        repeat(columns - mediaItems.size) {
+            Spacer(Modifier.weight(1f).aspectRatio(1f))
         }
     }
 }
@@ -1906,7 +2342,8 @@ private fun LazyListScope.albumDetailPreviewRows(
  */
 private fun LazyListScope.albumDetailTransitionRows(
     mediaItems: List<MediaItem>,
-    columns: Int
+    columns: Int,
+    cellSize: androidx.compose.ui.unit.Dp
 ) {
     val spacing = 1.dp
     val rowCount = (mediaItems.size + columns - 1) / columns
@@ -1925,6 +2362,7 @@ private fun LazyListScope.albumDetailTransitionRows(
         AlbumDetailTransitionRow(
             mediaItems = rowItems,
             columns = columns,
+            cellSize = cellSize,
             spacing = spacing
         )
         Spacer(Modifier.height(spacing))
@@ -1935,26 +2373,37 @@ private fun LazyListScope.albumDetailTransitionRows(
 private fun AlbumDetailTransitionRow(
     mediaItems: List<MediaItem>,
     columns: Int,
+    cellSize: androidx.compose.ui.unit.Dp,
     spacing: androidx.compose.ui.unit.Dp
 ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-            mediaItems.forEach { mediaItem ->
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing)
+    ) {
+        mediaItems.forEach { mediaItem ->
+            Box(modifier = Modifier.size(cellSize)) {
                 GalleryImage(
                     imageRes = mediaItem.imageRes,
                     imageUri = mediaItem.contentUri,
                     contentDescription = mediaItem.title,
-                    modifier = Modifier.size(cellSize),
+                    modifier = Modifier.fillMaxSize(),
                     cornerRadius = 0.dp,
                     thumbnailSize = 384,
                     cachedOnly = true,
                     isVideo = mediaItem.isVideo
                 )
+                if (mediaItem.isVideo && mediaItem.contentUri != null) {
+                    VideoBadge(
+                        duration = mediaItem.durationLabel.orEmpty(),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                    )
+                }
             }
-            repeat(columns - mediaItems.size) {
-                Spacer(Modifier.size(cellSize))
-            }
+        }
+        repeat(columns - mediaItems.size) {
+            Spacer(Modifier.size(cellSize))
         }
     }
 }
@@ -1964,22 +2413,38 @@ private fun AlbumDetailPreviewRow(
     columns: Int,
     spacing: androidx.compose.ui.unit.Dp
 ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-            mediaItems.forEach { mediaItem ->
-                ResourceImage(
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing)
+    ) {
+        mediaItems.forEach { mediaItem ->
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .aspectRatio(1f)
+            ) {
+                GalleryImage(
                     imageRes = mediaItem.imageRes,
                     imageUri = mediaItem.contentUri,
                     contentDescription = mediaItem.title,
-                    modifier = Modifier.size(cellSize),
+                    modifier = Modifier.fillMaxSize(),
                     cornerRadius = 0.dp,
-                    thumbnailSize = 384
+                    thumbnailSize = 384,
+                    cachedOnly = true,
+                    isVideo = mediaItem.isVideo
                 )
+                if (mediaItem.isVideo && mediaItem.contentUri != null) {
+                    VideoBadge(
+                        duration = mediaItem.durationLabel.orEmpty(),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                    )
+                }
             }
-            repeat(columns - mediaItems.size) {
-                Spacer(Modifier.size(cellSize))
-            }
+        }
+        repeat(columns - mediaItems.size) {
+            Spacer(Modifier.weight(1f).aspectRatio(1f))
         }
     }
 }
@@ -2000,16 +2465,17 @@ private fun AlbumDetailOpeningRow(
     columns: Int,
     spacing: androidx.compose.ui.unit.Dp
 ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-            repeat(columns) {
-                Box(
-                    modifier = Modifier
-                        .size(cellSize)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f))
-                )
-            }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing)
+    ) {
+        repeat(columns) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .aspectRatio(1f)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f))
+            )
         }
     }
 }
@@ -2031,66 +2497,116 @@ private fun AlbumDetailSkeletonRow(
     columns: Int,
     spacing: androidx.compose.ui.unit.Dp
 ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val cellSize = (maxWidth - spacing * (columns - 1)) / columns
-        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-            repeat(columns) {
-                SkeletonBlock(
-                    modifier = Modifier.size(cellSize),
-                    cornerRadius = 0.dp
-                )
-            }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing)
+    ) {
+        repeat(columns) {
+            SkeletonBlock(
+                modifier = Modifier
+                    .weight(1f)
+                    .aspectRatio(1f),
+                cornerRadius = 0.dp
+            )
         }
     }
 }
 @Composable
 private fun AlbumsLoadingState(layoutMode: AlbumLayoutMode) {
-    if (layoutMode == AlbumLayoutMode.BigTiles) {
-        SkeletonBlock(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(176.dp),
-            cornerRadius = 24.dp
-        )
-        Spacer(Modifier.height(12.dp))
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val spacing = 12.dp
-            val cellWidth = (maxWidth - spacing) / 2
-            Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
-                repeat(3) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                        repeat(2) {
-                            SkeletonBlock(
-                                modifier = Modifier
-                                    .width(cellWidth)
-                                    .height(176.dp),
-                                cornerRadius = 22.dp
-                            )
+    when (layoutMode) {
+        AlbumLayoutMode.Hero -> {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                repeat(4) {
+                    SkeletonBlock(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(190.dp),
+                        cornerRadius = 24.dp
+                    )
+                }
+            }
+        }
+        AlbumLayoutMode.BigTiles -> {
+            SkeletonBlock(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(176.dp),
+                cornerRadius = 24.dp
+            )
+            Spacer(Modifier.height(12.dp))
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val spacing = 12.dp
+                val cellWidth = (maxWidth - spacing) / 2
+                Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                    repeat(3) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+                            repeat(2) {
+                                SkeletonBlock(
+                                    modifier = Modifier
+                                        .width(cellWidth)
+                                        .height(176.dp),
+                                    cornerRadius = 22.dp
+                                )
+                            }
                         }
                     }
                 }
             }
         }
-    } else {
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val spacing = 14.dp
-            val cellWidth = (maxWidth - spacing * 2) / 3
-            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                repeat(3) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-                        repeat(3) {
-                            Column(modifier = Modifier.width(cellWidth)) {
-                                SkeletonBlock(
-                                    modifier = Modifier.size(cellWidth),
-                                    cornerRadius = 18.dp
-                                )
-                                Spacer(Modifier.height(8.dp))
+        AlbumLayoutMode.Medium -> {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val spacing = 12.dp
+                val cellWidth = (maxWidth - spacing) / 2
+                Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                    repeat(4) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+                            repeat(2) {
                                 SkeletonBlock(
                                     modifier = Modifier
-                                        .fillMaxWidth(0.82f)
-                                        .height(14.dp),
-                                    cornerRadius = 7.dp
+                                        .width(cellWidth)
+                                        .height(176.dp),
+                                    cornerRadius = 22.dp
                                 )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        AlbumLayoutMode.List -> {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                repeat(6) {
+                    SkeletonBlock(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(72.dp),
+                        cornerRadius = 16.dp
+                    )
+                }
+            }
+        }
+        AlbumLayoutMode.Basic, AlbumLayoutMode.Compact -> {
+            val cols = if (layoutMode == AlbumLayoutMode.Compact) 4 else 3
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val spacing = if (cols == 4) 6.dp else 14.dp
+                val cellWidth = (maxWidth - spacing * (cols - 1)) / cols
+                Column(verticalArrangement = Arrangement.spacedBy(if (cols == 4) 14.dp else 20.dp)) {
+                    repeat(3) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+                            repeat(cols) {
+                                Column(modifier = Modifier.width(cellWidth)) {
+                                    SkeletonBlock(
+                                        modifier = Modifier.size(cellWidth),
+                                        cornerRadius = if (cols == 4) 14.dp else 18.dp
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    SkeletonBlock(
+                                        modifier = Modifier
+                                            .fillMaxWidth(0.82f)
+                                            .height(14.dp),
+                                        cornerRadius = 7.dp
+                                    )
+                                }
                             }
                         }
                     }
@@ -2114,6 +2630,7 @@ private fun AlbumImageCard(
 
     Box(
         modifier = modifier
+            .animateContentSize(spring(dampingRatio = 0.82f, stiffness = 380f))
             .albumReorderMotion(album, cardInteraction)
             .albumReorderGesture(album, cardInteraction)
             .onGloballyPositioned { coordinates ->
@@ -2319,14 +2836,6 @@ private fun AlbumDetailSortMode.label(): String {
         AlbumDetailSortMode.Newest -> "Newest"
         AlbumDetailSortMode.Oldest -> "Oldest"
         AlbumDetailSortMode.Name -> "Name"
-    }
-}
-
-private fun AlbumDetailGridMode.label(): String {
-    return when (this) {
-        AlbumDetailGridMode.Compact -> "Compact"
-        AlbumDetailGridMode.Comfortable -> "Comfortable"
-        AlbumDetailGridMode.Spacious -> "Spacious"
     }
 }
 

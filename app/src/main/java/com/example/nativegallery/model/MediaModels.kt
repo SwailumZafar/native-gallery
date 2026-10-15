@@ -21,7 +21,14 @@ data class MediaItem(
     val width: Int? = null,
     val height: Int? = null,
     val relativePath: String? = null,
-    val sortTimestampMillis: Long = 0L
+    val sortTimestampMillis: Long = 0L,
+    val isBurst: Boolean = false,
+    val burstCount: Int = 1,
+    val burstGroupId: String? = null,
+    val burstItems: List<MediaItem> = emptyList(),
+    val isMotionPhoto: Boolean = false,
+    val motionVideoUri: Uri? = null,
+    val motionVideoOffset: Long? = null
 )
 
 @Immutable
@@ -49,8 +56,12 @@ data class Album(
 )
 
 enum class AlbumLayoutMode {
+    Hero,
+    BigTiles,
+    Medium,
     Basic,
-    BigTiles
+    Compact,
+    List
 }
 
 @Immutable
