@@ -1630,6 +1630,7 @@ fun AlbumDetailScreen(
     contentPadding: PaddingValues,
     listState: LazyListState,
     revealMediaId: String? = null,
+    onGridViewportChanged: (Rect) -> Unit = {},
     columnBoost: Int = 0,
     onBack: () -> Unit,
     sharedTransitionScope: SharedTransitionScope? = null,
@@ -1722,12 +1723,11 @@ fun AlbumDetailScreen(
     }
     LaunchedEffect(album.id, sortMode, columns, mediaGeneration) {
         if (sortedMediaItems.isEmpty()) return@LaunchedEffect
-        delay(120)
         prefetchMediaThumbnails(
             context = context,
             mediaItems = sortedMediaItems,
             thumbnailSizes = listOf(384),
-            maxItems = minOf(sortedMediaItems.size, columns * 3, 12)
+            maxItems = minOf(sortedMediaItems.size, columns * 4, 28)
         )
     }
     LaunchedEffect(album.id, sortMode, columns, mediaGeneration, listState) {
@@ -1754,12 +1754,17 @@ fun AlbumDetailScreen(
     }
     val revealProgress = albumEnterProgress.coerceIn(0f, 1f)
     val gridTopPadding = 150.dp
+    val gridTopInsetPx = with(LocalDensity.current) { gridTopPadding.toPx() }
+    val gridBottomInsetPx = with(LocalDensity.current) { contentPadding.calculateBottomPadding().toPx() }
     val interactiveGridReady = revealProgress >= 0.95f
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .onGloballyPositioned { rootBounds.value = it.boundsInWindow() }
+            .onGloballyPositioned {
+                rootBounds.value = it.boundsInWindow()
+                onGridViewportChanged(gridReturnViewport(rootBounds.value, gridTopInsetPx, gridBottomInsetPx))
+            }
             .pointerInput(isSelectionMode, sortedMediaItems) {
                 var dragMode: AlbumDragSelectMode? = null
                 var baseSelectedIds = emptySet<String>()
@@ -2301,7 +2306,7 @@ private fun AlbumDetailRow(
                 isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
                 selected = selectedMediaIds.contains(mediaItem.id),
                 deferUncachedLoad = deferThumbnailLoads,
-                onBoundsChanged = if (trackMediaBounds) {
+                onBoundsChanged = if (trackMediaBounds || activeSharedElementKey == sharedElementKey) {
                     { bounds -> onMediaBoundsChanged(mediaItem, bounds) }
                 } else {
                     null

@@ -135,7 +135,7 @@ private class LayoutCoordinatesRef(var value: LayoutCoordinates? = null)
 private object ThumbnailLoadCoordinator {
     // A grid must not start sixteen simultaneous bitmap decodes beside an animation.
     private val loadSemaphore = Semaphore(permits = 4)
-    val videoDecodeSemaphore = Semaphore(permits = 2)
+    val videoDecodeSemaphore = Semaphore(permits = 4)
     private val keyLocks = ConcurrentHashMap<String, KeyLock>()
 
     private class KeyLock {
@@ -1330,9 +1330,7 @@ private fun loadThumbnail(
         null
     }
     if (platformThumbnail != null) {
-        if (!videoSource || !VideoFrameDecoder.isFrameTooDark(platformThumbnail)) {
-            return platformThumbnail
-        }
+        return platformThumbnail
     }
     val fallback = runCatching {
         if (videoSource) {
@@ -1341,11 +1339,7 @@ private fun loadThumbnail(
             loadSampledBitmap(context, imageUri, thumbnailSize)
         }
     }.getOrNull()
-    if (fallback != null) {
-        platformThumbnail?.recycle()
-        return fallback
-    }
-    return platformThumbnail
+    return fallback
 }
 
 private fun loadLegacyVideoThumbnail(context: Context, uri: Uri, thumbnailSize: Int): Bitmap? {

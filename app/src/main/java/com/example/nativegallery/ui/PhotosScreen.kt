@@ -149,6 +149,7 @@ fun PhotosScreen(
     onGridColumnsChange: (Int) -> Unit = {},
     listState: LazyListState,
     revealMediaId: String? = null,
+    onGridViewportChanged: (Rect) -> Unit = {},
     onSearchQueryChange: (String) -> Unit = {},
     selectedMediaIds: Set<String> = emptySet(),
     onMediaLongClick: (MediaItem) -> Unit = {},
@@ -203,6 +204,8 @@ fun PhotosScreen(
     val hapticFeedback = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
     val revealOffsetPx = with(density) { 72.dp.roundToPx() }
+    val gridTopInsetPx = with(density) { contentPadding.calculateTopPadding().toPx() }
+    val gridBottomInsetPx = with(density) { contentPadding.calculateBottomPadding().toPx() }
     val pinchScaleAnim = remember { Animatable(1f) }
     val trackTileBounds = shouldTrackPhotoTileBounds(isSelectionMode, revealMediaId != null)
     val deferThumbnailLoads = remember(listState) {
@@ -251,7 +254,10 @@ fun PhotosScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onGloballyPositioned { rootBounds.value = it.boundsInWindow() }
+            .onGloballyPositioned {
+                rootBounds.value = it.boundsInWindow()
+                onGridViewportChanged(gridReturnViewport(rootBounds.value, gridTopInsetPx, gridBottomInsetPx))
+            }
             .pointerInput(isSelectionMode, mediaItems) {
                 var dragMode: DragSelectMode? = null
                 var baseSelectedIds = emptySet<String>()
@@ -1000,7 +1006,7 @@ private fun PhotoGridRow(
                 isSharedElementSourceHidden = activeSharedElementKey == sharedElementKey,
                 selected = selectedMediaIds.contains(mediaItem.id),
                 deferUncachedLoad = deferThumbnailLoads,
-                onBoundsChanged = if (trackTileBounds) {
+                onBoundsChanged = if (trackTileBounds || activeSharedElementKey == sharedElementKey) {
                     { bounds -> onMediaBoundsChanged(mediaItem, bounds) }
                 } else {
                     null

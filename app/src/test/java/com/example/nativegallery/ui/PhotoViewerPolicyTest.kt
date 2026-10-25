@@ -228,4 +228,12 @@ class PhotoViewerPolicyTest {
         assertEquals(1080f, rotatedW, 0.01f)
         assertEquals(1920f, rotatedH, 0.01f)
     }
+
+    @Test
+    fun dismissFractionIncreasesMonotonicallyWithScaleReduction() {
+        assertEquals(0f, viewerDismissFraction(1f), 0.001f)
+        assertEquals(0.5f, viewerDismissFraction(0.86f), 0.001f)
+        assertEquals(1f, viewerDismissFraction(0.72f), 0.001f)
+        assertEquals(1f, viewerDismissFraction(0.50f), 0.001f)
+    }
 }

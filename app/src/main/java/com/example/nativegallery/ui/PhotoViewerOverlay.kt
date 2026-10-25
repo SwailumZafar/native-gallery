@@ -205,6 +205,7 @@ import com.example.nativegallery.ui.components.solarTactile
 import com.example.nativegallery.ui.components.cacheVideoFrameThumbnail
 import com.example.nativegallery.ui.components.mediaThumbnailCacheRevision
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
+import com.example.nativegallery.ui.components.DisplayedBitmapCache
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -252,7 +253,7 @@ fun PhotoViewerOverlay(
     mediaItem: MediaItem?,
     visible: Boolean,
     onClose: (Offset, Float, Float) -> Unit,
-    onCloseWithMotion: ((Offset, Float, Float, Float, Float) -> Unit)? = null,
+    onCloseWithMotion: ((Offset, Float, Float, Float, Float, Bitmap?) -> Unit)? = null,
     onDelete: (MediaItem, Int) -> Unit,
     onHide: (MediaItem, Int) -> Unit = { _, _ -> },
     onRestore: (MediaItem, Int) -> Unit = { _, _ -> },
@@ -553,6 +554,8 @@ fun PhotoViewerOverlay(
         }
     }
 
+    var activeVideoTextureView by remember { mutableStateOf<TextureView?>(null) }
+
     fun closeViewerWithChromeFade(
         closeOffset: Offset = Offset.Zero,
         closeScale: Float = 1f,
@@ -564,9 +567,23 @@ fun PhotoViewerOverlay(
         closeRequested = true
         controlsVisible = false
         detailsVisible = false
+        val closingFrame = if (currentItem.isVideo) {
+            captureVideoTransitionFrame(activeVideoTextureView)
+        } else null
+        closingFrame?.let { frame ->
+            currentItem.contentUri?.let { uri ->
+                DisplayedBitmapCache.register(currentItem.id, uri, frame)
+                cacheVideoFrameThumbnail(
+                    context,
+                    uri,
+                    frame,
+                    mediaThumbnailCacheRevision(currentItem)
+                )
+            }
+        }
         val dispatch = {
             if (onCloseWithMotion != null) {
-                onCloseWithMotion(closeOffset, closeScale, closeBackdropAlpha, closeRotationZ, closeRotationX)
+                onCloseWithMotion(closeOffset, closeScale, closeBackdropAlpha, closeRotationZ, closeRotationX, closingFrame)
             } else {
                 onClose(closeOffset, closeScale, closeBackdropAlpha)
             }
@@ -883,7 +900,12 @@ fun PhotoViewerOverlay(
                     isPlayingMotionPhoto = if (page == currentPageForState) isPlayingMotionPhoto else false,
                     motionVideoUri = if (page == currentPageForState) motionVideoUri else null,
                     onStartMotionPlayback = ::startMotionPlayback,
-                    onStopMotionPlayback = ::stopMotionPlayback
+                    onStopMotionPlayback = ::stopMotionPlayback,
+                    onVideoTextureViewAvailable = { view ->
+                        if (page == currentPageForState) {
+                            activeVideoTextureView = view
+                        }
+                    }
                 )
             }
         }
@@ -1643,7 +1665,8 @@ private fun ZoomableViewerMedia(
     motionVideoUri: Uri? = null,
     onStartMotionPlayback: () -> Unit = {},
     onStopMotionPlayback: () -> Unit = {},
-    initialPreview: Bitmap? = null
+    initialPreview: Bitmap? = null,
+    onVideoTextureViewAvailable: (TextureView?) -> Unit = {}
 ) {
     val activeSharedElementKeyPrefix: String? = null
     val activeMediaAlpha = 1f
@@ -1673,7 +1696,8 @@ private fun ZoomableViewerMedia(
                 isSharedTransitionReady = isSharedTransitionReady,
                 onDimensionsChanged = onDimensionsChanged,
                 onActiveMediaPlaced = onActiveMediaPlaced,
-                onToggleControls = onToggleControls
+                onToggleControls = onToggleControls,
+                onVideoTextureViewAvailable = onVideoTextureViewAvailable
             )
         } else {
             ViewerVideoPoster(
@@ -2200,7 +2224,8 @@ private fun ViewerVideoPlayer(
     onDimensionsChanged: (Int, Int) -> Unit = { _, _ -> },
     onActiveMediaPlaced: () -> Unit,
     onToggleControls: () -> Unit,
-    initialPreview: Bitmap? = null
+    initialPreview: Bitmap? = null,
+    onVideoTextureViewAvailable: (TextureView?) -> Unit = {}
 ) {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
@@ -2528,6 +2553,13 @@ private fun ViewerVideoPlayer(
             // Allow AndroidView and TextureView to adopt the final display geometry before fading in.
             repeat(2) { androidx.compose.runtime.withFrameNanos { } }
             presentationReady = true
+        }
+    }
+    LaunchedEffect(playerView, isActive) {
+        if (isActive) {
+            onVideoTextureViewAvailable(playerView?.videoSurfaceView as? TextureView)
+        } else {
+            onVideoTextureViewAvailable(null)
         }
     }
     LaunchedEffect(presentationReady, playerView, uri, cachedPlayerFrame) {
@@ -2868,6 +2900,7 @@ private fun ViewerVideoPlayer(
             update = { view ->
                 view.player = player
                 playerView = view
+                onVideoTextureViewAvailable(view.videoSurfaceView as? TextureView)
                 view.resizeMode = if (shouldFill) {
                     AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 } else {
@@ -2875,6 +2908,7 @@ private fun ViewerVideoPlayer(
                 }
             },
             onRelease = { view ->
+                onVideoTextureViewAvailable(null)
                 view.player = null
                 if (playerView === view) {
                     playerView = null

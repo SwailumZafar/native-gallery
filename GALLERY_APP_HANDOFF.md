@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-10-25
+Last updated: 2026-10-26
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -116,8 +116,8 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Previous pushed implementation baseline: 2f23627 Refine navigation bar touch physics, burst review back navigation, and video dismissal
-Current save point: Optimize Gallery performance and stabilize media transitions (v0.9.13)
+Previous pushed implementation baseline: edcd34d Optimize Gallery performance and stabilize media transitions
+Current save point: Promote the selected v0.9.15 source as build 18; exclude later sharpness/loading changes
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -125,6 +125,7 @@ Repository visibility: private
 Recent saved work:
 
 ```text
+edcd34d Optimize Gallery performance and stabilize media transitions
 2f23627 Refine navigation bar touch physics, burst review back navigation, and video dismissal
 20fcc98 v0.9.7: Photo transition speeds, burst/motion photos, pull-to-refresh, fluid nav bar touch physics, and video dismiss fix
 f7eba22 feat: ColorOS 17 Living Flow motion, video dismiss fluidity, and glitch-free folder transitions (v0.9.1)
@@ -143,6 +144,75 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-10-26 Selected v0.9.15 Promoted to Main
+
+The user explicitly chose the exact v0.9.15 APK reinstalled on phone `30e49129` and requested
+it as the newer GitHub build, excluding the later version that introduced unwanted bugs.
+
+- Restore application sources and tests from the original pre-sharpness snapshot tree
+  `cc8bd311d0df01dac6b0aeb54c391a5a4a774877`. Its handoff records the selected optimized APK:
+  version 0.9.15 / code 16, SHA-256
+  `17CA44FF337995FD45E2927B8FACE8FF616763B1826DC76F60D729CC8E2D8D5F`.
+- Keep application behavior identical to that snapshot. The later high-resolution decoding,
+  zoom decoding and storage-loading changes on `feature/v0.9.15-sharpness-fixes` / `046d5c9`
+  are not merged into main. That branch remains available separately.
+- Keep versionName `0.9.15` and set versionCode `18`, exceeding the alternate installed build
+  code 17. Future APKs built from main therefore update over build 17 normally.
+- The existing selected APK is preserved unchanged (code 16). This GitHub save operation does
+  not rebuild or reinstall it. Its prior 165 passing JVM tests, successful optimized build and
+  lint results are recorded below; no additional device tests are run for this source save.
+- Preserve the previous local version-code-only edit in
+  `tmp/before-selected-v0.9.15-promotion.patch`. Generated APKs and local captures remain ignored.
+
+## 2026-10-25 Repeated Opening Taps and Visible Viewer Return
+
+The user reported that tapping media again during its opening spring restarts the animation,
+and that browsing away from the first photo can close toward an offscreen/incorrect position.
+
+- Central viewer admission now ignores new opens while metadata, an opening spring, the viewer,
+  or a close is active. A transparent opening surface owns taps, drags and long presses through
+  the handoff, so input cannot reach the grid underneath. Pending video opens can be cancelled
+  with Back and are invalidated by the request key. Async callbacks read the current navigation
+  StateFlow instead of captured destination/tab values.
+- Drag and Back closing both reveal the current media tile if it is outside the usable grid
+  viewport. That viewport excludes the album header/system top inset and bottom navigation.
+  Current visible tiles are tracked individually, so closing an already visible photo preserves
+  the scroll position. Return geometry uses the measured tile, including across date sections.
+  An unavailable/deleted target closes without inventing an offscreen grid position.
+- Reveal preparation waits for two stable layout frames with a 500 ms deadline, preserves the
+  existing closing springs/transforms, and checks the current request/media/navigation before
+  committing. Cancelling an old request cannot restart it later.
+- Related hardening: only the active source grid reports media positions or receives a reveal
+  request. The retained, invisible Photos page cannot overwrite Album Detail return geometry.
+- Existing uncommitted v0.9.14 thumbnail/preview changes were preserved. This update is
+  v0.9.15 / version code 16. No new commit or push was requested.
+- Verification: 165 JVM tests pass; debug and Android-test APKs compile. The initial debug lint
+  run passed. New touch regressions cover opening taps and far-away grid returns using temporary,
+  automatically removed fixture images. They are compiled but their successful execution is
+  unverified: transitive Espresso 3.5 failed on removed InputManager reflection, then the rebuilt
+  runner hit an emulator startup ANR with memory pressure while packaging ran. Test-only
+  espresso-core is pinned to 3.7.0 (official notes:
+  https://developer.android.com/jetpack/androidx/releases/test).
+- The user explicitly requested just the APK for manual checking after those emulator issues;
+  no further device tests were started and a physical phone was not required. Manual checks:
+  tap media repeatedly during its opening spring; browse down beyond the original grid rows
+  and across date sections; close by drag or Back in Photos and Album Detail. Current visible
+  tiles should keep their position, and offscreen current tiles should be revealed before closing.
+- Final debug, Android-test and optimized benchmark builds succeed. All 165 JVM tests pass;
+  final debug lint has 0 errors and 11 warnings. Device gesture checks remain for the user.
+
+Final optimized APK, built for manual installation (not installed on a phone in this pass):
+
+    F:\App\Gallery\app\build\outputs\apk\benchmark\app-benchmark.apk
+    Application: com.swailumzafar.nativegallery, version 0.9.15 / 16
+    Size: 46,443,245 bytes
+    SHA-256: 17CA44FF337995FD45E2927B8FACE8FF616763B1826DC76F60D729CC8E2D8D5F
+
+Installer: `http://192.168.18.184:18088/`; APK filename `Native-Gallery-0.9.15-viewer-return-fix.apk`.
+Full LAN download SHA-256 and partial 206 delivery were verified. Port 8080 was already owned by
+an independently launched relative `serve_apk.py` process; it was left intact and the dedicated
+installer uses port 18088. No further app/device tests were started after the user's APK-only request.
 
 ## 2026-10-25 GitHub Save Point
 

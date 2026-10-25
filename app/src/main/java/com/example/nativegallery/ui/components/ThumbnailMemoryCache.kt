@@ -17,11 +17,11 @@ internal fun imageLoadCacheKey(uri: String, size: Int, quality: ImageLoadQuality
 }
 
 object ThumbnailMemoryCache {
-    private val MaxCacheKilobytes = ((Runtime.getRuntime().maxMemory() / 1024L) / 6L)
-        .coerceIn(48L * 1024L, 128L * 1024L)
+    private val MaxCacheKilobytes = ((Runtime.getRuntime().maxMemory() / 1024L) / 4L)
+        .coerceIn(64L * 1024L, 192L * 1024L)
         .toInt()
-    private val MaxPinnedKilobytes = ((Runtime.getRuntime().maxMemory() / 1024L) / 16L)
-        .coerceIn(16L * 1024L, 48L * 1024L)
+    private val MaxPinnedKilobytes = ((Runtime.getRuntime().maxMemory() / 1024L) / 12L)
+        .coerceIn(24L * 1024L, 64L * 1024L)
         .toInt()
 
     private val indexLock = Any()

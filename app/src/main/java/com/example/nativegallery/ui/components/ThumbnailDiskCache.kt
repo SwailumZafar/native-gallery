@@ -9,19 +9,18 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.Executors
-import java.util.concurrent.Semaphore
 
 object ThumbnailDiskCache {
     private const val DirectoryName = "gallery_thumbnails_v1"
     private const val MaxBytes = 192L * 1024L * 1024L
     private const val AccessTimeUpdateIntervalMillis = 6L * 60L * 60L * 1000L
+    private const val MaxPendingWrites = 128
     private val writesSinceTrim = AtomicInteger(0)
     private val lock = Any()
     private data class PendingWrite(val bitmap: Bitmap, val overwrite: Boolean)
     private val pendingLock = Any()
-    private val pendingWrites = mutableMapOf<String, PendingWrite>()
-    private val writeSlots = Semaphore(24)
-    private val writer = Executors.newSingleThreadExecutor { task ->
+    private val pendingWrites = LinkedHashMap<String, PendingWrite>()
+    private val writer = Executors.newFixedThreadPool(2) { task ->
         Thread({
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             task.run()
@@ -65,23 +64,26 @@ object ThumbnailDiskCache {
     ) {
         if (bitmap.isRecycled) return
         synchronized(pendingLock) {
-            if (pendingWrites.containsKey(cacheKey)) {
+            val existing = pendingWrites[cacheKey]
+            if (existing != null) {
                 // A decoded video frame may supersede a queued placeholder/poster.
                 if (overwrite) pendingWrites[cacheKey] = PendingWrite(bitmap, true)
                 return
             }
-            if (!writeSlots.tryAcquire()) return
+            if (pendingWrites.size >= MaxPendingWrites) {
+                val oldestKey = pendingWrites.entries.firstOrNull { !it.value.overwrite }?.key
+                    ?: pendingWrites.keys.firstOrNull()
+                if (oldestKey != null) {
+                    pendingWrites.remove(oldestKey)
+                }
+            }
             pendingWrites[cacheKey] = PendingWrite(bitmap, overwrite)
         }
         val appContext = context.applicationContext
         writer.execute {
-            try {
-                val request = synchronized(pendingLock) { pendingWrites.remove(cacheKey) }
-                if (request != null && !request.bitmap.isRecycled) {
-                    putBlocking(appContext, cacheKey, request.bitmap, request.overwrite)
-                }
-            } finally {
-                writeSlots.release()
+            val request = synchronized(pendingLock) { pendingWrites.remove(cacheKey) }
+            if (request != null && !request.bitmap.isRecycled) {
+                putBlocking(appContext, cacheKey, request.bitmap, request.overwrite)
             }
         }
     }
