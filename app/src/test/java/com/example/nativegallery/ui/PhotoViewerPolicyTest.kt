@@ -10,6 +10,12 @@ import org.junit.Test
 
 class PhotoViewerPolicyTest {
     @Test
+    fun runtimeDurationWinsAndUnknownDurationDoesNotInvalidateShortClips() {
+        assertEquals(500L, preferredVideoDurationMillis(500L, 1_000L, 2_000L))
+        assertEquals(375L, preferredVideoDurationMillis(androidx.media3.common.C.TIME_UNSET, 375L, 0L))
+        assertFalse(isVideoSeekAcknowledged(300, 0, 400))
+    }
+    @Test
     fun filmstripWindowIsStableAndBoundedAroundSelection() {
         assertEquals(0..6, viewerFilmstripWindow(itemCount = 20, selectedIndex = 0))
         assertEquals(0..6, viewerFilmstripWindow(itemCount = 20, selectedIndex = 3))
@@ -169,5 +175,57 @@ class PhotoViewerPolicyTest {
         assertTrue(progress in 0.45f..0.55f)
         val scale = viewerDismissScale(halfOffset, 100f)
         assertTrue(scale in 0.80f..0.90f)
+    }
+
+    @Test
+    fun dismissFractionAndAspectDimensionsAreExact() {
+        assertEquals(0f, viewerDismissFraction(pullScale = 1f), 0.001f)
+        assertEquals(1f, viewerDismissFraction(pullScale = 0.72f), 0.001f)
+        assertEquals(0.5f, viewerDismissFraction(pullScale = 0.86f), 0.01f)
+
+        // 16:9 video in portrait 1080x2400
+        val (videoW, videoH) = fittedMediaDimensions(
+            containerWidth = 1080f,
+            containerHeight = 2400f,
+            mediaWidth = 1920,
+            mediaHeight = 1080
+        )
+        assertEquals(1080f, videoW, 0.01f)
+        assertEquals(607.5f, videoH, 0.01f)
+
+        // 3:4 portrait photo in portrait 1080x2400
+        val (photoW, photoH) = fittedMediaDimensions(
+            containerWidth = 1080f,
+            containerHeight = 2400f,
+            mediaWidth = 3000,
+            mediaHeight = 4000
+        )
+        assertEquals(1080f, photoW, 0.01f)
+        assertEquals(1440f, photoH, 0.01f)
+
+        // 16:9 video in landscape 2400x1080
+        val (landW, landH) = fittedMediaDimensions(
+            containerWidth = 2400f,
+            containerHeight = 1080f,
+            mediaWidth = 1920,
+            mediaHeight = 1080
+        )
+        assertEquals(1920f, landW, 0.01f)
+        assertEquals(1080f, landH, 0.01f)
+
+        // 90-degree rotated portrait video (recorded as 1920x1080 with 90deg metadata -> oriented 1080x1920)
+        val rawWidth = 1920
+        val rawHeight = 1080
+        val rotationDegrees = 90
+        val orientedW = if (rotationDegrees % 180 != 0) rawHeight else rawWidth
+        val orientedH = if (rotationDegrees % 180 != 0) rawWidth else rawHeight
+        val (rotatedW, rotatedH) = fittedMediaDimensions(
+            containerWidth = 1080f,
+            containerHeight = 2400f,
+            mediaWidth = orientedW,
+            mediaHeight = orientedH
+        )
+        assertEquals(1080f, rotatedW, 0.01f)
+        assertEquals(1920f, rotatedH, 0.01f)
     }
 }

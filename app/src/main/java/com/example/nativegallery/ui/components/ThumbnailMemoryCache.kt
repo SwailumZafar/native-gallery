@@ -55,6 +55,12 @@ object ThumbnailMemoryCache {
 
     fun get(key: String): Bitmap? = pinnedCache.get(key) ?: cache.get(key)
 
+    @Synchronized
+    fun remove(key: String) {
+        pinnedCache.remove(key)
+        cache.remove(key)
+    }
+
     fun getNearest(uri: Uri, requestedSize: Int): Bitmap? {
         return getNearest(uri, requestedSize, ImageLoadQuality.Thumbnail)
     }

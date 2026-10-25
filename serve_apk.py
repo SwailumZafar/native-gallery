@@ -28,7 +28,7 @@ def cleanup_old_instances():
                 continue
             name = (proc.info['name'] or '').lower()
             cmdline = " ".join(proc.info['cmdline'] or [])
-            if 'python' in name and 'serve_apk.py' in cmdline:
+            if 'python' in name and ('serve_apk.py' in cmdline or 'gallery-wifi-server' in cmdline):
                 print(f"Terminating old server instance (PID {pid})...", flush=True)
                 proc.terminate()
                 try:
@@ -393,13 +393,13 @@ class ApkServerHandler(http.server.BaseHTTPRequestHandler):
         <div class="features">
             <strong class="title">✨ What's Updated in v{VERSION}:</strong>
             <ul>
-                <li>⚡ <strong>Photo Transition Speeds</strong>: Configurable Normal and Fast Enhanced animation options for viewing and dismissing photos, matching folder animations.</li>
-                <li>📸 <strong>Burst Photos Grouping & Review</strong>: Burst shots automatically group into stacks with indicator badges; tap to open interactive scrubbing review and choose the best shot.</li>
-                <li>🎞️ <strong>Motion Pictures (Live Photos)</strong>: Detection badge, background MP4 extraction, and press-and-hold to play live motion loops.</li>
-                <li>🔄 <strong>Pull to Refresh</strong>: Fluid drag-down pull-to-refresh on both Photos and Albums views.</li>
-                <li>🧭 <strong>Fluid Responsive Navigation Bar</strong>: Live touch tracking, horizontal finger drag switching across tabs, and tactile press scaling.</li>
-                <li>🔍 <strong>Instant Search Focus</strong>: Magnifier glass directly jumps to and activates the search bar with keyboard ready.</li>
-                <li>🎬 <strong>Zero-Glitch Video Dismissal</strong>: Fixed abrupt video dismissal when closing early before initialization by deferring teardown and leveraging multi-size thumbnail caches.</li>
+                <li>🧭 <strong>Refined Navigation Bar Physics</strong>: Reliable tap hit-testing and clean drag-and-snap across Albums, Photos, and Menu tabs, ensuring indicator stops cleanly on Albums.</li>
+                <li>🔍 <strong>Smooth Reveal Search Bar</strong>: Photos screen search bar hidden by default for maximum immersion; tap the magnifier to smoothly reveal with fluid spring animation and immediate keyboard focus.</li>
+                <li>🎨 <strong>Organic Album Reordering Springs</strong>: Fluid spring physics when moving and changing album positions; neighboring albums part smoothly with living spring dynamics.</li>
+                <li>⚡ <strong>Photo Transition Speeds</strong>: Configurable Normal and Fast Enhanced animation options for viewing and dismissing photos.</li>
+                <li>📸 <strong>Burst Photos Grouping & Review</strong>: Burst stacks with indicator badges and interactive scrubbing review.</li>
+                <li>🎞️ <strong>Motion Pictures (Live Photos)</strong>: Detection badge, background MP4 extraction, and press-and-hold playback.</li>
+                <li>🔄 <strong>Pull to Refresh</strong>: Fluid drag-down pull-to-refresh on Photos and Albums views.</li>
             </ul>
         </div>
 

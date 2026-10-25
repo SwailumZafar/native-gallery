@@ -2,8 +2,16 @@ package com.example.nativegallery.ui
 
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -29,33 +37,57 @@ class GalleryNavigationSmokeTest {
 
     @Test
     fun primaryTabsRenderAndNavigate() {
-        composeRule.waitForText("Search photos and videos")
-        composeRule.onNodeWithText("Search photos and videos").assertIsDisplayed()
+        waitForPhotoHeader()
 
-        composeRule.onNodeWithText("Albums").performClick()
+        composeRule.onNodeWithContentDescription("Albums").performClick()
         composeRule.waitForText("Search albums")
         composeRule.onNodeWithText("Search albums").assertIsDisplayed()
 
-        composeRule.onNodeWithText("Photos").performClick()
-        composeRule.waitForText("Search photos and videos")
-        composeRule.onNodeWithText("Search photos and videos").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Photos").performClick()
+        waitForPhotoHeader()
     }
 
     @Test
     fun eachBottomNavigationDestinationRespondsToOneTap() {
-        composeRule.waitForText("Search photos and videos")
+        waitForPhotoHeader()
 
-        composeRule.onNodeWithText("Menu").performClick()
+        composeRule.onNodeWithContentDescription("Menu").performClick()
         composeRule.waitForText("Gallery settings and tools")
         composeRule.onNodeWithText("Gallery settings and tools").assertIsDisplayed()
 
-        composeRule.onNodeWithText("Albums").performClick()
+        composeRule.onNodeWithContentDescription("Albums").performClick()
         composeRule.waitForText("Search albums")
         composeRule.onNodeWithText("Search albums").assertIsDisplayed()
 
-        composeRule.onNodeWithText("Photos").performClick()
+        composeRule.onNodeWithContentDescription("Photos").performClick()
+        waitForPhotoHeader()
+    }
+
+    @Test
+    fun photoHeaderFiltersSearchAndOptionsRemainReachable() {
+        waitForPhotoHeader()
+
+        listOf("Videos", "Favorites", "All").forEach { label ->
+            composeRule.onNodeWithText(label).performClick().assertIsSelected()
+        }
+
+        composeRule.onNode(hasContentDescription("Search") and hasClickAction()).performClick()
         composeRule.waitForText("Search photos and videos")
         composeRule.onNodeWithText("Search photos and videos").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Close search").performClick()
+
+        composeRule.onNodeWithContentDescription("Photo options").performClick()
+        composeRule.waitForText("Select all")
+        composeRule.onNodeWithText("Refresh").assertIsDisplayed()
+        composeRule.onNodeWithText("Select all").assertIsDisplayed()
+        composeRule.onNode(hasText("Settings") and hasAnyAncestor(isPopup())).assertIsDisplayed()
+    }
+
+    private fun waitForPhotoHeader() {
+        composeRule.waitUntil(timeoutMillis = NavigationTimeoutMillis) {
+            composeRule.onAllNodesWithContentDescription("Photo options").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription("Photo options").assertIsDisplayed()
     }
 
     private fun androidx.compose.ui.test.junit4.AndroidComposeTestRule<*, *>.waitForText(text: String) {

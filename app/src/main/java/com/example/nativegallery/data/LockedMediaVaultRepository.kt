@@ -149,6 +149,23 @@ class LockedMediaVaultRepository(context: Context) {
         return file.exists() && file.length() > MinimumEncryptedFileBytes
     }
 
+    fun mediaItemForToken(token: String): MediaItem? {
+        val raw = metadataPreferences.getString(metadataKey(token), null) ?: return null
+        return decodeMetadata(raw)
+    }
+
+    fun isVideoToken(token: String): Boolean {
+        val raw = metadataPreferences.getString(metadataKey(token), null) ?: return false
+        return runCatching { org.json.JSONObject(raw).optBoolean("isVideo", false) }.getOrDefault(false)
+    }
+
+    fun ensureEncryptedPreviewFromToken(token: String): Boolean {
+        if (hasEncryptedToken(token, preview = true)) return true
+        if (!hasEncryptedToken(token, preview = false)) return false
+        val mediaItem = mediaItemForToken(token) ?: return false
+        return ensureEncryptedPreviewFromVault(mediaItem)
+    }
+
     fun loadSnapshot(): LockedMediaVaultSnapshot {
         val missingPreviewIds = mutableSetOf<String>()
         val mediaItems = metadataTokens().mapNotNull { token ->

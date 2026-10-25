@@ -80,10 +80,22 @@ class LockedMediaVaultProvider : ContentProvider() {
                 .appendPath(token)
                 .appendQueryParameter(LockedMediaVaultRepository.VaultMimeTypeQuery, "image/jpeg")
                 .build()
-            val descriptor = openFile(previewUri, "r")
-            return AssetFileDescriptor(descriptor, 0, AssetFileDescriptor.UNKNOWN_LENGTH)
+            return openAssetFile(previewUri, "r")
         }
-        return super.openTypedAssetFile(uri, mimeTypeFilter, opts)
+        return openAssetFile(uri, "r")
+    }
+
+    override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor? {
+        if (mode.contains('w')) throw FileNotFoundException("Locked media is read-only")
+        val appContext = context?.applicationContext ?: throw FileNotFoundException("Missing context")
+        awaitScheduledSessionCacheClear()
+        val token = uri.lastPathSegment?.takeIf { it.isNotBlank() }
+            ?: throw FileNotFoundException("Missing locked media token")
+        val preview = uri.pathSegments.firstOrNull() == LockedMediaVaultRepository.VaultPreviewPath
+        val repository = vaultRepository ?: LockedMediaVaultRepository(appContext)
+        val readyFile = ensureSessionFile(appContext, repository, token, preview)
+        val pfd = ParcelFileDescriptor.open(readyFile, ParcelFileDescriptor.MODE_READ_ONLY)
+        return AssetFileDescriptor(pfd, 0, readyFile.length())
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
@@ -134,15 +146,32 @@ class LockedMediaVaultProvider : ContentProvider() {
             token: String,
             preview: Boolean
         ): File {
-            if (!repository.hasEncryptedToken(token, preview)) {
+            val actualPreview = if (preview && repository.hasEncryptedToken(token, preview = true)) {
+                true
+            } else if (preview) {
+                if (repository.isVideoToken(token)) {
+                    val generated = repository.ensureEncryptedPreviewFromToken(token)
+                    if (generated && repository.hasEncryptedToken(token, preview = true)) {
+                        true
+                    } else {
+                        throw FileNotFoundException("Locked video preview unavailable")
+                    }
+                } else if (repository.hasEncryptedToken(token, preview = false)) {
+                    false
+                } else {
+                    throw FileNotFoundException("Locked media token not found")
+                }
+            } else if (repository.hasEncryptedToken(token, preview = false)) {
+                false
+            } else {
                 throw FileNotFoundException("Locked media token not found")
             }
-            val sessionKey = if (preview) "preview:$token" else "media:$token"
+            val sessionKey = if (actualPreview) "preview:$token" else "media:$token"
             val sessionLock = sessionLocks.computeIfAbsent(sessionKey) { Any() }
             return synchronized(sessionLock) {
-                val readyFile = sessionFile(context, token, preview)
+                val readyFile = sessionFile(context, token, actualPreview)
                 if (!readyFile.exists() || readyFile.length() == 0L) {
-                    decryptSessionFile(repository, token, preview, readyFile)
+                    decryptSessionFile(repository, token, actualPreview, readyFile)
                 }
                 readyFile
             }

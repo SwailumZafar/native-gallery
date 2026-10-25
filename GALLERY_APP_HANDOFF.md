@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-10-14
+Last updated: 2026-10-25
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -46,6 +46,8 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-08-15 slice: updated compact-viewer and viewer-layout contracts for the streamlined action bar; all 116 local tests still pass, Android-test sources compile, and debug lint/APK assembly pass.
   - 2026-09-01 slice: added MediaTek AVC decoder-selection policy coverage; all 117 local tests pass, Android-test sources compile, and debug lint/APK assembly pass.
   - 2026-10-14 slice: added spring animation system (MotionSpecs), RenderThread graphicsLayer optimizations, and pull-down gesture smoothing; all 117 unit tests pass, and debug APK assembly passes.
+  - 2026-10-16 slice: added video duration, sub-second seek tolerance, AVI split-read/random-access, native-index preservation, and FLV/Matroska fallback-index tests; the current local suite has 144 passing tests. Android-test sources compile, lint passes, and the debug APK assembles.
+  - 2026-10-17 slice: added four JVM poster-presentation/frame-morph regressions and three Android touch regressions for photo dismiss, swipe-up Information, and repeated overflow Information. All 148 JVM tests pass; Android-test sources compile, debug lint has 0 errors, and debug APK assembly passes. No physical device was connected for touch execution.
 - [ ] Gradually move screen state and business logic out of `GalleryApp.kt` into ViewModels and testable state holders.
   - 2026-07-15 slice: extracted viewer delete selection and Photos lazy-list indexing into `GalleryLogic.kt`.
   - 2026-07-15 slice: extracted normalized media/album search documents and matching into `GallerySearchIndex.kt`.
@@ -56,6 +58,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-19 slice: added DocumentPhotoRepository and DocumentPhotosViewModel so cancellable OCR indexing, cache validation, scan progress, and rescan state stay outside GalleryApp composition state.
   - 2026-07-30 slice: extracted two-phase Locked Media import/rollback decisions into `LockedMediaOperations`, and added an Activity-scoped viewer/pending-MediaStore session holder so rotation cannot discard an open viewer or a required cancellation rollback.
 - [ ] Continue reducing unnecessary MediaStore reloads and background I/O.
+  - 2026-10-25 slice: eliminated disk re-decodes on thumbnail memory hits, bounded decode/write concurrency, paused new image work during visible motion, and retained main pages across folder visits. The optimized build and 156 JVM/10 device tests pass; measured photo, folder, and scrolling frame drops decreased. See the performance section below.
   - 2026-07-15 slice: restore/delete-forever batches now persist Recently Deleted state once per action instead of once per media item.
   - 2026-07-15 slice: observer bursts now coalesce to one newest-page query and one full reconciliation; repeated quick refreshes cancel before queueing duplicate work.
   - 2026-07-17 slice: removed the redundant post-permission quick reload, added freshness-aware resume reconciliation, moved newest-page merge work to Dispatchers.Default, and skipped unchanged snapshot rebuilds and StateFlow publications.
@@ -66,6 +69,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-22 slice: first presentation waits for the newest MediaStore page and a timeout-bounded 12-thumbnail warmup; the complete album list stays in a loading state until full reconciliation so partial rows never reflow after opening. Album Detail warms 30 rows without blocking and stays 14 rows ahead while scrolling; Document Photos reuses unchanged version-2 OCR text under the stricter classifier rather than rescanning the entire library.
   - 2026-08-02 slice: cold start now queries 72 newest items before presentation, yields 220 ms before full reconciliation, and keeps uncached thumbnail decode/publication out of active Photos flings while still rendering memory-cache hits immediately.
   - 2026-08-15 slice: Albums also defers uncached cover loads during active list motion, media grids avoid retaining identity graphics layers, and the fast scroller jumps directly to requested rows instead of measuring every intermediate row.
+  - 2026-10-17 slice: exact fingerprinted video keys are shared by album transition previews and the live grid. Opening warms persisted video posters without launching codecs during the transition; ahead-of-viewport prefetch pauses during scrolling. Video decode waiters no longer occupy shared image-loader permits, allowing cached posters and photos through independently.
 - [x] Move large-library search indexing and expensive interaction lookup off the main UI path. Completed 2026-07-15.
   - 2026-07-15 slice: search indexing and query execution now run on `Dispatchers.Default`; remaining expensive interaction lookups stay queued.
   - 2026-07-15 slice: encrypted-vault inventory reads now run on `Dispatchers.IO` instead of during composition.
@@ -112,18 +116,19 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Latest pushed implementation baseline: 7806667 Polish gallery interactions and theme transitions
-GitHub sync: implementation commit 7806667 and this handoff are synchronized on origin/main
+Previous pushed implementation baseline: 2f23627 Refine navigation bar touch physics, burst review back navigation, and video dismissal
+Current save point: Optimize Gallery performance and stabilize media transitions (v0.9.13)
+GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
 
 Recent saved work:
 
 ```text
-7806667 Polish gallery interactions and theme transitions
-92cc6c9 Polish viewer opening and album reordering
-8de211f Stabilize gallery scrolling and locked media restore
-b69c43b Improve gallery scrolling and media actions
+2f23627 Refine navigation bar touch physics, burst review back navigation, and video dismissal
+20fcc98 v0.9.7: Photo transition speeds, burst/motion photos, pull-to-refresh, fluid nav bar touch physics, and video dismiss fix
+f7eba22 feat: ColorOS 17 Living Flow motion, video dismiss fluidity, and glitch-free folder transitions (v0.9.1)
+93b460c docs: Update handoff for ColorOS 17 spring motion and touch responsiveness release
 ```
 
 Repository project-file status:
@@ -138,6 +143,357 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-10-25 GitHub Save Point
+
+At the user's request, save the accumulated Gallery improvements through v0.9.13 to the
+existing `main` / `origin/main` branch. This includes playback/seek compatibility, thumbnail
+coordination, performance and gesture work, Photos header redesign, album return alignment,
+and the video-aspect/photo-preview handoff fixes, together with their regression tests.
+Generated APKs, local installers in `tmp/`, device captures and build outputs remain ignored.
+Use the existing successful build/test evidence below; this save operation adds no app changes
+and starts no additional device or build tests. Remote and local main matched before committing.
+
+## 2026-10-25 Video Aspect and Repeated Viewer Handoff Fix
+
+The user reported a video shrinking into a small frame before playback and an intermittent
+blank photo opening after repeatedly opening/closing videos. Preserve the existing gesture,
+spring, layout and animation style. The user also required testing to stop below 12% remaining
+quota; quota was checked before test batches and remained above that threshold.
+
+- Opening geometry now uses original media dimensions instead of a square/cropped grid poster.
+  Video display metadata (including rotation) is resolved on bounded background workers before
+  the opening spring; Media3 runtime geometry additionally accounts for pixel aspect ratio.
+  Playback fades in only after the first frame and two layout frames. The poster fills the
+  already fitted media frame, avoiding a second fit inside that frame.
+- A bounded weak registry of currently displayed bitmaps lets the tapped tile seed both the
+  opening hero and viewer, even after thumbnail-LRU eviction. The seed stays available until
+  full-quality content arrives. It is scoped to the selected media identity when paging.
+- New opening requests clear stale closing/reveal state. Async metadata completions validate
+  the request key, destination, tab and resumed lifecycle before committing an opening.
+- Related hardening: video TextureView captures have a 1024 px maximum edge instead of copying
+  the entire full-resolution surface. Metadata jobs coalesce per file, have two workers/eight
+  pending slots, cache at most 128 entries, and impose a 250 ms caller deadline.
+- Verification: 160 JVM tests passed, including four new aspect/rotation/malformed-dimension
+  regressions. All 15 selected physical-device instrumentation tests passed, including a new
+  five-handoff regression that evicts the tapped thumbnail while decoding is blocked and
+  asserts that the preview still paints. Existing gestures and navigation checks pass.
+- The optimized build passed three real-library video-to-photo sequences (six video opens and
+  three photo opens). Portrait playback had a 1264 x 2248 TextureView (9:16); each following
+  photo viewer opened successfully. No playback/crash errors were logged. These checks cover
+  the identified causes and transitions, not a guarantee against every intermittent glitch.
+- Debug lint: 0 errors and 10 existing warnings. Existing unrelated working-tree changes remain
+  intact. No commit or push was requested.
+
+Final optimized APK installed without clearing app data:
+
+    F:\App\Gallery\app\build\outputs\apk\benchmark\app-benchmark.apk
+    Application: com.swailumzafar.nativegallery, version 0.9.13 / 14
+    Size: 46,426,861 bytes
+    SHA-256: 6AD29EF505A855690D53A2F6073EDA5AD760C268B476A2F30CB5F76CA4C73BFB
+
+Debug, Android-test and optimized benchmark APKs build successfully. The final lifecycle-guard
+revision passed the 160 JVM tests and seven focused image/navigation device rechecks. The same
+Wi-Fi installer at `http://192.168.18.184:8080/` offers
+`Native-Gallery-0.9.13-media-transition-fix.apk`, with older paths retained as aliases. The final
+APK's complete LAN SHA-256 and partial 206 downloads were verified. Last quota check before the
+final smoke batch: 13% remaining; no further extended tests were started. The final optimized
+APK also passed a fresh real-library video playback/aspect and subsequent photo-open smoke
+check. Testing is finished.
+
+## 2026-10-25 Album Closing Cover Alignment
+
+Fixed the user-reported leftward tilt/adjustment as an album closes. The retained Main page
+was translated left while Album Detail was open, even though it was invisible. Album covers
+continued reporting their transformed window bounds, so the closing hero could target a point
+left of the resting cover before the real tile appeared.
+
+- Main and Album Detail now share the same resting Main-page offset throughout a folder visit.
+  Extracted the existing offset animation into `GalleryNavigationMotion.kt` for focused checks.
+- Kept the cover animation, spring settings, fade, gesture behavior and other destination
+  offsets unchanged. No viewer, grid layout or image-loading changes were made in this fix.
+- Related hardening: device regressions check window bounds throughout opening, hidden-page
+  hero removal and closing, and verify that secondary pages retain their slide/return behavior.
+- All 156 JVM tests and five focused device checks pass. Three repeated folder visits using
+  the real phone library returned to identical tile positions.
+- Debug, Android-test and optimized benchmark APKs build successfully. Debug lint has 0 errors
+  and 10 existing warnings. Existing unrelated working-tree changes were preserved.
+
+Final optimized update, installed without clearing app data:
+
+    F:\App\Gallery\app\build\outputs\apk\benchmark\app-benchmark.apk
+    Application: com.swailumzafar.nativegallery, version 0.9.12 / 13
+    Size: 46,426,861 bytes
+    SHA-256: 2D069A1486FF1D45A3F352F3A5459198A943DEF08FE9995A5680250532304CC2
+
+The same installer at `http://192.168.18.184:8080/` offers
+`Native-Gallery-0.9.12-album-close-fix.apk`; older installer paths remain aliases. Verified full
+LAN download SHA-256 and partial (206) downloads. No commit or push was requested.
+
+## 2026-10-25 Gesture and Animation Optimization, Second Pass
+
+Further optimized the existing animations at the user's request. The Photos header redesign,
+folder predictive-back opt-out, spring constants, visual transforms, gesture thresholds and
+navigation behavior are retained. Existing unrelated working-tree changes remain uncommitted.
+
+- Viewer drag-return, photo zoom and pan animations now collect pointer targets outside the
+  screen's composition. Rendering still follows the raw pointer during a gesture; the same
+  Animatable springs provide release and double-tap motion. Retargeting starts the replacement
+  animation before cancelling the previous one so its existing velocity is retained.
+- Zoom layout and callbacks observe the derived zoomed/fit state instead of every scale update.
+  Per-pointer pinch calculations no longer allocate filtered, mapped and averaged lists.
+- Loading shimmer reads its phase during drawing, retaining its gradient, clipping, duration
+  and easing. Its colors are remembered instead of rebuilt on each frame.
+- The viewer's fading black backdrop is drawn directly with the same multiplied alpha instead
+  of blending a separate full-screen graphics layer. Its visual result is unchanged.
+- Related hardening: added device regressions for layer movement without recomposition or
+  remeasurement, spring momentum during interruption, and pinch zoom followed by single-finger
+  pan. Existing dismiss, Information, double-tap, image, header and tab checks remain covered.
+
+Verification:
+
+- Debug / optimized benchmark / Android-test APKs and debug lint build successfully.
+- All 156 JVM tests and 16 focused Android tests pass on RMX3852 (`30e49129`).
+- Debug lint: 0 errors, 10 existing warnings.
+- Captured a local Perfetto trace with the official checksum-verified v58.2 trace processor.
+  The original trace showed 19 ms recomposition peaks and background GC during repeated
+  photo/folder transitions. Trace processing remained local.
+
+Same-phone before/final frame statistics, with both builds using optimized benchmark compilation:
+
+| Flow | Before janky frames | Final janky frames | Before p95 | Final p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Photo open/close | 17 / 658 (2.58%) | 18 / 658 (2.74%) | 19 ms | 20 ms |
+| Folder open/close | 22 / 670 (3.28%) | 20 / 672 (2.98%) | 22 ms | 23 ms |
+| Tab navigation | 12 / 549 (2.19%) | 13 / 559 (2.33%) | 12 ms | 13 ms |
+| Photo scrolling | 24 / 703 (3.41%) | 20 / 701 (2.85%) | 12 ms | 12 ms |
+| Drag and spring return | 14 / 621 (2.25%) | 11 / 635 (1.73%) | 19 ms | 19 ms |
+| Double-tap zoom and pan | 9 / 907 (0.99%) | 10 / 896 (1.12%) | 10 ms | 10 ms |
+
+Drag-return median frame time decreased from 12 to 10 ms. These short real-library samples
+show modest changes and ordinary run variation, rather than proving improvement in every flow.
+The deterministic device checks establish that repeated pointer targets no longer recompose or
+remeasure their content, while spring momentum and actual touch interactions remain intact.
+Raw results are in ignored `tmp/gallery-performance-motion2-{before,final}*.{json,txt}`.
+An intermediate candidate (before removing the backdrop layer) is labelled `motion2-after`.
+
+Final installed and Wi-Fi-served APK:
+
+    F:\App\Gallery\app\build\outputs\apk\benchmark\app-benchmark.apk
+    Application: com.swailumzafar.nativegallery, version 0.9.11 / 12
+    Size: 46,426,861 bytes
+    SHA-256: F56D9FF33851956DBF39B0EC7C2DA255F6348A4B177090879C8DA4D2D217AFBA
+
+The Gallery-only installer remains `http://192.168.18.184:8080/`, now offering
+`Native-Gallery-0.9.11-motion-optimized.apk`. Full LAN download SHA-256 and 206 range requests
+were verified for the final APK; 0.9.9 and 0.9.10 URLs remain aliases. Existing app data and
+original device media were preserved. No commit or push was requested.
+
+## 2026-10-25 Photos Header Redesign
+
+Redesigned only the top of Photos at the user's request. Existing unrelated working-tree
+changes were retained. No commit or push was requested.
+
+- Left-aligned the Photos heading and media summary, with search and options alongside.
+- Gave All / Photos / Videos / Favorites an evenly spaced, full-width segmented surface
+  using existing theme colors. Light and dark themes use their existing color tokens.
+- Preserved the header collapse graphics-layer calculations, search expand/fade springs,
+  tactile spring scales, overflow animations, filter callbacks, and all viewer/navigation motion.
+  A source comparison against the pre-edit snapshot confirms the existing motion blocks match.
+- Related hardening: filter controls have at least 48 dp touch targets, selected-tab semantics,
+  one click handler per control, and a two-row layout on narrow screens or with larger text.
+- Version: 0.9.10 / code 11. Keep using the optimized, locally signed benchmark APK for delivery.
+
+Verification:
+
+- Debug APK, optimized benchmark APK and Android-test APK build successfully.
+- All 156 JVM tests pass. Debug lint: 0 errors, 10 existing warnings.
+- All five focused Android tests pass on RMX3852 (`30e49129`): selected-tab announcements,
+  exactly one callback per tap, 280 dp / 200% text layout with unclipped labels and 48 dp
+  minimum controls, Photos filter/search/options access, and bottom-tab navigation.
+- Compared actual before/after phone captures in one combined image. Header-only captures
+  and test/build logs are in ignored `tmp/photos-header-*` files.
+
+Installed and Wi-Fi-served optimized APK:
+
+    F:\App\Gallery\app\build\outputs\apk\benchmark\app-benchmark.apk
+    Application: com.swailumzafar.nativegallery, version 0.9.10 / 11
+    Size: 46,426,861 bytes
+    SHA-256: 31DA24A96B0E790C5750F7FB668BADA01D6DF706A223F54E60758F92312E61D7
+
+The same installer at `http://192.168.18.184:8080/` now offers
+`Native-Gallery-0.9.10-photos-header.apk`. Verified the full LAN download against the local
+APK's SHA-256 and a 206 partial download. Restarted only this workspace's Gallery helper;
+the previous 0.9.9 download path remains an alias for the current update.
+
+## 2026-10-25 Gallery Performance Pass
+
+Completed the requested app-wide optimization while retaining the existing animation springs,
+gesture behavior, photo aspect ratios, and the earlier removal of folder predictive-back previews.
+Existing unrelated working-tree changes were retained. No commit or push was requested.
+
+Implementation:
+
+- Photo open/close heroes now read animation progress during drawing and layer updates. The
+  image layout stays fixed while a centered crop follows the animated bounds, avoiding per-frame
+  composition, image-cache searches, and width/height remeasurement.
+- Main Photos/Albums/Menu pages remain composed across folder and secondary-screen visits.
+  Their existing fade/slide spring parameters are driven by the same destination transition.
+  Hidden pages have their accessibility contents cleared and input blocked.
+- Full-quality viewer photos use immutable hardware-backed ImageDecoder output on API 28+;
+  API 26/27 retain the sampled software path. Neighbor warmup is capped at 2048 px, full-size
+  photos are no longer pinned by ordinary viewer prefetch, and inactive pager pages use cached
+  previews instead of independently decoding more full-size originals.
+- Viewer page transforms, zoom/pan spring output, and dismiss corners/elevation defer their
+  state reads to graphics layers rather than recomposing on animation frames.
+- Thumbnail prefetch returns exact memory-cache hits before trying disk. Normal cache misses
+  no longer read/decompress the same disk thumbnail twice.
+- New bitmap decodes and large bitmap publications yield to navigation, list/pager motion,
+  and viewer gestures through a cancellable shared scheduler. Existing memory hits remain
+  immediate; album transition previews can still warm persisted thumbnails. Native video-poster
+  work is also paused during all main list/pager movement.
+- Decode concurrency is bounded at four instead of sixteen. Disk hashing avoids per-byte
+  String.format allocations.
+- Related production hardening: disk writes use a background-priority worker with at most 24
+  retained bitmap requests. Queued writes are coalesced by key while preserving newer video
+  frame replacements, reducing queue memory growth during rapid browsing.
+- Added an installable `benchmark` app build type inheriting release shrinking/optimization and
+  using the same local debug certificate. This matches the existing benchmark module and can
+  update local installations without clearing data. Version is now 0.9.9 / code 10.
+
+Verification:
+
+- Debug APK, optimized benchmark APK, Android-test APK, and debug lint build successfully.
+- All 156 JVM tests pass. Debug lint: 0 errors, 10 existing warnings.
+- All 10 selected Android tests passed on the user's RMX3852 (`30e49129`), including hardware
+  image rendering, center-crop aspect preservation without recomposition/remeasurement,
+  memory-first prefetch, five viewer gesture regressions, and two navigation checks.
+- Navigation smoke tests now target the current collapsed-search Photos header and use the
+  navigation icons instead of ambiguous duplicate text labels. The hardware-image test is
+  limited to API 28+, matching ImageDecoder availability.
+- The instrumentation stdout watcher disconnected early on the final run; device TestRunner
+  logs confirmed: `run finished: 10 tests, 0 failed, 0 ignored`. Evidence is in ignored
+  `tmp/gallery-performance-device-test-summary.log`.
+
+Frame measurements on the same phone using repeated photo/folder open-close cycles, tab taps,
+and grid swipes (`dumpsys gfxinfo`, no media modifications):
+
+| Flow | Before: janky frames | Final optimized: janky frames | Before p95 | Final p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Photo open/close | 42 / 590 (7.12%) | 18 / 657 (2.74%) | 109 ms | 18 ms |
+| Folder open/close | 49 / 533 (9.19%) | 18 / 674 (2.67%) | 200 ms | 20 ms |
+| Tab navigation | 10 / 430 (2.33%) | 11 / 482 (2.28%) | 15 ms | 14 ms |
+| Photo grid scrolling | 48 / 692 (6.94%) | 14 / 758 (1.85%) | 21 ms | 16 ms |
+
+These are sampled real-library flows, including the change from the prior debug install to an
+optimized install, rather than an isolated Macrobenchmark attribution to each code change.
+Baseline measurements were collected October 22; final measurements October 25. The final
+photo/folder pass completed before a USB interruption; only tabs/scrolling were resumed afterward.
+Raw frame reports and all four final metrics are saved in ignored
+`tmp/gallery-performance-final-optimized*.txt` and `tmp/gallery-performance-final-optimized.json`.
+The attempted non-debug method-sampling trace was empty and was not used as performance evidence.
+
+Final installed and Wi-Fi-served APK:
+
+    F:\App\Gallery\app\build\outputs\apk\benchmark\app-benchmark.apk
+    Application: com.swailumzafar.nativegallery, version 0.9.9 / 10
+    Size: 46,426,857 bytes
+    SHA-256: 8072A4CFB5EB9A163170AFB2BE35F69372E55A38421E3586750F0B8C062A97F1
+
+The verified installer remains `http://192.168.18.184:8080/`. Its Gallery-only helper is
+`tmp/gallery-wifi-server.py` and now serves the optimized APK as
+`Native-Gallery-0.9.9-optimized.apk`. Both a full LAN download/checksum and a 206 range download
+were verified. Do not replace this with the root-level `serve_apk.py` process cleanup.
+
+Reference for the rendering approach:
+[Android Compose performance phases](https://developer.android.com/develop/ui/compose/performance/phases).
+
+## 2026-10-17 Viewer Gestures, Album Reorder Springs, and Video Folder Polish
+
+Completed locally; existing unrelated/uncommitted changes were retained. No commit or push was requested.
+
+Requested changes:
+
+- Viewer vertical gestures no longer reject the DOWN event consumed by the photo tap/double-tap detector. They arbitrate on consumed movement in the Main pass, after child zoom, pager, timeline and scrolling controls. This restores pull-down photo dismissal and swipe-up Information while preserving control ownership.
+- Opening Information clears any partial viewer drag. The panel is bounded to the viewport, scrollable on small/landscape screens, and Back closes it before leaving the media viewer. Added Android touch regressions for downward dismiss, upward Information/close, and repeated overflow Information.
+- Album reorder springs now retain their state before pickup. The long-press context menu opens on release without movement instead of stealing an in-progress drag; cancelled gestures spring home without committing a swap. A new hover target gives subtle haptic feedback.
+- Dragged and target rows are elevated above surrounding rows. Square/hero exchanges remeasure and crop the card frame rather than stretching its image/text or nudging a differently sized target only a few pixels. Pickup tilt is restrained, and lift/elevation settle before the swap.
+- Removed redundant `animateContentSize` layers from reorderable album cards: those layers clip their descendants to the original slot and interfere with dragging outside it. Existing animated grid widths and hero height remain in place.
+- Reorder commit removes old-slot transforms atomically and suppresses a second LazyColumn placement animation until the new layout has committed. Album item fade-in/out is disabled so cards do not disappear during an exchange. Spring progress is read in layout/layer phases, not at the whole Albums screen level, and idle cards release their graphics layers.
+- Album transition previews now use the same media fingerprint as live video tiles. Cached posters warm at opening using disk/memory only; video decoding is not started during the opening animation. A generic movie icon is shown only after a real load failure, never during loading or cache-only transition previews.
+- Reduced initial/already-ahead album prefetch batches and paused ahead prefetch during scrolling. The existing album open/close choreography, video seek fixes, and MediaTek playback policy are preserved.
+
+Additional closely related hardening:
+
+- Video native-decoder requests acquire their serialized decode permit before shared loader permits. Disk cache reads happen separately first, so a queue of slow videos cannot occupy all photo/cache loading slots. Added JVM regressions for poster fallback policy, stable fingerprinting, exact hero/square frame sizes, and invalid/overshooting frame inputs.
+
+Verification:
+
+- `:app:testDebugUnitTest`: BUILD SUCCESSFUL, 148 tests, 0 failures/errors/skips.
+- `:app:compileDebugAndroidTestKotlin`: BUILD SUCCESSFUL. Touch regressions were compiled, not executed: `adb devices` found no connected device. No emulator was started.
+- `:app:lintDebug`: BUILD SUCCESSFUL, 0 errors and 10 existing warnings.
+- `:app:assembleDebug`: BUILD SUCCESSFUL.
+- `git diff --check`: clean (apart from expected CRLF conversion notices).
+
+Latest APK (Native Gallery, `com.swailumzafar.nativegallery`, 0.9.8 / code 9):
+
+    F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+    Size: 66,160,761 bytes
+    Last write: 2026-10-17 04:57:23 Asia/Karachi
+    SHA-256: B1E723097B46459FADE0F8F557E0F5F1511C256324EA76396D1A34EA48A52108
+
+Installation:
+
+- The working Wi-Fi installer is `http://192.168.18.184:8080/`; use the clearly named `Native-Gallery-0.9.8-gesture-polish.apk` download. The standalone helper lives in ignored `tmp/gallery-wifi-server.py`, serves only Gallery, and binds exclusively. Do not run the old `serve_apk.py` cleanup across unrelated app servers. Earlier non-8080 links appeared as Velocity VPN on the user's phone; the user confirmed 8080 works.
+- USB/ADB alternative from the project folder: `.\scripts\install-debug-apk.ps1` (updates without clearing app data).
+
+Physical-device checks still required:
+
+- Pull down to dismiss a fit photo; swipe up for Information; open Information from overflow several times and close with its button/Back. Confirm zoom/pan and video scrubbing retain their gestures.
+- Reorder within/across grid rows, then square-to-hero and hero-to-square. Check no clipping, cover stretching, fade, or second jump after release. Long-press without movement should still expose Pin/Delete; a cancelled drag must not rearrange albums.
+- Re-enter mixed and video-only folders with cached posters, then try a never-opened folder. Cached posters should carry through the transition; uncached cells may briefly show a neutral surface while decoding, not a generic movie-icon flash. Check low-end-device frame pacing separately.
+
+## 2026-10-16 Video Thumbnails, Duration Recovery, and Seeking Pass
+
+Completed and verified locally without emulator or device installation:
+
+- Confirmed the Gallery-specific seek failure in `PhotoViewerOverlay`: when MediaStore supplied no duration, the Material slider was created with a `0..1 ms` range and was effectively immovable until Media3 happened to discover a valid timeline.
+- Added an IO-thread duration resolver and fingerprinted persistent cache. It parses AVI main/stream timing, FLV AMF duration, and Matroska Duration/TimecodeScale, then safely falls back to `MediaMetadataRetriever` through an asset file descriptor or content URI. Any positive duration remains valid, including genuinely sub-second clips; Media3 `TIME_UNSET` is never treated as a duration, and a valid runtime player duration always replaces cached/library metadata.
+- Added local playback extractor fallbacks for genuinely unseekable files. FLV keyframe and Matroska cluster indexing runs only after the native Media3 extractor reports an unseekable map; healthy native indexes remain authoritative and are not full-file scanned. Constant-bitrate seeking stays enabled for other supported local formats.
+- Added a non-destructive AVI data-source wrapper that buffers/replays at most the first 512 bytes on zero-position opens, verifies RIFF/AVI, and advertises an existing index by setting the `AVIF_HASINDEX` flag in the streamed header only. Random-access opens pass straight through and the original file is never modified.
+- Moved the existing MediaTek H.264 renderer policy and new media-source setup into shared Gallery playback factories. Viewer playback and the hard thumbnail fallback use the same decoder selection, synchronous MediaTek adapter, AVI wrapper, and extractor setup.
+- Reworked video poster decoding to try asset-descriptor and content-URI retriever paths, sample several useful positions based on duration, try closest-sync and closest frames, and only reject a frame when a 5x5 sample is uniformly near black. The serialized codec fallback now seeks to multiple candidate positions instead of decoding only frame zero.
+- Platform and disk/memory video posters are validated before reuse. Blank cached posters are deleted and regenerated, while cache identity now includes a video-poster version, MediaStore modification time, and file size so edited/replaced media cannot inherit a stale poster.
+- Legacy Android video thumbnails remain supported, platform decoding runs off the main thread, and codec work has a shared four-second budget. Viewer-rendered frames populate the same revised poster cache, including the opening/closing previews. Visible video badges recover missing/incorrect legacy-container durations on IO with bounded concurrency.
+- Added a serialized, muted Media3 thumbnail fallback with an attached TextureView. It waits for a rendered frame, tries later positions when blank, captures at the requested thumbnail size, and returns through the existing thumbnail publication/cache path. Player and surface cleanup runs on the main looper. Playback, album/media transitions, theme transitions, lifecycle stop, and request cancellation suspend or cancel this extra decoder.
+- Additional loading hardening: suspended Media3 poster requests release the shared image-loader permits and per-key locks, so they cannot starve full-quality photo loading. Transition fallbacks never decode the primary URI a second time and respect cache-only previews.
+- The seek slider claims its own pointer events before the dismiss/pager gestures and uses stable updated callbacks with a range captured at drag start. Unknown duration disables only the timeline until metadata is available; sub-second clips remain valid. Pending seeks time out rather than pinning displayed progress forever, and short-video acknowledgements use a suitably smaller tolerance.
+- Added eleven JVM regressions across duration parsing, runtime-duration precedence, short videos, AVI header/range handling, retaining healthy native seek maps, FLV sequence-header filtering, and Matroska cluster positions. A last cluster start is never substituted for an unknown end time.
+
+Verification:
+
+- `:app:testDebugUnitTest`: BUILD SUCCESSFUL, 144 tests, 0 failures, 0 errors, 0 skipped
+- `:app:compileDebugAndroidTestKotlin`: BUILD SUCCESSFUL
+- `:app:lintDebug`: BUILD SUCCESSFUL (10 existing warnings)
+- `:app:assembleDebug`: BUILD SUCCESSFUL
+- `git diff --check`: clean except expected CRLF conversion notices
+
+Latest verified APK:
+
+    F:\App\Gallery\app\build\outputs\apk\debug\app-debug.apk
+    Size: 66,160,761 bytes
+    Last write: 2026-10-16 19:21:17 Asia/Karachi
+    SHA-256: 91C295400647892D5447BA0A9E90F97EED99BF76D2CEA8BC861E5A9647F3855F
+
+Physical-device checks intentionally left to the user:
+
+- Open the Gallery after installing the APK and confirm videos that previously showed blank/missing posters regenerate visible thumbnails while legitimately dark scenes remain accepted.
+- Scrub normal MP4 plus any affected AVI, FLV, and MKV from early, middle, and late positions; confirm the thumb follows the finger and playback resumes near the released position rather than jumping to zero.
+- Check a genuinely short clip (under one second if available) and confirm its duration/timeline remains usable.
+- Recheck the Redmi Note 9 H.264 camera video to confirm the established MediaTek hardware-decoder playback path remains intact.
+- Check that a small diagonal drag on the seek bar does not dismiss the viewer, then scrub during duration recovery and in landscape. With a formerly missing poster, check that it updates without reopening the screen and that opening/closing media retains its thumbnail.
+
+Scope/status: the faults above are confirmed from Gallery source and local regression tests. The specific affected phone files were not supplied in this pass, so physical rendering and seeking still require the user's test. AVI flag repair cannot create an index absent from the original file. Existing uncommitted album, search, navigation, version, and APK-server edits were retained. No commit or push was requested.
 
 ## 2026-10-14 Spring Motion System, Gesture Smoothing, and Performance Pass
 

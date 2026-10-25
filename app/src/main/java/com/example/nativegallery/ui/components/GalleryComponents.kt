@@ -3,6 +3,7 @@
 package com.example.nativegallery.ui.components
 
 import android.content.Context
+import android.content.ContentUris
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
@@ -30,6 +31,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -82,6 +84,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
@@ -90,11 +94,14 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.data.VideoFrameDecoder
+import com.example.nativegallery.data.VideoDurationCache
+import com.example.nativegallery.data.VideoDurationResolver
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.util.GalleryPerformanceMonitor
 import kotlinx.coroutines.flow.collectLatest
@@ -126,8 +133,9 @@ enum class ImageLoadQuality {
 private class LayoutCoordinatesRef(var value: LayoutCoordinates? = null)
 
 private object ThumbnailLoadCoordinator {
+    // A grid must not start sixteen simultaneous bitmap decodes beside an animation.
     private val loadSemaphore = Semaphore(permits = 4)
-    val videoDecodeSemaphore = Semaphore(permits = 1)
+    val videoDecodeSemaphore = Semaphore(permits = 2)
     private val keyLocks = ConcurrentHashMap<String, KeyLock>()
 
     private class KeyLock {
@@ -135,17 +143,21 @@ private object ThumbnailLoadCoordinator {
         val users = AtomicInteger(0)
     }
 
-    suspend fun load(cacheKey: String, loader: suspend () -> Bitmap?): Bitmap? {
-        ThumbnailMemoryCache.get(cacheKey)?.let { return it }
+    suspend fun load(
+        cacheKey: String,
+        validator: (Bitmap) -> Boolean = { true },
+        loader: suspend () -> Bitmap?
+    ): Bitmap? {
+        validatedCachedBitmap(cacheKey, validator)?.let { return it }
         val keyLock = keyLocks.compute(cacheKey) { _, existing ->
             (existing ?: KeyLock()).also { it.users.incrementAndGet() }
         } ?: return null
         return try {
             keyLock.mutex.withLock {
-                ThumbnailMemoryCache.get(cacheKey) ?: loadSemaphore.withPermit {
+                validatedCachedBitmap(cacheKey, validator) ?: loadSemaphore.withPermit {
                     withContext(Dispatchers.IO) {
                         currentCoroutineContext().ensureActive()
-                        loader()?.also { bitmap ->
+                        loader()?.takeIf(validator)?.also { bitmap ->
                             bitmap.prepareToDraw()
                             ThumbnailMemoryCache.put(cacheKey, bitmap)
                         }
@@ -164,9 +176,78 @@ private object ThumbnailLoadCoordinator {
             }
         }
     }
+
+    private fun validatedCachedBitmap(
+        cacheKey: String,
+        validator: (Bitmap) -> Boolean
+    ): Bitmap? {
+        val cached = ThumbnailMemoryCache.get(cacheKey) ?: return null
+        if (validator(cached)) return cached
+        ThumbnailMemoryCache.remove(cacheKey)
+        return null
+    }
 }
 
 private val thumbnailPrefetchSemaphore = Semaphore(permits = 2)
+private val videoMetadataSemaphore = Semaphore(permits = 2)
+private const val VideoPosterCacheVersion = "native-gallery-video-poster-v2"
+
+private data class ThumbnailPrefetchRequest(
+    val uri: Uri,
+    val size: Int,
+    val isVideo: Boolean,
+    val cacheRevision: String
+)
+
+internal fun mediaThumbnailCacheRevision(mediaItem: MediaItem): String {
+    return "${mediaItem.fileSizeBytes ?: -1L}:${mediaItem.dateModifiedMillis}"
+}
+
+internal fun shouldShowVideoThumbnailFallback(isVideo: Boolean, loadComplete: Boolean, cachedOnly: Boolean): Boolean {
+    return isVideo && loadComplete && !cachedOnly
+}
+
+@Composable
+internal fun rememberVideoDurationMillis(mediaItem: MediaItem): Long? {
+    val context = LocalContext.current.applicationContext
+    val uri = mediaItem.contentUri
+    val revision = mediaThumbnailCacheRevision(mediaItem)
+    var duration by remember(uri, revision) { mutableStateOf(mediaItem.durationMillis) }
+    LaunchedEffect(uri, revision, mediaItem.isVideo) {
+        if (!mediaItem.isVideo || uri == null) return@LaunchedEffect
+        duration = withContext(Dispatchers.IO) {
+            videoMetadataSemaphore.withPermit {
+                val key = VideoDurationCache.identity(uri, mediaItem.id, mediaItem.fileSizeBytes, mediaItem.dateModifiedMillis)
+                VideoDurationCache.get(context, key).takeIf { it > 0L } ?: run {
+                    val needsRecovery = duration == null || duration!! <= 0L ||
+                        mediaItem.title.substringAfterLast('.').lowercase() in setOf("avi", "flv", "mkv")
+                    if (needsRecovery) {
+                        VideoDurationResolver.resolve(context, uri, mediaItem.title, mediaItem.mimeType)
+                            .takeIf { it > 0L }
+                            ?.also { VideoDurationCache.put(context, key, it) }
+                            ?: mediaItem.durationMillis
+                    } else mediaItem.durationMillis
+                }
+            }
+        }
+    }
+    return duration
+}
+
+internal fun thumbnailCacheIdentityUri(
+    uri: Uri,
+    isVideo: Boolean,
+    cacheRevision: String?
+): Uri {
+    if (!isVideo) return uri
+    return uri.buildUpon()
+        .fragment("$VideoPosterCacheVersion:${cacheRevision.orEmpty()}")
+        .build()
+}
+
+internal fun mediaThumbnailCacheUri(mediaItem: MediaItem): Uri? = mediaItem.contentUri?.let {
+    thumbnailCacheIdentityUri(it, mediaItem.isVideo, mediaThumbnailCacheRevision(mediaItem))
+}
 
 @Composable
 fun ScreenHeader(
@@ -437,7 +518,8 @@ fun MediaThumbnail(
             thumbnailSize = 384,
             animatedPlaceholder = false,
             deferUncachedLoad = deferUncachedLoad,
-            isVideo = mediaItem.isVideo
+            isVideo = mediaItem.isVideo,
+            cacheRevision = mediaThumbnailCacheRevision(mediaItem)
         )
         if (selected) {
             Box(
@@ -462,8 +544,14 @@ fun MediaThumbnail(
             )
         }
         if (mediaItem.isVideo && mediaItem.contentUri != null) {
+            val durationMillis = rememberVideoDurationMillis(mediaItem)
             VideoBadge(
-                duration = mediaItem.durationLabel.orEmpty(),
+                duration = durationMillis?.takeIf { it > 0L }?.let { duration ->
+                    val seconds = duration / 1_000L
+                    if (seconds >= 3_600L) {
+                        String.format(java.util.Locale.US, "%d:%02d:%02d", seconds / 3_600L, seconds / 60L % 60L, seconds % 60L)
+                    } else String.format(java.util.Locale.US, "%02d:%02d", seconds / 60L, seconds % 60L)
+                } ?: mediaItem.durationLabel.orEmpty(),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(6.dp)
@@ -565,27 +653,40 @@ fun GalleryImage(
     allowApproximateCache: Boolean = true,
     fallbackImageUri: Uri? = null,
     isVideo: Boolean = false,
+    cacheRevision: String? = null,
     animatedPlaceholder: Boolean = true,
-    deferUncachedLoad: State<Boolean>? = null
+    deferUncachedLoad: State<Boolean>? = null,
+    drawBounds: (() -> Rect)? = null,
+    initialBitmap: Bitmap? = null,
+    previewContentScale: ContentScale? = null
 ) {
-    val bitmap = rememberContentUriBitmap(
+    val imageState = rememberContentUriBitmap(
         imageUri = imageUri,
         thumbnailSize = thumbnailSize,
         loadQuality = loadQuality,
         cachedOnly = cachedOnly,
         allowApproximateCache = allowApproximateCache,
         deferUncachedLoad = deferUncachedLoad,
-        isVideo = isVideo
+        isVideo = isVideo,
+        cacheRevision = cacheRevision
     )
+    val bitmap = imageState.bitmap ?: initialBitmap?.takeUnless { it.isRecycled }
     val fallbackBitmap = rememberContentUriBitmap(
-        imageUri = fallbackImageUri,
+        imageUri = fallbackImageUri?.takeUnless { it == imageUri },
         thumbnailSize = min(thumbnailSize, 512),
         loadQuality = ImageLoadQuality.Thumbnail,
-        cachedOnly = false,
+        cachedOnly = cachedOnly,
         allowApproximateCache = true,
         deferUncachedLoad = deferUncachedLoad,
-        isVideo = false
-    )
+        isVideo = false,
+        cacheRevision = null
+    ).bitmap
+    val displayedBitmap = bitmap ?: fallbackBitmap
+    androidx.compose.runtime.DisposableEffect(imageUri, displayedBitmap) {
+        val owner = Any()
+        if (imageUri != null && displayedBitmap != null) DisplayedBitmapCache.register(owner, imageUri, displayedBitmap)
+        onDispose { DisplayedBitmapCache.unregister(owner) }
+    }
     val shapedModifier = if (cornerRadius > 0.dp) {
         modifier.clip(RoundedCornerShape(cornerRadius))
     } else {
@@ -596,13 +697,33 @@ fun GalleryImage(
     ) {
         when {
             bitmap != null || fallbackBitmap != null -> {
-                Image(
-                    bitmap = (bitmap ?: fallbackBitmap!!).asImageBitmap(),
-                    contentDescription = contentDescription,
-                    contentScale = contentScale,
-                    modifier = Modifier.fillMaxSize(),
-                    colorFilter = colorFilter
-                )
+                val image = remember(bitmap, fallbackBitmap) { (bitmap ?: fallbackBitmap!!).asImageBitmap() }
+                if (drawBounds != null) {
+                    // Keep the image's layout fixed. Only its crop is redrawn as the hero moves.
+                    Canvas(Modifier.fillMaxSize()) {
+                        val bounds = drawBounds()
+                        val scale = max(bounds.width / image.width, bounds.height / image.height)
+                        clipRect(bounds.left, bounds.top, bounds.right, bounds.bottom) {
+                            withTransform({
+                                translate(
+                                    bounds.center.x - image.width * scale / 2f,
+                                    bounds.center.y - image.height * scale / 2f
+                                )
+                                scale(scale, scale, pivot = Offset.Zero)
+                            }) {
+                                drawImage(image, colorFilter = colorFilter)
+                            }
+                        }
+                    }
+                } else {
+                    Image(
+                        bitmap = image,
+                        contentDescription = contentDescription,
+                        contentScale = if (imageState.loadComplete) contentScale else previewContentScale ?: contentScale,
+                        modifier = Modifier.fillMaxSize(),
+                        colorFilter = colorFilter
+                    )
+                }
             }
             imageRes != null -> {
                 Image(
@@ -613,7 +734,7 @@ fun GalleryImage(
                     colorFilter = colorFilter
                 )
             }
-            isVideo -> {
+            shouldShowVideoThumbnailFallback(isVideo, imageState.loadComplete, cachedOnly) -> {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -653,6 +774,7 @@ fun SkeletonBlock(
 ) {
     val base = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f)
     val highlight = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+    val shimmerColors = remember(base, highlight) { listOf(base, highlight, base) }
     val transition = rememberInfiniteTransition(label = "skeleton shimmer")
     val offset = transition.animateFloat(
         initialValue = -420f,
@@ -666,13 +788,14 @@ fun SkeletonBlock(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(cornerRadius))
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(base, highlight, base),
-                    start = Offset(offset.value, 0f),
-                    end = Offset(offset.value + 360f, 360f)
-                )
-            )
+            .drawBehind {
+                val currentOffset = offset.value
+                drawRect(Brush.linearGradient(
+                    colors = shimmerColors,
+                    start = Offset(currentOffset, 0f),
+                    end = Offset(currentOffset + 360f, 360f)
+                ))
+            }
     )
 }
 
@@ -806,7 +929,8 @@ suspend fun prefetchMediaThumbnails(
     mediaItems: List<MediaItem>,
     thumbnailSizes: List<Int> = listOf(384, 512),
     maxItems: Int = 96,
-    pinInMemory: Boolean = false
+    pinInMemory: Boolean = false,
+    videoCacheOnly: Boolean = false
 ) {
     if (mediaItems.isEmpty()) return
     val appContext = context.applicationContext
@@ -815,32 +939,54 @@ suspend fun prefetchMediaThumbnails(
         .distinct()
         .ifEmpty { listOf(384) }
     val requests = mediaItems.asSequence()
-        .mapNotNull { mediaItem -> mediaItem.contentUri?.let { uri -> uri to mediaItem.isVideo } }
+        .mapNotNull { mediaItem ->
+            mediaItem.contentUri?.let { uri ->
+                Triple(uri, mediaItem.isVideo, mediaThumbnailCacheRevision(mediaItem))
+            }
+        }
         .distinctBy { it.first }
         .take(maxItems.coerceAtLeast(0))
-        .flatMap { (uri, isVideo) -> sizes.asSequence().map { size -> Triple(uri, size, isVideo) } }
+        .flatMap { (uri, isVideo, cacheRevision) ->
+            sizes.asSequence().map { size ->
+                ThumbnailPrefetchRequest(uri, size, isVideo, cacheRevision)
+            }
+        }
         .distinct()
         .toList()
     if (requests.isEmpty()) return
 
     GalleryPerformanceMonitor.traceSuspend("Thumbnail prefetch ${mediaItems.size} items") {
         coroutineScope {
-            requests.map { (uri, size, isVideo) ->
+            requests.map { request ->
                 async {
                     thumbnailPrefetchSemaphore.withPermit {
                         currentCoroutineContext().ensureActive()
-                        val loadQuality = if (size >= 1024 && !isVideo) {
+                        val loadQuality = if (request.size >= 1024 && !request.isVideo) {
                             ImageLoadQuality.HighQuality
                         } else ImageLoadQuality.Thumbnail
-                        val bitmap = loadCachedBitmap(
+                        val bitmap = if (request.isVideo && videoCacheOnly) {
+                            loadPersistedThumbnail(
+                                appContext, request.uri, request.size, loadQuality,
+                                isVideo = true, cacheRevision = request.cacheRevision
+                            )
+                        } else loadCachedBitmap(
                             context = appContext,
-                            imageUri = uri,
-                            thumbnailSize = size,
+                            imageUri = request.uri,
+                            thumbnailSize = request.size,
                             loadQuality = loadQuality,
-                            isVideo = isVideo
+                            isVideo = request.isVideo,
+                            cacheRevision = request.cacheRevision
                         )
                         if (pinInMemory && bitmap != null) {
-                            ThumbnailMemoryCache.pin(ThumbnailMemoryCache.key(uri, size, loadQuality), bitmap)
+                            val cacheUri = thumbnailCacheIdentityUri(
+                                request.uri,
+                                request.isVideo,
+                                request.cacheRevision
+                            )
+                            ThumbnailMemoryCache.pin(
+                                ThumbnailMemoryCache.key(cacheUri, request.size, loadQuality),
+                                bitmap
+                            )
                         }
                     }
                 }
@@ -850,8 +996,27 @@ suspend fun prefetchMediaThumbnails(
 }
 private val VideoFrameCacheScope = CoroutineScope(Dispatchers.IO)
 
-fun cacheVideoFrameThumbnail(context: Context, uri: Uri, frame: Bitmap) {
+fun cacheVideoFrameThumbnail(
+    context: Context,
+    uri: Uri,
+    frame: Bitmap,
+    cacheRevision: String? = null
+) {
+    if (frame.isRecycled || frame.width <= 0 || frame.height <= 0) return
     val appContext = context.applicationContext
+    val cacheUri = thumbnailCacheIdentityUri(uri, isVideo = true, cacheRevision)
+
+    val highQualityKey = ThumbnailMemoryCache.key(cacheUri, 1024, ImageLoadQuality.HighQuality)
+    val highQualityBitmap = if (max(frame.width, frame.height) <= 1024) {
+        frame.copy(Bitmap.Config.ARGB_8888, false)
+    } else {
+        val scale = 1024f / max(frame.width, frame.height)
+        Bitmap.createScaledBitmap(frame, (frame.width * scale).roundToInt(), (frame.height * scale).roundToInt(), true)
+    }
+    highQualityBitmap?.let {
+        ThumbnailMemoryCache.replace(highQualityKey, it)
+    }
+
     val entries = listOf(384, 512).map { size ->
         val scale = (size.toFloat() / max(frame.width, frame.height)).coerceAtMost(1f)
         val width = (frame.width * scale).roundToInt().coerceAtLeast(1)
@@ -861,7 +1026,7 @@ fun cacheVideoFrameThumbnail(context: Context, uri: Uri, frame: Bitmap) {
         } else {
             Bitmap.createScaledBitmap(frame, width, height, true)
         }
-        val cacheKey = ThumbnailMemoryCache.key(uri, size)
+        val cacheKey = ThumbnailMemoryCache.key(cacheUri, size)
         ThumbnailMemoryCache.replace(cacheKey, cachedFrame)
         cacheKey to cachedFrame
     }
@@ -880,117 +1045,208 @@ private fun rememberContentUriBitmap(
     cachedOnly: Boolean,
     allowApproximateCache: Boolean,
     isVideo: Boolean,
+    cacheRevision: String?,
     deferUncachedLoad: State<Boolean>?
-): Bitmap? {
+): GalleryBitmapResult {
     val context = LocalContext.current.applicationContext
-    val cacheKey = imageUri?.let { ThumbnailMemoryCache.key(it, thumbnailSize, loadQuality) }
+    val cacheUri = imageUri?.let { thumbnailCacheIdentityUri(it, isVideo, cacheRevision) }
+    val cacheKey = cacheUri?.let { ThumbnailMemoryCache.key(it, thumbnailSize, loadQuality) }
+    var loadComplete by remember(imageUri, cacheKey, cachedOnly, allowApproximateCache) {
+        mutableStateOf(imageUri == null)
+    }
 
-    var bitmap by remember(imageUri, thumbnailSize, loadQuality, cachedOnly, allowApproximateCache, isVideo) {
+    var bitmap by remember(
+        imageUri,
+        thumbnailSize,
+        loadQuality,
+        cachedOnly,
+        allowApproximateCache,
+        isVideo,
+        cacheRevision
+    ) {
         mutableStateOf(
-            cacheKey?.let { ThumbnailMemoryCache.get(it) }
+            cacheKey?.let { key ->
+                ThumbnailMemoryCache.get(key)?.takeUnless { it.isRecycled }
+            }
                 ?: imageUri
                     ?.takeIf { allowApproximateCache }
-                    ?.let { ThumbnailMemoryCache.getNearest(it, thumbnailSize, loadQuality) }
+                    ?.let {
+                        ThumbnailMemoryCache.getNearest(
+                            thumbnailCacheIdentityUri(it, isVideo, cacheRevision),
+                            thumbnailSize,
+                            loadQuality
+                        ) ?: if (loadQuality == ImageLoadQuality.HighQuality) {
+                            ThumbnailMemoryCache.getNearest(it, min(thumbnailSize, 512))
+                        } else null
+                    }
         )
     }
 
-    LaunchedEffect(imageUri, thumbnailSize, loadQuality, cachedOnly, allowApproximateCache, isVideo, deferUncachedLoad) {
+    LaunchedEffect(
+        imageUri,
+        thumbnailSize,
+        loadQuality,
+        cachedOnly,
+        allowApproximateCache,
+        isVideo,
+        cacheRevision,
+        deferUncachedLoad
+    ) {
         if (imageUri == null || cacheKey == null) {
             bitmap = null
             return@LaunchedEffect
         }
+        val resolvedCacheUri = cacheUri ?: return@LaunchedEffect
 
-        suspend fun loadAndPublish() {
-            ThumbnailMemoryCache.get(cacheKey)?.let { cachedBitmap ->
+        suspend fun loadAndPublish(allowUncached: Boolean) {
+            ThumbnailMemoryCache.get(cacheKey)?.takeUnless { it.isRecycled }?.let { cachedBitmap ->
                 bitmap = cachedBitmap
+                loadComplete = true
                 return
+            }
+            if (allowApproximateCache) {
+                ThumbnailMemoryCache.getNearest(resolvedCacheUri, thumbnailSize, loadQuality)?.let { cachedBitmap ->
+                    if (bitmap == null) bitmap = cachedBitmap
+                }
+            }
+            if (!allowUncached && !cachedOnly) return
+            if (
+                loadQuality == ImageLoadQuality.Thumbnail && thumbnailSize <= 512 &&
+                (cachedOnly || !allowUncached)
+            ) {
+                val diskCached = withContext(Dispatchers.IO) {
+                    ThumbnailDiskCache.get(context, cacheKey)?.takeUnless { it.isRecycled }
+                }
+                if (diskCached != null) {
+                    diskCached.prepareToDraw()
+                    ThumbnailMemoryCache.put(cacheKey, diskCached)
+                    bitmap = diskCached
+                    loadComplete = true
+                    return
+                }
             }
             if (cachedOnly) {
-                if (allowApproximateCache) {
-                    ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize, loadQuality)?.let { cachedBitmap ->
-                        bitmap = cachedBitmap
-                        return
-                    }
-                }
-                loadPersistedThumbnail(context, imageUri, thumbnailSize, loadQuality)?.let { loadedBitmap ->
-                    bitmap = loadedBitmap
-                }
+                loadComplete = true
                 return
             }
-            if (bitmap == null && allowApproximateCache) {
-                bitmap = ThumbnailMemoryCache.getNearest(imageUri, thumbnailSize, loadQuality)
+            if (!allowUncached) return
+
+            loadCachedBitmap(
+                context,
+                imageUri,
+                thumbnailSize,
+                loadQuality,
+                isVideo,
+                cacheRevision
+            )?.let { loadedBitmap ->
+                GalleryImageWorkScheduler.awaitIdle()
+                bitmap = loadedBitmap
             }
-            loadCachedBitmap(context, imageUri, thumbnailSize, loadQuality, isVideo)?.let { loadedBitmap ->
-                if (deferUncachedLoad?.value != true) {
-                    bitmap = loadedBitmap
-                }
-            }
+            loadComplete = true
         }
 
         val loadGate = deferUncachedLoad
         if (loadGate == null) {
-            loadAndPublish()
+            loadAndPublish(allowUncached = true)
         } else {
             snapshotFlow { loadGate.value }.collectLatest { deferred ->
-                if (!deferred) loadAndPublish()
+                loadAndPublish(allowUncached = !deferred)
             }
         }
     }
-    return bitmap
+    return GalleryBitmapResult(bitmap, loadComplete)
 }
+
+private data class GalleryBitmapResult(val bitmap: Bitmap?, val loadComplete: Boolean)
 
 private suspend fun loadCachedBitmap(
     context: Context,
     imageUri: Uri,
     thumbnailSize: Int,
     loadQuality: ImageLoadQuality,
-    isVideo: Boolean = false
+    isVideo: Boolean = false,
+    cacheRevision: String? = null
 ): Bitmap? {
-    val cacheKey = ThumbnailMemoryCache.key(imageUri, thumbnailSize, loadQuality)
+    val cacheUri = thumbnailCacheIdentityUri(imageUri, isVideo, cacheRevision)
+    val cacheKey = ThumbnailMemoryCache.key(cacheUri, thumbnailSize, loadQuality)
     val diskCacheEligible = loadQuality == ImageLoadQuality.Thumbnail && thumbnailSize <= 512
-    return ThumbnailLoadCoordinator.load(cacheKey) loader@{
-        if (diskCacheEligible) {
-            ThumbnailDiskCache.get(context, cacheKey)?.let { return@loader it }
+    val validator: (Bitmap) -> Boolean = { bitmap ->
+        !bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0
+    }
+    // Prefetch uses this path too. Never decode a disk entry again for a live memory hit.
+    ThumbnailMemoryCache.get(cacheKey)?.takeIf(validator)?.let { return it }
+    GalleryImageWorkScheduler.awaitIdle()
+    if (diskCacheEligible) {
+        val diskHit = withContext(Dispatchers.IO) {
+            ThumbnailDiskCache.get(context, cacheKey)?.let { cached ->
+                if (validator(cached)) {
+                    cached.prepareToDraw()
+                    ThumbnailMemoryCache.put(cacheKey, cached)
+                    cached
+                } else {
+                    ThumbnailDiskCache.remove(context, cacheKey)
+                    null
+                }
+            }
         }
+        if (diskHit != null) return diskHit
+    }
+    suspend fun decodePlatformThumbnail(): Bitmap? = ThumbnailLoadCoordinator.load(cacheKey, validator) {
         val loaded = when (loadQuality) {
             ImageLoadQuality.Thumbnail -> {
-                if (isVideo) {
-                    ThumbnailLoadCoordinator.videoDecodeSemaphore.withPermit {
-                        loadThumbnail(context, imageUri, thumbnailSize, isVideo = true)
-                    }
-                } else {
-                    loadThumbnail(context, imageUri, thumbnailSize, isVideo = false)
-                }
+                loadThumbnail(context, imageUri, thumbnailSize, isVideo = isVideo)
             }
             ImageLoadQuality.HighQuality -> loadHighQualityBitmap(context, imageUri, thumbnailSize)
                 ?: loadSampledBitmap(context, imageUri, thumbnailSize)
-                ?: if (isVideo) {
-                    ThumbnailLoadCoordinator.videoDecodeSemaphore.withPermit {
-                        loadThumbnail(context, imageUri, thumbnailSize, isVideo = true)
-                    }
-                } else {
-                    loadThumbnail(context, imageUri, thumbnailSize, isVideo = false)
-                }
+                ?: loadThumbnail(context, imageUri, thumbnailSize, isVideo = isVideo)
         }
         if (diskCacheEligible) {
             loaded?.let { ThumbnailDiskCache.put(context, cacheKey, it) }
         }
         loaded
     }
+    // Disk hits are served above, independently of slow video codecs. Never occupy the
+    // shared image-loader permits while queued behind another video's native decoder.
+    val platformBitmap = if (isVideo) {
+        ThumbnailLoadCoordinator.videoDecodeSemaphore.withPermit { decodePlatformThumbnail() }
+    } else {
+        decodePlatformThumbnail()
+    }
+    if (platformBitmap != null || !isVideo) return platformBitmap
+
+    // A fallback may wait while the user views media. Do not hold the shared image-loader
+    // permits or per-key lock during that wait: full-quality photos must still load immediately.
+    ThumbnailMemoryCache.get(cacheKey)?.let { return it }
+    val decodedFrame = VideoThumbnailDecoder.decode(context, imageUri, thumbnailSize) ?: return null
+    currentCoroutineContext().ensureActive()
+    decodedFrame.prepareToDraw()
+    ThumbnailMemoryCache.replace(cacheKey, decodedFrame)
+    if (diskCacheEligible) ThumbnailDiskCache.replace(context, cacheKey, decodedFrame)
+    return decodedFrame
 }
 
 private suspend fun loadPersistedThumbnail(
     context: Context,
     imageUri: Uri,
     thumbnailSize: Int,
-    loadQuality: ImageLoadQuality
+    loadQuality: ImageLoadQuality,
+    isVideo: Boolean,
+    cacheRevision: String?
 ): Bitmap? {
     if (loadQuality != ImageLoadQuality.Thumbnail || thumbnailSize > 512) return null
-    val cacheKey = ThumbnailMemoryCache.key(imageUri, thumbnailSize)
-    return ThumbnailLoadCoordinator.load(cacheKey) {
-        // Transition previews must never trigger a new MediaStore decode. If neither memory nor
-        // the existing disk cache has the frame, the lightweight placeholder is intentional.
-        ThumbnailDiskCache.get(context, cacheKey)
+    val cacheUri = thumbnailCacheIdentityUri(imageUri, isVideo, cacheRevision)
+    val cacheKey = ThumbnailMemoryCache.key(cacheUri, thumbnailSize)
+    val validator: (Bitmap) -> Boolean = { bitmap ->
+        !bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0
+    }
+    ThumbnailMemoryCache.get(cacheKey)?.takeIf(validator)?.let { return it }
+    return withContext(Dispatchers.IO) {
+        ThumbnailDiskCache.get(context, cacheKey)?.also { cached ->
+            if (!validator(cached)) ThumbnailDiskCache.remove(context, cacheKey)
+        }?.takeIf(validator)?.also {
+            it.prepareToDraw()
+            ThumbnailMemoryCache.put(cacheKey, it)
+        }
     }
 }
 
@@ -999,7 +1255,9 @@ private fun loadHighQualityBitmap(context: Context, imageUri: Uri, maxSide: Int)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val source = ImageDecoder.createSource(context.contentResolver, imageUri)
             ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                // Viewer images are immutable and only drawn by the hardware renderer.
+                // Keep them GPU-backed instead of uploading large software bitmaps on entry.
+                decoder.allocator = ImageDecoder.ALLOCATOR_HARDWARE
                 val width = info.size.width
                 val height = info.size.height
                 val largestSide = max(width, height)
@@ -1053,24 +1311,41 @@ private fun loadThumbnail(
     isVideo: Boolean
 ): Bitmap? {
     val resolver = context.contentResolver
-    val resolvedMimeType = runCatching { resolver.getType(imageUri) }.getOrNull()
-    val videoSource = resolvedMimeType?.startsWith("video/") == true ||
-        (isVideo && resolvedMimeType?.startsWith("image/") != true)
+    val videoSource = isVideo
     val platformThumbnail = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         runCatching {
             resolver.loadThumbnail(imageUri, Size(thumbnailSize, thumbnailSize), null)
         }.getOrNull()
+    } else if (videoSource) {
+        @Suppress("DEPRECATION")
+        runCatching {
+            MediaStore.Video.Thumbnails.getThumbnail(
+                resolver,
+                ContentUris.parseId(imageUri),
+                MediaStore.Video.Thumbnails.MINI_KIND,
+                null
+            )
+        }.getOrNull()
     } else {
         null
     }
-    if (platformThumbnail != null) return platformThumbnail
-    return runCatching {
+    if (platformThumbnail != null) {
+        if (!videoSource || !VideoFrameDecoder.isFrameTooDark(platformThumbnail)) {
+            return platformThumbnail
+        }
+    }
+    val fallback = runCatching {
         if (videoSource) {
             loadLegacyVideoThumbnail(context, imageUri, thumbnailSize)
         } else {
             loadSampledBitmap(context, imageUri, thumbnailSize)
         }
     }.getOrNull()
+    if (fallback != null) {
+        platformThumbnail?.recycle()
+        return fallback
+    }
+    return platformThumbnail
 }
 
 private fun loadLegacyVideoThumbnail(context: Context, uri: Uri, thumbnailSize: Int): Bitmap? {

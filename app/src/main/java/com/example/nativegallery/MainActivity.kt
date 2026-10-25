@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -31,7 +32,9 @@ import com.example.nativegallery.data.GallerySettings
 import com.example.nativegallery.data.GallerySettingsRepository
 import com.example.nativegallery.data.GalleryThemeMode
 import com.example.nativegallery.ui.GalleryApp
+import com.example.nativegallery.ui.components.VideoThumbnailDecoderHost
 import com.example.nativegallery.ui.theme.GalleryTheme
+import kotlinx.coroutines.flow.first
 
 class MainActivity : ComponentActivity() {
     private var performanceModeEnabled = true
@@ -58,6 +61,8 @@ class MainActivity : ComponentActivity() {
             }
             var renderedDarkTheme by remember { mutableStateOf(darkTheme) }
             var themeTransitionActive by remember { mutableStateOf(false) }
+            var themeSnapshotPending by remember { mutableStateOf(false) }
+            var themeSnapshotReady by remember { mutableStateOf(false) }
             val themeTransitionAlpha = remember { Animatable(0f) }
             val previousThemeFrame = rememberGraphicsLayer()
             val onGallerySettingsChange: (GallerySettings) -> Unit =
@@ -70,10 +75,9 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(darkTheme) {
                 if (renderedDarkTheme == darkTheme) return@LaunchedEffect
 
-                // The graphics layer already contains the most recently rendered frame. Freeze
-                // it before replacing MaterialTheme, then reveal the new frame underneath. This
-                // mirrors the browser View Transitions approach without re-composing two copies
-                // of GalleryApp or animating every individual color consumer.
+                themeSnapshotPending = true
+                snapshotFlow { themeSnapshotReady }.first { it }
+                themeSnapshotReady = false
                 themeTransitionAlpha.snapTo(1f)
                 themeTransitionActive = true
                 renderedDarkTheme = darkTheme
@@ -105,19 +109,23 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .fillMaxSize()
                     .drawWithContent {
-                        if (themeTransitionActive) {
+                        if (themeSnapshotPending) {
+                            previousThemeFrame.record {
+                                this@drawWithContent.drawContent()
+                            }
+                            drawContent()
+                            themeSnapshotPending = false
+                            themeSnapshotReady = true
+                        } else if (themeTransitionActive) {
                             drawContent()
                             previousThemeFrame.alpha = themeTransitionAlpha.value
                             drawLayer(previousThemeFrame)
                         } else {
-                            previousThemeFrame.alpha = 1f
-                            previousThemeFrame.record {
-                                this@drawWithContent.drawContent()
-                            }
-                            drawLayer(previousThemeFrame)
+                            drawContent()
                         }
                     }
             ) {
+                VideoThumbnailDecoderHost(themeChanging = themeTransitionActive)
                 GalleryTheme(darkTheme = renderedDarkTheme) {
                     GalleryApp(
                         settings = gallerySettings,

@@ -31,8 +31,8 @@ android {
         applicationId = "com.swailumzafar.nativegallery"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.9.7"
+        versionCode = 14
+        versionName = "0.9.13"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables {
@@ -62,6 +62,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        create("benchmark") {
+            initWith(getByName("release"))
+            // Installable over local builds, with production compilation and shrinking enabled.
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
         }
     }
 
@@ -117,4 +123,5 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.mockito:mockito-core:5.23.0")
 }

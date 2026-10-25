@@ -333,6 +333,7 @@ class MediaStoreGalleryRepository(
                     durationMillis = videoDurationMillis,
                     mimeType = mimeType,
                     fileSizeBytes = fileSizeBytes,
+                    dateModifiedMillis = dateModifiedSeconds.coerceAtLeast(0L) * 1_000L,
                     width = width,
                     height = height,
                     relativePath = path,

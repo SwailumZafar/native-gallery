@@ -18,6 +18,7 @@ data class MediaItem(
     val durationMillis: Long? = null,
     val mimeType: String? = null,
     val fileSizeBytes: Long? = null,
+    val dateModifiedMillis: Long = 0L,
     val width: Int? = null,
     val height: Int? = null,
     val relativePath: String? = null,

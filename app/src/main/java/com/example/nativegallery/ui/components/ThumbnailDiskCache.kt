@@ -9,6 +9,7 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 
 object ThumbnailDiskCache {
     private const val DirectoryName = "gallery_thumbnails_v1"
@@ -16,7 +17,16 @@ object ThumbnailDiskCache {
     private const val AccessTimeUpdateIntervalMillis = 6L * 60L * 60L * 1000L
     private val writesSinceTrim = AtomicInteger(0)
     private val lock = Any()
-    private val writer = Executors.newSingleThreadExecutor()
+    private data class PendingWrite(val bitmap: Bitmap, val overwrite: Boolean)
+    private val pendingLock = Any()
+    private val pendingWrites = mutableMapOf<String, PendingWrite>()
+    private val writeSlots = Semaphore(24)
+    private val writer = Executors.newSingleThreadExecutor { task ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            task.run()
+        }, "GalleryThumbnailWriter")
+    }
 
     fun get(context: Context, cacheKey: String): Bitmap? {
         val file = cacheFile(context, cacheKey)
@@ -41,15 +51,38 @@ object ThumbnailDiskCache {
         enqueueWrite(context, cacheKey, bitmap, overwrite = true)
     }
 
+    fun remove(context: Context, cacheKey: String) {
+        synchronized(lock) {
+            runCatching { cacheFile(context, cacheKey).delete() }
+        }
+    }
+
     private fun enqueueWrite(
         context: Context,
         cacheKey: String,
         bitmap: Bitmap,
         overwrite: Boolean
     ) {
+        if (bitmap.isRecycled) return
+        synchronized(pendingLock) {
+            if (pendingWrites.containsKey(cacheKey)) {
+                // A decoded video frame may supersede a queued placeholder/poster.
+                if (overwrite) pendingWrites[cacheKey] = PendingWrite(bitmap, true)
+                return
+            }
+            if (!writeSlots.tryAcquire()) return
+            pendingWrites[cacheKey] = PendingWrite(bitmap, overwrite)
+        }
         val appContext = context.applicationContext
         writer.execute {
-            putBlocking(appContext, cacheKey, bitmap, overwrite)
+            try {
+                val request = synchronized(pendingLock) { pendingWrites.remove(cacheKey) }
+                if (request != null && !request.bitmap.isRecycled) {
+                    putBlocking(appContext, cacheKey, request.bitmap, request.overwrite)
+                }
+            } finally {
+                writeSlots.release()
+            }
         }
     }
 
@@ -94,8 +127,14 @@ object ThumbnailDiskCache {
     private fun cacheFile(context: Context, cacheKey: String): File {
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(cacheKey.toByteArray(Charsets.UTF_8))
-            .joinToString("") { byte -> "%02x".format(byte) }
-        return File(File(context.cacheDir, DirectoryName), "$digest.webp")
+        val hex = "0123456789abcdef"
+        val name = CharArray(digest.size * 2)
+        digest.forEachIndexed { index, byte ->
+            val value = byte.toInt() and 0xff
+            name[index * 2] = hex[value ushr 4]
+            name[index * 2 + 1] = hex[value and 0x0f]
+        }
+        return File(File(context.cacheDir, DirectoryName), "${String(name)}.webp")
     }
 
     private fun trim(directory: File) {

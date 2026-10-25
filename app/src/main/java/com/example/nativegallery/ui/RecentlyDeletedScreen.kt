@@ -26,6 +26,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -328,6 +330,10 @@ fun RecentlyDeletedScreen(
         val itemCount = pending.items.size
         AlertDialog(
             onDismissRequest = { confirmation = null },
+            modifier = Modifier
+                .widthIn(min = 340.dp, max = 460.dp)
+                .fillMaxWidth(0.92f),
+            properties = DialogProperties(usePlatformDefaultWidth = false),
             title = {
                 Text(
                     when (pending.mode) {

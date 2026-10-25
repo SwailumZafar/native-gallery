@@ -215,6 +215,39 @@ class GalleryLogicTest {
         hasSelection = hasSelection
     )
 
+    @Test
+    fun bottomBarTabForX_accuratelyMapsAllThreeTabs() {
+        val threshold01 = 79f
+        val threshold12 = 159f
+
+        // Photos tab
+        assertEquals(GalleryTab.Photos, galleryBottomBarTabForX(0f, threshold01, threshold12))
+        assertEquals(GalleryTab.Photos, galleryBottomBarTabForX(39f, threshold01, threshold12))
+        assertEquals(GalleryTab.Photos, galleryBottomBarTabForX(78f, threshold01, threshold12))
+
+        // Albums tab
+        assertEquals(GalleryTab.Albums, galleryBottomBarTabForX(79f, threshold01, threshold12))
+        assertEquals(GalleryTab.Albums, galleryBottomBarTabForX(119f, threshold01, threshold12))
+        assertEquals(GalleryTab.Albums, galleryBottomBarTabForX(158f, threshold01, threshold12))
+
+        // Menu tab
+        assertEquals(GalleryTab.Menu, galleryBottomBarTabForX(159f, threshold01, threshold12))
+        assertEquals(GalleryTab.Menu, galleryBottomBarTabForX(199f, threshold01, threshold12))
+        assertEquals(GalleryTab.Menu, galleryBottomBarTabForX(240f, threshold01, threshold12))
+    }
+
+    @Test
+    fun bottomBarPageForX_clampsAndInterpolatesSmoothly() {
+        val center0 = 39f
+        val step = 80f
+
+        assertEquals(0f, galleryBottomBarPageForX(0f, center0, step), 0.001f)
+        assertEquals(0f, galleryBottomBarPageForX(39f, center0, step), 0.001f)
+        assertEquals(1f, galleryBottomBarPageForX(119f, center0, step), 0.001f)
+        assertEquals(2f, galleryBottomBarPageForX(199f, center0, step), 0.001f)
+        assertEquals(2f, galleryBottomBarPageForX(300f, center0, step), 0.001f)
+    }
+
     private fun media(id: String, dateLabel: String = "Today") = MediaItem(
         id = id,
         albumId = "camera",

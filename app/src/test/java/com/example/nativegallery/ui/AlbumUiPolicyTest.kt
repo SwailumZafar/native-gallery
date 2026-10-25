@@ -8,6 +8,22 @@ import org.junit.Test
 
 class AlbumUiPolicyTest {
     @Test
+    fun heroAndSquareReorderFramesReachExactDestinationSizes() {
+        assertEquals(1f, albumReorderFrameRatio(400f, 180f, 0f), 0.001f)
+        assertEquals(0.725f, albumReorderFrameRatio(400f, 180f, 0.5f), 0.001f)
+        assertEquals(180f, 400f * albumReorderFrameRatio(400f, 180f, 1f), 0.001f)
+        assertEquals(400f, 180f * albumReorderFrameRatio(180f, 400f, 1f), 0.001f)
+        assertEquals(176f, 176f * albumReorderFrameRatio(176f, 176f, 0.5f), 0.001f)
+    }
+
+    @Test
+    fun frameMorphIgnoresInvalidBoundsAndClampsSpringOvershoot() {
+        assertEquals(1f, albumReorderFrameRatio(0f, 180f, 1f), 0.001f)
+        assertEquals(1f, albumReorderFrameRatio(Float.NaN, 180f, 1f), 0.001f)
+        assertEquals(0.5f, albumReorderFrameRatio(400f, 200f, 1.2f), 0.001f)
+        assertEquals(1f, albumReorderFrameRatio(400f, 200f, -0.2f), 0.001f)
+    }
+    @Test
     fun dropTargetAcceptsAnAlbumPlacedAcrossAnotherCardsEdge() {
         val targetId = selectAlbumDropTargetId(
             draggedAlbumId = "camera",

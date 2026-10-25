@@ -8,7 +8,6 @@ package com.example.nativegallery.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
@@ -22,6 +21,10 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.BorderStroke
@@ -47,6 +50,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyListScope
@@ -138,12 +143,14 @@ import com.example.nativegallery.ui.components.ScreenHeader
 import com.example.nativegallery.ui.components.SearchPill
 import com.example.nativegallery.ui.components.SkeletonBlock
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
+import com.example.nativegallery.ui.components.mediaThumbnailCacheRevision
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 enum class AlbumDetailGridMode(val columns: Int) {
     Single(1),
@@ -272,18 +279,26 @@ private enum class AlbumDragSelectMode {
     Remove
 }
 
+internal fun albumReorderFrameRatio(source: Float, target: Float, progress: Float): Float {
+    if (!source.isFinite() || !target.isFinite() || source <= 0f || target <= 0f) return 1f
+    val fraction = if (progress.isFinite()) progress.coerceIn(0f, 1f) else 0f
+    return 1f + (target / source - 1f) * fraction
+}
+
 private class AlbumCardInteraction(
     val enabled: Boolean,
+    val suppressPlacementAnimation: Boolean,
     val pinnedAlbumId: String?,
     val draggedAlbumId: String?,
     val dropTargetAlbumId: String?,
     val dragOffset: Offset,
     val dropSettling: Boolean,
-    val dropSettleProgress: Float,
+    val dropSettleProgress: State<Float>,
     val dropSettleStartOffset: Offset,
     val dropSettleTargetOffset: Offset,
     val dropTargetSwapOffset: Offset,
-    val draggedPreviewScale: Float,
+    val draggedBounds: Rect?,
+    val dropTargetBounds: Rect?,
     val contextAlbumId: String?,
     val canDelete: (Album) -> Boolean,
     val onPinToggle: (Album) -> Unit,
@@ -292,7 +307,7 @@ private class AlbumCardInteraction(
     val onDeleteRequest: (Album) -> Unit,
     val onDragStart: (Album) -> Unit,
     val onDrag: (Offset) -> Unit,
-    val onDragEnd: () -> Unit
+    val onDragEnd: (commit: Boolean) -> Unit
 )
 
 @Composable
@@ -371,6 +386,7 @@ fun AlbumsScreen(
     val reorderScope = rememberCoroutineScope()
     val dropSettleProgress = remember { Animatable(1f) }
     var dropSettling by remember { mutableStateOf(false) }
+    var suppressPlacementAnimation by remember { mutableStateOf(false) }
     var dropSettleStartOffset by remember { mutableStateOf(Offset.Zero) }
     var dropSettleTargetOffset by remember { mutableStateOf(Offset.Zero) }
     val isRefreshing = remember { mutableStateOf(false) }
@@ -404,37 +420,9 @@ fun AlbumsScreen(
     val dropTargetSwapOffset = if (
         draggedBounds != null && dropTargetBounds != null && draggedAlbumId != dropTargetAlbumId
     ) {
-        val fullOffset = draggedBounds.center - dropTargetBounds.center
-        val widthRatio = max(
-            draggedBounds.width / dropTargetBounds.width.coerceAtLeast(1f),
-            dropTargetBounds.width / draggedBounds.width.coerceAtLeast(1f)
-        )
-        val heightRatio = max(
-            draggedBounds.height / dropTargetBounds.height.coerceAtLeast(1f),
-            dropTargetBounds.height / draggedBounds.height.coerceAtLeast(1f)
-        )
-        if (widthRatio > 1.32f || heightRatio > 1.32f) {
-            // The hero and square cards should acknowledge each other without trying to exchange
-            // differently shaped frames. Cap the target nudge while the dragged card stays true
-            // to its own aspect ratio.
-            val distance = fullOffset.getDistance().coerceAtLeast(1f)
-            val maximumNudge = min(dropTargetBounds.width, dropTargetBounds.height) * 0.16f
-            fullOffset * (maximumNudge / distance).coerceAtMost(1f)
-        } else {
-            fullOffset
-        }
+        draggedBounds.center - dropTargetBounds.center
     } else {
         Offset.Zero
-    }
-    val draggedPreviewScale = if (
-        draggedBounds != null && dropTargetBounds != null && draggedAlbumId != dropTargetAlbumId
-    ) {
-        min(
-            dropTargetBounds.width / draggedBounds.width.coerceAtLeast(1f),
-            dropTargetBounds.height / draggedBounds.height.coerceAtLeast(1f)
-        ).coerceIn(0.72f, 1.08f)
-    } else {
-        1f
     }
 
     fun clearAlbumDrag() {
@@ -448,16 +436,18 @@ fun AlbumsScreen(
 
     val cardInteraction = AlbumCardInteraction(
         enabled = reorderEnabled,
+        suppressPlacementAnimation = suppressPlacementAnimation,
         pinnedAlbumId = arrangementState.pinnedAlbumId,
         draggedAlbumId = draggedAlbumId,
         dropTargetAlbumId = dropTargetAlbumId,
         dragOffset = dragOffset,
         dropSettling = dropSettling,
-        dropSettleProgress = dropSettleProgress.value,
+        dropSettleProgress = dropSettleProgress.asState(),
         dropSettleStartOffset = dropSettleStartOffset,
         dropSettleTargetOffset = dropSettleTargetOffset,
         dropTargetSwapOffset = dropTargetSwapOffset,
-        draggedPreviewScale = draggedPreviewScale,
+        draggedBounds = draggedBounds,
+        dropTargetBounds = dropTargetBounds,
         contextAlbumId = contextAlbumId,
         canDelete = canDeleteAlbum,
         onPinToggle = { album ->
@@ -478,6 +468,8 @@ fun AlbumsScreen(
         },
         onDragStart = { album ->
             if (reorderEnabled && !dropSettling) {
+                suppressPlacementAnimation = true
+                contextAlbumId = null
                 draggedAlbumId = album.id
                 dragOffset = Offset.Zero
                 dropTargetAlbumId = album.id
@@ -492,27 +484,31 @@ fun AlbumsScreen(
                     contextAlbumId = null
                 }
                 val translatedBounds = origin.translatedBy(dragOffset)
-                dropTargetAlbumId = selectAlbumDropTargetId(
+                val nextTargetId = selectAlbumDropTargetId(
                     draggedAlbumId = draggedId,
                     draggedBounds = translatedBounds,
                     orderedAlbumIds = sortedAlbums.map(Album::id),
                     boundsByAlbumId = albumBounds
                 ) ?: draggedId
+                if (nextTargetId != dropTargetAlbumId && nextTargetId != draggedId) {
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+                dropTargetAlbumId = nextTargetId
             }
         },
-        onDragEnd = {
+        onDragEnd = { commit ->
             val movedId = draggedAlbumId
             val origin = movedId?.let(albumBounds::get)
             if (movedId == null || origin == null || dropSettling) {
                 if (!dropSettling) clearAlbumDrag()
             } else {
                 val translatedBounds = origin.translatedBy(dragOffset)
-                val targetId = selectAlbumDropTargetId(
+                val targetId = if (commit) selectAlbumDropTargetId(
                     draggedAlbumId = movedId,
                     draggedBounds = translatedBounds,
                     orderedAlbumIds = sortedAlbums.map(Album::id),
                     boundsByAlbumId = albumBounds
-                ) ?: movedId
+                ) ?: movedId else movedId
                 val targetBounds = albumBounds[targetId]
                 val settleTarget = if (targetId != movedId && targetBounds != null) {
                     targetBounds.center - origin.center
@@ -532,6 +528,8 @@ fun AlbumsScreen(
 
                 if (targetId == movedId && dragOffset.getDistanceSquared() <= 36f) {
                     clearAlbumDrag()
+                    suppressPlacementAnimation = false
+                    if (commit) contextAlbumId = movedId
                 } else {
                     dropTargetAlbumId = targetId
                     dropSettleStartOffset = dragOffset
@@ -542,8 +540,8 @@ fun AlbumsScreen(
                         dropSettleProgress.animateTo(
                             targetValue = 1f,
                             animationSpec = spring(
-                                dampingRatio = 0.86f,
-                                stiffness = Spring.StiffnessMediumLow
+                                dampingRatio = 0.78f,
+                                stiffness = 320f
                             )
                         )
                         if (draggedAlbumId == movedId && dropTargetAlbumId == targetId) {
@@ -551,6 +549,11 @@ fun AlbumsScreen(
                                 arrangementState = arrangementRepository.save(it)
                             }
                             clearAlbumDrag()
+                            // Do not replay LazyColumn placement after our cards have already
+                            // sprung into their final slots. Re-enable it after layout commits.
+                            withFrameNanos { }
+                            withFrameNanos { }
+                            if (draggedAlbumId == null) suppressPlacementAnimation = false
                         }
                     }
                 }
@@ -785,10 +788,10 @@ fun AlbumsScreen(
                         item(key = "album-hero", contentType = "album-hero") {
                             Box(
                                 modifier = Modifier.animateItem(
-                                    fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                                    fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                                    placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
-                                )
+                                    fadeInSpec = null,
+                                    fadeOutSpec = null,
+                                    placementSpec = if (cardInteraction.suppressPlacementAnimation) null else spring(dampingRatio = 0.82f, stiffness = 350f)
+                                ).zIndex(albumReorderRowZIndex(listOf(leadingAlbum), cardInteraction))
                             ) {
                                 key(leadingAlbum.id) {
                                     AlbumHeroCard(
@@ -884,6 +887,10 @@ fun AlbumsScreen(
                 showCreateDialog = false
                 createAlbumName = ""
             },
+            modifier = Modifier
+                .widthIn(min = 340.dp, max = 460.dp)
+                .fillMaxWidth(0.92f),
+            properties = DialogProperties(usePlatformDefaultWidth = false),
             title = { Text("Create album") },
             text = {
                 OutlinedTextField(
@@ -920,6 +927,10 @@ fun AlbumsScreen(
     pendingDeleteAlbum?.let { album ->
         AlertDialog(
             onDismissRequest = { pendingDeleteAlbum = null },
+            modifier = Modifier
+                .widthIn(min = 340.dp, max = 460.dp)
+                .fillMaxWidth(0.92f),
+            properties = DialogProperties(usePlatformDefaultWidth = false),
             title = { Text("Delete ${album.name}?") },
             text = { Text("The album’s photos and videos will move to Recently deleted.") },
             confirmButton = {
@@ -1229,10 +1240,10 @@ private fun LazyListScope.heroAlbumRows(
         val album = albums[index]
         Box(
             modifier = Modifier.animateItem(
-                fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
-            )
+                fadeInSpec = null,
+                fadeOutSpec = null,
+                placementSpec = if (cardInteraction.suppressPlacementAnimation) null else spring(dampingRatio = 0.82f, stiffness = 350f)
+            ).zIndex(albumReorderRowZIndex(listOf(album), cardInteraction))
         ) {
             AlbumHeroCard(
                 album = album,
@@ -1270,10 +1281,10 @@ private fun LazyListScope.bigAlbumRows(
         val rowAlbums = albums.subList(startIndex, minOf(startIndex + safeColumns, albums.size))
         Box(
             modifier = Modifier.animateItem(
-                fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
-            )
+                fadeInSpec = null,
+                fadeOutSpec = null,
+                placementSpec = if (cardInteraction.suppressPlacementAnimation) null else spring(dampingRatio = 0.82f, stiffness = 350f)
+            ).zIndex(albumReorderRowZIndex(rowAlbums, cardInteraction))
         ) {
             BigAlbumRow(
                 albums = rowAlbums,
@@ -1311,10 +1322,10 @@ private fun LazyListScope.basicAlbumRows(
         val rowAlbums = albums.subList(startIndex, minOf(startIndex + safeColumns, albums.size))
         Box(
             modifier = Modifier.animateItem(
-                fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
-            )
+                fadeInSpec = null,
+                fadeOutSpec = null,
+                placementSpec = if (cardInteraction.suppressPlacementAnimation) null else spring(dampingRatio = 0.82f, stiffness = 350f)
+            ).zIndex(albumReorderRowZIndex(rowAlbums, cardInteraction))
         ) {
             BasicAlbumRow(
                 albums = rowAlbums,
@@ -1346,10 +1357,10 @@ private fun LazyListScope.listAlbumRows(
         val album = albums[index]
         Box(
             modifier = Modifier.animateItem(
-                fadeInSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                fadeOutSpec = spring(dampingRatio = 0.82f, stiffness = 380f),
-                placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
-            )
+                fadeInSpec = null,
+                fadeOutSpec = null,
+                placementSpec = if (cardInteraction.suppressPlacementAnimation) null else spring(dampingRatio = 0.82f, stiffness = 350f)
+            ).zIndex(albumReorderRowZIndex(listOf(album), cardInteraction))
         ) {
             AlbumListRow(
                 album = album,
@@ -1468,7 +1479,6 @@ private fun BasicAlbumRow(
                     Column(
                         modifier = Modifier
                             .width(cellWidth)
-                            .animateContentSize(spring(dampingRatio = 0.82f, stiffness = 380f))
                             .albumReorderMotion(album, cardInteraction)
                             .albumReorderGesture(album, cardInteraction)
                             .bouncyClickable { onAlbumClick(album, albumBounds.value) }
@@ -1545,7 +1555,6 @@ private fun AlbumListRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .animateContentSize(spring(dampingRatio = 0.82f, stiffness = 380f))
             .albumReorderMotion(album, cardInteraction)
             .albumReorderGesture(album, cardInteraction)
             .bouncyClickable { onAlbumClick(album, albumBounds.value) }
@@ -1713,23 +1722,25 @@ fun AlbumDetailScreen(
     }
     LaunchedEffect(album.id, sortMode, columns, mediaGeneration) {
         if (sortedMediaItems.isEmpty()) return@LaunchedEffect
-        delay(80)
+        delay(120)
         prefetchMediaThumbnails(
             context = context,
             mediaItems = sortedMediaItems,
             thumbnailSizes = listOf(384),
-            maxItems = minOf(sortedMediaItems.size, columns * 6, 24)
+            maxItems = minOf(sortedMediaItems.size, columns * 3, 12)
         )
     }
     LaunchedEffect(album.id, sortMode, columns, mediaGeneration, listState) {
         snapshotFlow {
-            listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) to listState.isScrollInProgress
         }
             .distinctUntilChanged()
-            .collectLatest { lastVisibleRow ->
+            .collectLatest { (lastVisibleRow, isScrolling) ->
+                if (isScrolling) return@collectLatest
+                delay(120)
                 val startIndex = ((lastVisibleRow + 1) * columns)
                     .coerceIn(0, sortedMediaItems.size)
-                val endIndex = (startIndex + columns * 6)
+                val endIndex = (startIndex + columns * 3)
                     .coerceAtMost(sortedMediaItems.size)
                 if (startIndex < endIndex) {
                     prefetchMediaThumbnails(
@@ -2390,7 +2401,8 @@ private fun AlbumDetailTransitionRow(
                     cornerRadius = 0.dp,
                     thumbnailSize = 384,
                     cachedOnly = true,
-                    isVideo = mediaItem.isVideo
+                    isVideo = mediaItem.isVideo,
+                    cacheRevision = mediaThumbnailCacheRevision(mediaItem)
                 )
                 if (mediaItem.isVideo && mediaItem.contentUri != null) {
                     VideoBadge(
@@ -2431,7 +2443,8 @@ private fun AlbumDetailPreviewRow(
                     cornerRadius = 0.dp,
                     thumbnailSize = 384,
                     cachedOnly = true,
-                    isVideo = mediaItem.isVideo
+                    isVideo = mediaItem.isVideo,
+                    cacheRevision = mediaThumbnailCacheRevision(mediaItem)
                 )
                 if (mediaItem.isVideo && mediaItem.contentUri != null) {
                     VideoBadge(
@@ -2630,8 +2643,7 @@ private fun AlbumImageCard(
 
     Box(
         modifier = modifier
-            .animateContentSize(spring(dampingRatio = 0.82f, stiffness = 380f))
-            .albumReorderMotion(album, cardInteraction)
+            .albumReorderMotion(album, cardInteraction, morphFrame = true)
             .albumReorderGesture(album, cardInteraction)
             .onGloballyPositioned { coordinates ->
                 val bounds = coordinates.boundsInWindow()
@@ -2703,42 +2715,71 @@ private fun AlbumImageCard(
 @Composable
 private fun Modifier.albumReorderMotion(
     album: Album,
-    interaction: AlbumCardInteraction
+    interaction: AlbumCardInteraction,
+    morphFrame: Boolean = false
 ): Modifier {
-    // Idle cards need neither animation state nor a retained hardware layer.
-    if (interaction.draggedAlbumId == null) return this
-
     val isDragging = interaction.draggedAlbumId == album.id
     val isDropTarget = interaction.dropTargetAlbumId == album.id && !isDragging
-    val animatedScale by animateFloatAsState(
+    // Retain spring state between idle/drag/settle. Creating it only after pickup starts
+    // every animation at its end value, which causes a snap instead of a spring.
+    val animatedScale = animateFloatAsState(
         targetValue = when {
-            isDragging -> interaction.draggedPreviewScale * 1.018f
-            isDropTarget -> 0.972f
+            isDragging && !interaction.dropSettling -> 1.035f
             else -> 1f
         },
         animationSpec = spring(
-            dampingRatio = 0.88f,
-            stiffness = Spring.StiffnessMedium
+            dampingRatio = 0.76f,
+            stiffness = 360f
         ),
         label = "album reorder scale"
     )
-    val swapX by animateFloatAsState(
+    val swapX = animateFloatAsState(
         targetValue = if (isDropTarget) interaction.dropTargetSwapOffset.x else 0f,
-        animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMediumLow),
+        animationSpec = spring(dampingRatio = 0.78f, stiffness = 320f),
         label = "album swap x"
     )
-    val swapY by animateFloatAsState(
+    val swapY = animateFloatAsState(
         targetValue = if (isDropTarget) interaction.dropTargetSwapOffset.y else 0f,
-        animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMediumLow),
+        animationSpec = spring(dampingRatio = 0.78f, stiffness = 320f),
         label = "album swap y"
     )
-    val settleFraction = interaction.dropSettleProgress.coerceIn(0f, 1f)
-    val settledDragOffset = if (interaction.dropSettling) {
-        interaction.dropSettleStartOffset +
-            (interaction.dropSettleTargetOffset - interaction.dropSettleStartOffset) * settleFraction
-    } else {
-        interaction.dragOffset
-    }
+    val animatedRotation = animateFloatAsState(
+        targetValue = if (isDragging && !interaction.dropSettling) {
+            (interaction.dragOffset.x / 220f).coerceIn(-1.2f, 1.2f)
+        } else 0f,
+        animationSpec = spring(dampingRatio = 0.78f, stiffness = 380f),
+        label = "album reorder rotation"
+    )
+    val shadowElevationDp = animateFloatAsState(
+        targetValue = when {
+            isDragging && !interaction.dropSettling -> 18f
+            isDropTarget && !interaction.dropSettling -> 8f
+            else -> 0f
+        },
+        animationSpec = spring(dampingRatio = 0.80f, stiffness = 380f),
+        label = "album shadow elevation"
+    )
+    val sourceBounds = interaction.draggedBounds
+    val targetBounds = interaction.dropTargetBounds
+    val targetWidthRatio = animateFloatAsState(
+        targetValue = if (morphFrame && isDropTarget && sourceBounds != null && targetBounds != null) {
+            sourceBounds.width / targetBounds.width.coerceAtLeast(1f)
+        } else 1f,
+        animationSpec = spring(dampingRatio = 0.86f, stiffness = 320f),
+        label = "album reorder frame width"
+    )
+    val targetHeightRatio = animateFloatAsState(
+        targetValue = if (morphFrame && isDropTarget && sourceBounds != null && targetBounds != null) {
+            sourceBounds.height / targetBounds.height.coerceAtLeast(1f)
+        } else 1f,
+        animationSpec = spring(dampingRatio = 0.86f, stiffness = 320f),
+        label = "album reorder frame height"
+    )
+    // A committed swap has already reached the destination. Remove all old-slot transforms
+    // in the same frame as the new order; animating them back to zero would play a second
+    // unwanted move. Spring state stays composed, while idle cards release their layers.
+    if (interaction.draggedAlbumId == null && !interaction.dropSettling) return this
+    val density = LocalDensity.current
     return this
         .zIndex(
             when {
@@ -2748,16 +2789,49 @@ private fun Modifier.albumReorderMotion(
             }
         )
         .graphicsLayer {
-            scaleX = animatedScale
-            scaleY = animatedScale
-            translationX = if (isDragging) settledDragOffset.x else swapX
-            translationY = if (isDragging) settledDragOffset.y else swapY
-            shadowElevation = when {
-                isDragging -> 20.dp.toPx()
-                isDropTarget -> 8.dp.toPx()
-                else -> 0f
+            val settledDragOffset = if (interaction.dropSettling) {
+                interaction.dropSettleStartOffset +
+                    (interaction.dropSettleTargetOffset - interaction.dropSettleStartOffset) *
+                    interaction.dropSettleProgress.value
+            } else interaction.dragOffset
+            scaleX = animatedScale.value
+            scaleY = animatedScale.value
+            rotationZ = animatedRotation.value
+            translationX = if (isDragging) settledDragOffset.x else swapX.value
+            translationY = if (isDragging) settledDragOffset.y else swapY.value
+            shadowElevation = with(density) { shadowElevationDp.value.dp.toPx() }
+        }
+        .layout { measurable, constraints ->
+            if (!morphFrame || !constraints.hasBoundedWidth || !constraints.hasBoundedHeight) {
+                val placeable = measurable.measure(constraints)
+                layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
+            } else {
+                // Re-measure the card frame, not its pixels: Crop reflows the cover and the
+                // labels keep their natural size when a square trades places with the hero.
+                val width = constraints.maxWidth
+                val height = constraints.maxHeight
+                val progress = interaction.dropSettleProgress.value.coerceIn(0f, 1f)
+                val widthRatio = if (isDragging && interaction.dropSettling && sourceBounds != null && targetBounds != null) {
+                    albumReorderFrameRatio(sourceBounds.width, targetBounds.width, progress)
+                } else if (isDragging) 1f else targetWidthRatio.value
+                val heightRatio = if (isDragging && interaction.dropSettling && sourceBounds != null && targetBounds != null) {
+                    albumReorderFrameRatio(sourceBounds.height, targetBounds.height, progress)
+                } else if (isDragging) 1f else targetHeightRatio.value
+                val placeable = measurable.measure(Constraints.fixed(
+                    (width * widthRatio).roundToInt().coerceAtLeast(1),
+                    (height * heightRatio).roundToInt().coerceAtLeast(1)
+                ))
+                layout(width, height) {
+                    placeable.placeRelative((width - placeable.width) / 2, (height - placeable.height) / 2)
+                }
             }
         }
+}
+
+private fun albumReorderRowZIndex(albums: List<Album>, interaction: AlbumCardInteraction): Float = when {
+    albums.any { it.id == interaction.draggedAlbumId } -> 6f
+    albums.any { it.id == interaction.dropTargetAlbumId } -> 3f
+    else -> 0f
 }
 
 private fun Modifier.hideForAlbumTransition(
@@ -2810,16 +2884,17 @@ private fun Modifier.albumReorderGesture(
         detectDragGesturesAfterLongPress(
             onDragStart = {
                 hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                latestInteraction.onContextMenuRequest(album)
                 if (latestInteraction.enabled) {
                     latestInteraction.onDragStart(album)
+                } else {
+                    latestInteraction.onContextMenuRequest(album)
                 }
             },
             onDragEnd = {
-                if (latestInteraction.enabled) latestInteraction.onDragEnd()
+                if (latestInteraction.enabled) latestInteraction.onDragEnd(true)
             },
             onDragCancel = {
-                if (latestInteraction.enabled) latestInteraction.onDragEnd()
+                if (latestInteraction.enabled) latestInteraction.onDragEnd(false)
             },
             onDrag = { change, dragAmount ->
                 if (latestInteraction.enabled) {

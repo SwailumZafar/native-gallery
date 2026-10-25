@@ -193,3 +193,25 @@ internal fun nextMediaAfterDelete(
     val preferredIndex = if (direction < 0) deletedIndex - 1 else deletedIndex
     return remainingItems[preferredIndex.coerceIn(0, remainingItems.lastIndex)]
 }
+
+internal fun galleryBottomBarTabForX(
+    x: Float,
+    threshold01Px: Float,
+    threshold12Px: Float
+): GalleryTab {
+    return when {
+        x < threshold01Px -> GalleryTab.Photos
+        x < threshold12Px -> GalleryTab.Albums
+        else -> GalleryTab.Menu
+    }
+}
+
+internal fun galleryBottomBarPageForX(
+    x: Float,
+    center0Px: Float,
+    stepPx: Float,
+    maxPage: Float = 2f
+): Float {
+    if (stepPx <= 0f) return 0f
+    return ((x - center0Px) / stepPx).coerceIn(0f, maxPage)
+}

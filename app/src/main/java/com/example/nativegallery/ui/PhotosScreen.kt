@@ -6,12 +6,14 @@
 
 package com.example.nativegallery.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalDensity
@@ -36,20 +38,26 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -58,6 +66,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -89,7 +98,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
@@ -115,10 +129,18 @@ private class PhotoBoundsRef(var value: Rect = Rect.Zero)
 
 private val RefreshSkeletonMillis = GalleryMotion.SkeletonVisibleMillis
 
+enum class PhotoGridFilter(val label: String) {
+    All("All"),
+    Photos("Photos"),
+    Videos("Videos"),
+    Favorites("Favorites")
+}
+
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun PhotosScreen(
     mediaItems: List<MediaItem>,
+    favoriteMediaIds: Set<String> = emptySet(),
     contentPadding: PaddingValues,
     mediaAccessNotice: (@Composable () -> Unit)? = null,
     isLoading: Boolean = false,
@@ -133,6 +155,7 @@ fun PhotosScreen(
     onMediaSelectionToggle: (MediaItem) -> Unit = {},
     onSelectionClear: () -> Unit = {},
     onSelectAllVisible: () -> Unit = {},
+    onSelectItems: ((List<MediaItem>) -> Unit)? = null,
     onDeleteSelected: () -> Unit = {},
     onShareSelected: () -> Unit = {},
     onHideSelected: () -> Unit = {},
@@ -144,10 +167,21 @@ fun PhotosScreen(
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
     activeSharedElementKey: Any? = null,
+    onMediaClickWithItems: ((MediaItem, List<MediaItem>, Rect, String, String) -> Unit)? = null,
     onMediaClick: (MediaItem, Rect, String, String) -> Unit = { _, _, _, _ -> }
 ) {
-    val sections = remember(mediaItems) {
-        mediaItems
+    var selectedFilter by rememberSaveable { mutableStateOf(PhotoGridFilter.All) }
+
+    val filteredMediaItems = remember(mediaItems, selectedFilter, favoriteMediaIds) {
+        when (selectedFilter) {
+            PhotoGridFilter.All -> mediaItems
+            PhotoGridFilter.Photos -> mediaItems.filter { !it.isVideo }
+            PhotoGridFilter.Videos -> mediaItems.filter { it.isVideo }
+            PhotoGridFilter.Favorites -> mediaItems.filter { favoriteMediaIds.contains(it.id) }
+        }
+    }
+    val sections = remember(filteredMediaItems) {
+        filteredMediaItems
             .groupBy { it.dateLabel }
             .entries
             .toList()
@@ -179,12 +213,25 @@ fun PhotosScreen(
     val currentOnGridColumnsChange by rememberUpdatedState(onGridColumnsChange)
     val searchFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    var isSearchVisible by rememberSaveable { mutableStateOf(searchQuery.isNotBlank()) }
     val isRefreshing = remember { mutableStateOf(false) }
+
+    BackHandler(enabled = isSearchVisible) {
+        keyboardController?.hide()
+        onSearchQueryChange("")
+        isSearchVisible = false
+    }
+
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isNotBlank() && !isSearchVisible) {
+            isSearchVisible = true
+        }
+    }
 
     LaunchedEffect(revealMediaId, sections, gridColumns) {
         val mediaId = revealMediaId ?: return@LaunchedEffect
         val targetIndex = galleryPhotoListIndex(
-            mediaItems = mediaItems,
+            mediaItems = filteredMediaItems,
             mediaId = mediaId,
             columns = gridColumns
         ) ?: return@LaunchedEffect
@@ -198,7 +245,7 @@ fun PhotosScreen(
 
     fun hitMedia(localPoint: Offset): MediaItem? {
         val point = rootPoint(localPoint)
-        return mediaItems.firstOrNull { mediaItem -> tileBounds[mediaItem.id]?.contains(point) == true }
+        return filteredMediaItems.firstOrNull { mediaItem -> tileBounds[mediaItem.id]?.contains(point) == true }
     }
 
     Box(
@@ -345,18 +392,35 @@ fun PhotosScreen(
                             searchQuery = searchQuery,
                             onSearchQueryChange = onSearchQueryChange,
                             selectedCount = selectedMediaIds.size,
-                            totalVisibleCount = mediaItems.size,
-                            onSelectAllVisible = onSelectAllVisible,
+                            totalVisibleCount = filteredMediaItems.size,
+                            allPhotosCount = remember(mediaItems) { mediaItems.count { !it.isVideo } },
+                            allVideosCount = remember(mediaItems) { mediaItems.count { it.isVideo } },
+                            selectedFilter = selectedFilter,
+                            onFilterSelected = { selectedFilter = it },
+                            onSelectAllVisible = {
+                                if (onSelectItems != null) {
+                                    onSelectItems(filteredMediaItems)
+                                } else {
+                                    onSelectAllVisible()
+                                }
+                            },
                             onRefresh = onRefresh,
                             onOpenSettings = onOpenSettings,
                             searchFocusRequester = searchFocusRequester,
+                            isSearchVisible = isSearchVisible,
                             onSearchClick = {
+                                isSearchVisible = true
                                 coroutineScope.launch {
                                     listState.animateScrollToItem(0)
-                                    delay(100)
+                                    delay(120)
                                     searchFocusRequester.requestFocus()
                                     keyboardController?.show()
                                 }
+                            },
+                            onCloseSearch = {
+                                keyboardController?.hide()
+                                onSearchQueryChange("")
+                                isSearchVisible = false
                             }
                         )
                     }
@@ -364,9 +428,9 @@ fun PhotosScreen(
 
             if (showLoading) {
                 loadingPhotoSections(columns = gridColumns)
-            } else if (mediaItems.isEmpty()) {
+            } else if (filteredMediaItems.isEmpty()) {
                 item(key = "photos-empty", contentType = "photos-empty") {
-                    PhotoEmptyState(hasSearchQuery = searchQuery.isNotBlank())
+                    PhotoEmptyState(hasSearchQuery = searchQuery.isNotBlank(), filter = selectedFilter)
                 }
             } else {
                 sections.forEach { section ->
@@ -387,7 +451,10 @@ fun PhotosScreen(
                         },
                         onMediaLongClick = onMediaLongClick,
                         onMediaSelectionToggle = onMediaSelectionToggle,
-                        onMediaClick = onMediaClick
+                        onMediaClick = { mediaItem, bounds, key, prefix ->
+                            onMediaClickWithItems?.invoke(mediaItem, filteredMediaItems, bounds, key, prefix)
+                                ?: onMediaClick(mediaItem, bounds, key, prefix)
+                        }
                     )
                 }
             }
@@ -419,9 +486,15 @@ fun PhotosScreen(
         ) {
             MediaSelectionTopBar(
                 selectedCount = selectedMediaIds.size,
-                canSelectAll = selectedMediaIds.size < mediaItems.size,
+                canSelectAll = selectedMediaIds.size < filteredMediaItems.size,
                 onClear = onSelectionClear,
-                onSelectAll = onSelectAllVisible,
+                onSelectAll = {
+                    if (onSelectItems != null) {
+                        onSelectItems(filteredMediaItems)
+                    } else {
+                        onSelectAllVisible()
+                    }
+                },
                 modifier = Modifier
                     .statusBarsPadding()
                     .padding(start = 12.dp, top = 8.dp, end = 12.dp)
@@ -448,11 +521,17 @@ private fun PicturesHeader(
     onSearchQueryChange: (String) -> Unit,
     selectedCount: Int,
     totalVisibleCount: Int,
+    allPhotosCount: Int,
+    allVideosCount: Int,
+    selectedFilter: PhotoGridFilter,
+    onFilterSelected: (PhotoGridFilter) -> Unit,
     onSelectAllVisible: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
     searchFocusRequester: FocusRequester? = null,
-    onSearchClick: () -> Unit = {}
+    isSearchVisible: Boolean = false,
+    onSearchClick: () -> Unit = {},
+    onCloseSearch: () -> Unit = {}
 ) {
     val density = LocalDensity.current
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
@@ -460,46 +539,89 @@ private fun PicturesHeader(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 10.dp, top = 96.dp, end = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(start = 20.dp, top = 88.dp, end = 20.dp),
+        horizontalAlignment = Alignment.Start
     ) {
         if (selectedCount > 0) {
             Spacer(Modifier.height(28.dp))
         } else {
-            Text(
-                text = "Photos",
-                modifier = Modifier.graphicsLayer {
-                    val progress = collapseProgress.value.coerceIn(0f, 1f)
-                    val easedProgress = GalleryMotion.easeOutCubic(progress)
-                    alpha = interpolate(1f, 0.76f, easedProgress)
-                    transformOrigin = TransformOrigin(0.5f, 0f)
-                    scaleX = interpolate(1f, 0.58f, easedProgress)
-                    scaleY = interpolate(1f, 0.58f, easedProgress)
-                    translationY = -6f * easedProgress
-                    cameraDistance = 16f * density.density
-                },
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontSize = 52.sp,
-                    lineHeight = 58.sp,
-                    fontWeight = FontWeight.SemiBold
-                ),
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Spacer(Modifier.height(44.dp))
+            val mediaSummary = remember(allPhotosCount, allVideosCount) {
+                val numberFormat = java.text.NumberFormat.getIntegerInstance(java.util.Locale.US)
+                val photoPart = "${numberFormat.format(allPhotosCount)} ${if (allPhotosCount == 1) "Photo" else "Photos"}"
+                val videoPart = "${numberFormat.format(allVideosCount)} ${if (allVideosCount == 1) "Video" else "Videos"}"
+                if (allPhotosCount > 0 && allVideosCount > 0) {
+                    "$photoPart • $videoPart"
+                } else if (allPhotosCount > 0) {
+                    photoPart
+                } else if (allVideosCount > 0) {
+                    videoPart
+                } else ""
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Photos",
+                        modifier = Modifier.graphicsLayer {
+                            val progress = collapseProgress.value.coerceIn(0f, 1f)
+                            val easedProgress = GalleryMotion.easeOutCubic(progress)
+                            alpha = interpolate(1f, 0.76f, easedProgress)
+                            transformOrigin = TransformOrigin(0.5f, 0f)
+                            scaleX = interpolate(1f, 0.58f, easedProgress)
+                            scaleY = interpolate(1f, 0.58f, easedProgress)
+                            translationY = -6f * easedProgress
+                            cameraDistance = 16f * density.density
+                        },
+                        style = MaterialTheme.typography.headlineLarge.copy(
+                            fontSize = 40.sp,
+                            lineHeight = 46.sp,
+                            letterSpacing = (-1).sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    if (mediaSummary.isNotBlank()) {
+                        Text(
+                            text = mediaSummary,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .graphicsLayer {
+                                    val progress = collapseProgress.value.coerceIn(0f, 1f)
+                                    alpha = interpolate(1f, 0f, (progress * 2.5f).coerceIn(0f, 1f))
+                                    translationY = -4f * progress
+                                },
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 12.sp,
+                                lineHeight = 18.sp,
+                                fontWeight = FontWeight.Normal
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier.graphicsLayer {
                         val progress = collapseProgress.value.coerceIn(0f, 1f)
                         alpha = interpolate(1f, 0.9f, progress)
                         translationY = -8f * progress
                     },
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    SearchCircle(onClick = onSearchClick)
+                    SearchCircle(
+                        onClick = {
+                            if (isSearchVisible) {
+                                onCloseSearch()
+                            } else {
+                                onSearchClick()
+                            }
+                        }
+                    )
                     Box {
                         PremiumOverflowButton(
                             expanded = menuExpanded,
@@ -539,19 +661,125 @@ private fun PicturesHeader(
                     }
                 }
             }
-            Spacer(Modifier.height(14.dp))
-            SearchPill(
-                placeholder = "Search photos and videos",
-                query = searchQuery,
-                onQueryChange = onSearchQueryChange,
-                focusRequester = searchFocusRequester
+            Spacer(Modifier.height(24.dp))
+            PhotoFilterBar(
+                selectedFilter = selectedFilter,
+                onFilterSelected = onFilterSelected
             )
+            AnimatedVisibility(
+                visible = isSearchVisible,
+                enter = expandVertically(
+                    animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                    expandFrom = Alignment.Top
+                ) + fadeIn(spring(dampingRatio = 0.85f, stiffness = 400f)),
+                exit = shrinkVertically(
+                    animationSpec = spring(dampingRatio = 0.88f, stiffness = 450f),
+                    shrinkTowards = Alignment.Top
+                ) + fadeOut(tween(140))
+            ) {
+                Column {
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        SearchPill(
+                            modifier = Modifier.weight(1f),
+                            placeholder = "Search photos and videos",
+                            query = searchQuery,
+                            onQueryChange = onSearchQueryChange,
+                            focusRequester = searchFocusRequester
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Surface(
+                            modifier = Modifier
+                                .size(46.dp)
+                                .solarTactile(scaleDown = 0.88f, onClick = onCloseSearch),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = CircleShape
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = "Close search",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
         if (mediaAccessNotice != null) {
             Spacer(Modifier.height(18.dp))
             mediaAccessNotice()
         }
-        Spacer(Modifier.height(34.dp))
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+internal fun PhotoFilterBar(
+    selectedFilter: PhotoGridFilter,
+    onFilterSelected: (PhotoGridFilter) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        // Keep every label and touch target usable on narrow screens and at larger text sizes.
+        val filtersPerRow = if (maxWidth / fontScale < 320.dp) 2 else 4
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+        ) {
+            Column(
+                modifier = Modifier.padding(4.dp).selectableGroup(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                PhotoGridFilter.entries.chunked(filtersPerRow).forEach { filters ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        filters.forEach { filterOption ->
+                            val isSelected = selectedFilter == filterOption
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .solarTactile(scaleDown = 0.94f) { onFilterSelected(filterOption) }
+                                    .semantics {
+                                        role = Role.Tab
+                                        selected = isSelected
+                                    },
+                                shape = RoundedCornerShape(16.dp),
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    androidx.compose.ui.graphics.Color.Transparent
+                                }
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = filterOption.label,
+                                        style = MaterialTheme.typography.labelLarge.copy(
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
+                                        ),
+                                        maxLines = 1,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.onPrimary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -610,9 +838,19 @@ private fun SelectionBottomActionBar(
 }
 
 @Composable
-private fun PhotoEmptyState(hasSearchQuery: Boolean) {
+private fun PhotoEmptyState(
+    hasSearchQuery: Boolean,
+    filter: PhotoGridFilter = PhotoGridFilter.All
+) {
+    val message = when {
+        hasSearchQuery -> "No matching photos or videos."
+        filter == PhotoGridFilter.Photos -> "No photos yet."
+        filter == PhotoGridFilter.Videos -> "No videos yet."
+        filter == PhotoGridFilter.Favorites -> "No favorite photos or videos yet."
+        else -> "No photos yet."
+    }
     Text(
-        text = if (hasSearchQuery) "No matching photos or videos." else "No photos yet.",
+        text = message,
         modifier = Modifier.padding(horizontal = 18.dp, vertical = 22.dp),
         style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant

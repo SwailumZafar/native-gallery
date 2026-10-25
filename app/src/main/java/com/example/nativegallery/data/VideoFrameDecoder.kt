@@ -1,6 +1,7 @@
 package com.example.nativegallery.data
 
 import android.content.Context
+import android.content.res.AssetFileDescriptor
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.media.Image
@@ -15,7 +16,7 @@ import java.io.File
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-/** Extracts a real video frame when the platform thumbnail service cannot decode a container. */
+/** Extracts a useful video poster when the platform thumbnail service cannot decode one. */
 internal object VideoFrameDecoder {
     private const val DecoderTimeoutMillis = 4_000L
     private const val CodecPollMicros = 10_000L
@@ -24,63 +25,50 @@ internal object VideoFrameDecoder {
     fun decode(context: Context, uri: Uri, maxSide: Int): Bitmap? {
         retrieverFrame(context, uri, maxSide)?.let { return it }
         return synchronized(codecFallbackLock) {
-            runCatching {
-                context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
-                    val extractor = MediaExtractor()
-                    try {
-                        if (descriptor.declaredLength >= 0L) {
-                            extractor.setDataSource(
-                                descriptor.fileDescriptor,
-                                descriptor.startOffset,
-                                descriptor.declaredLength
-                            )
-                        } else {
-                            extractor.setDataSource(descriptor.fileDescriptor)
-                        }
-                        decodeFirstFrame(extractor, maxSide)
-                    } finally {
-                        extractor.release()
-                    }
-                }
-            }.getOrNull()
-
+            decodeCodecFrames(context, uri, maxSide)
         }
     }
 
     fun decode(file: File, maxSide: Int): Bitmap? {
         retrieverFrame(file, maxSide)?.let { return it }
         return synchronized(codecFallbackLock) {
-            runCatching {
-                val extractor = MediaExtractor()
-                try {
-                    extractor.setDataSource(file.absolutePath)
-                    decodeFirstFrame(extractor, maxSide)
-                } finally {
-                    extractor.release()
-                }
-            }.getOrNull()
-
+            decodeCodecFrames(file, maxSide)
         }
     }
 
     private fun retrieverFrame(context: Context, uri: Uri, maxSide: Int): Bitmap? {
-        val retriever = MediaMetadataRetriever()
-        return try {
-            retriever.setDataSource(context, uri)
-            retriever.firstUsableFrame(maxSide)
-        } catch (_: RuntimeException) {
-            null
-        } finally {
-            runCatching { retriever.release() }
-        }
+        val descriptorFrame = runCatching {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+                retrieverFrame(maxSide) { retriever ->
+                    if (descriptor.declaredLength >= 0L) {
+                        retriever.setDataSource(
+                            descriptor.fileDescriptor,
+                            descriptor.startOffset,
+                            descriptor.declaredLength
+                        )
+                    } else {
+                        retriever.setDataSource(descriptor.fileDescriptor)
+                    }
+                }
+            }
+        }.getOrNull()
+        if (descriptorFrame != null) return descriptorFrame
+        return retrieverFrame(maxSide) { retriever -> retriever.setDataSource(context, uri) }
     }
 
     private fun retrieverFrame(file: File, maxSide: Int): Bitmap? {
+        return retrieverFrame(maxSide) { retriever -> retriever.setDataSource(file.absolutePath) }
+    }
+
+    private inline fun retrieverFrame(
+        maxSide: Int,
+        configure: (MediaMetadataRetriever) -> Unit
+    ): Bitmap? {
         val retriever = MediaMetadataRetriever()
         return try {
-            retriever.setDataSource(file.absolutePath)
+            configure(retriever)
             retriever.firstUsableFrame(maxSide)
-        } catch (_: RuntimeException) {
+        } catch (_: Throwable) {
             null
         } finally {
             runCatching { retriever.release() }
@@ -88,29 +76,182 @@ internal object VideoFrameDecoder {
     }
 
     private fun MediaMetadataRetriever.firstUsableFrame(maxSide: Int): Bitmap? {
-        val candidateTimesUs = longArrayOf(0L, 1_000_000L)
-        for (timeUs in candidateTimesUs) {
-            val frame = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
-                runCatching {
-                    getScaledFrameAtTime(
-                        timeUs,
-                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                        maxSide,
-                        maxSide
-                    )
-                }.getOrNull()
-            } else {
-                runCatching {
-                    getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                        ?.scaledToFit(maxSide)
-                }.getOrNull()
+        val durationMs = extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            ?.toLongOrNull()
+            ?.coerceAtLeast(0L)
+            ?: 0L
+        val width = extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 }
+            ?: maxSide
+        val height = extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 }
+            ?: maxSide
+        val rotation = extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+            ?.toIntOrNull()
+            ?: 0
+        val orientedWidth = if (rotation % 180 == 0) width else height
+        val orientedHeight = if (rotation % 180 == 0) height else width
+        val scale = (maxSide.toFloat() / max(orientedWidth, orientedHeight)).coerceAtMost(1f)
+        val targetWidth = (orientedWidth * scale).roundToInt().coerceAtLeast(1)
+        val targetHeight = (orientedHeight * scale).roundToInt().coerceAtLeast(1)
+
+        var bestCandidate: Bitmap? = null
+        var bestLuminance = -1.0
+
+        for (timeUs in videoThumbnailCandidateTimesUs(durationMs)) {
+            val frameProviders = buildList<() -> Bitmap?> {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1 && timeUs >= 0L) {
+                    add({ runCatching {
+                        getScaledFrameAtTime(
+                            timeUs,
+                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                            targetWidth,
+                            targetHeight
+                        )
+                    }.getOrNull() })
+                    add({ runCatching {
+                        getScaledFrameAtTime(
+                            timeUs,
+                            MediaMetadataRetriever.OPTION_CLOSEST,
+                            targetWidth,
+                            targetHeight
+                        )
+                    }.getOrNull() })
+                }
+                add({ runCatching {
+                    if (timeUs >= 0L) {
+                        getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    } else {
+                        getFrameAtTime()
+                    }
+                }.getOrNull() })
+                if (timeUs >= 0L) {
+                    add({ runCatching {
+                        getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                    }.getOrNull() })
+                }
             }
-            if (frame != null) return frame
+            for (frameProvider in frameProviders) {
+                val candidate = frameProvider() ?: continue
+                if (!isFrameTooDark(candidate)) {
+                    bestCandidate?.recycle()
+                    return candidate.scaledToFit(maxSide)
+                }
+                val lum = frameAverageLuminance(candidate)
+                if (lum > bestLuminance) {
+                    bestCandidate?.recycle()
+                    bestCandidate = candidate
+                    bestLuminance = lum
+                } else {
+                    candidate.recycle()
+                }
+            }
+        }
+        if (bestCandidate != null) {
+            return bestCandidate.scaledToFit(maxSide)
         }
         return null
     }
 
-    private fun decodeFirstFrame(extractor: MediaExtractor, maxSide: Int): Bitmap? {
+    private fun decodeCodecFrames(context: Context, uri: Uri, maxSide: Int): Bitmap? = runCatching {
+        context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+            val durationMs = extractorDurationMs { extractor -> extractor.setDataSource(descriptor) }
+            val deadline = SystemClock.elapsedRealtime() + DecoderTimeoutMillis
+            var bestFrame: Bitmap? = null
+            var bestLuminance = -1.0
+            for (timeUs in videoThumbnailCandidateTimesUs(durationMs).filter { it >= 0L }.take(4)) {
+                if (SystemClock.elapsedRealtime() >= deadline) break
+                val frame = decodeCodecFrame(maxSide, timeUs, deadline) { extractor ->
+                    extractor.setDataSource(descriptor)
+                } ?: continue
+                if (!isFrameTooDark(frame)) {
+                    bestFrame?.recycle()
+                    return@use frame
+                }
+                val lum = frameAverageLuminance(frame)
+                if (lum > bestLuminance) {
+                    bestFrame?.recycle()
+                    bestFrame = frame
+                    bestLuminance = lum
+                } else {
+                    frame.recycle()
+                }
+            }
+            bestFrame
+        }
+    }.getOrNull()
+
+    private fun decodeCodecFrames(file: File, maxSide: Int): Bitmap? = runCatching {
+        val durationMs = extractorDurationMs { extractor -> extractor.setDataSource(file.absolutePath) }
+        val deadline = SystemClock.elapsedRealtime() + DecoderTimeoutMillis
+        var bestFrame: Bitmap? = null
+        var bestLuminance = -1.0
+        for (timeUs in videoThumbnailCandidateTimesUs(durationMs).filter { it >= 0L }.take(4)) {
+            if (SystemClock.elapsedRealtime() >= deadline) break
+            val frame = decodeCodecFrame(maxSide, timeUs, deadline) { extractor ->
+                extractor.setDataSource(file.absolutePath)
+            } ?: continue
+            if (!isFrameTooDark(frame)) {
+                bestFrame?.recycle()
+                return@runCatching frame
+            }
+            val lum = frameAverageLuminance(frame)
+            if (lum > bestLuminance) {
+                bestFrame?.recycle()
+                bestFrame = frame
+                bestLuminance = lum
+            } else {
+                frame.recycle()
+            }
+        }
+        bestFrame
+    }.getOrNull()
+
+    private inline fun extractorDurationMs(configure: (MediaExtractor) -> Unit): Long {
+        val extractor = MediaExtractor()
+        return try {
+            configure(extractor)
+            (0 until extractor.trackCount)
+                .asSequence()
+                .map { extractor.getTrackFormat(it) }
+                .firstOrNull { format ->
+                    format.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
+                }
+                ?.longOrNull(MediaFormat.KEY_DURATION)
+                ?.div(1_000L)
+                ?.coerceAtLeast(0L)
+                ?: 0L
+        } finally {
+            extractor.release()
+        }
+    }
+
+    private inline fun decodeCodecFrame(
+        maxSide: Int,
+        timeUs: Long,
+        deadline: Long,
+        configure: (MediaExtractor) -> Unit
+    ): Bitmap? {
+        val extractor = MediaExtractor()
+        return try {
+            configure(extractor)
+            decodeFirstFrame(extractor, maxSide, timeUs.coerceAtLeast(0L), deadline)
+        } finally {
+            extractor.release()
+        }
+    }
+
+    private fun MediaExtractor.setDataSource(descriptor: AssetFileDescriptor) {
+        if (descriptor.declaredLength >= 0L) {
+            setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.declaredLength)
+        } else {
+            setDataSource(descriptor.fileDescriptor)
+        }
+    }
+
+    private fun decodeFirstFrame(extractor: MediaExtractor, maxSide: Int, timeUs: Long, deadline: Long): Bitmap? {
         val trackIndex = (0 until extractor.trackCount).firstOrNull { index ->
             extractor.getTrackFormat(index)
                 .getString(MediaFormat.KEY_MIME)
@@ -124,13 +265,13 @@ internal object VideoFrameDecoder {
             MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
         )
         extractor.selectTrack(trackIndex)
-        extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        extractor.seekTo(timeUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
 
         val decoder = MediaCodec.createDecoderByType(mimeType)
         return try {
             decoder.configure(format, null, null, 0)
             decoder.start()
-            decodeOutputFrame(decoder, extractor, maxSide, rotationDegrees)
+            decodeOutputFrame(decoder, extractor, maxSide, rotationDegrees, deadline)
         } finally {
             runCatching { decoder.stop() }
             decoder.release()
@@ -141,10 +282,10 @@ internal object VideoFrameDecoder {
         decoder: MediaCodec,
         extractor: MediaExtractor,
         maxSide: Int,
-        rotationDegrees: Int
+        rotationDegrees: Int,
+        deadline: Long
     ): Bitmap? {
         val bufferInfo = MediaCodec.BufferInfo()
-        val deadline = SystemClock.elapsedRealtime() + DecoderTimeoutMillis
         var inputEnded = false
         while (SystemClock.elapsedRealtime() < deadline) {
             if (!inputEnded) {
@@ -177,9 +318,7 @@ internal object VideoFrameDecoder {
             val outputIndex = decoder.dequeueOutputBuffer(bufferInfo, CodecPollMicros)
             if (outputIndex >= 0) {
                 val frame = runCatching {
-                    decoder.getOutputImage(outputIndex)?.use { image ->
-                        image.toThumbnail(maxSide)
-                    }
+                    decoder.getOutputImage(outputIndex)?.use { image -> image.toThumbnail(maxSide) }
                 }.getOrNull()
                 decoder.releaseOutputBuffer(outputIndex, false)
                 if (frame != null) return frame.rotated(rotationDegrees)
@@ -187,6 +326,53 @@ internal object VideoFrameDecoder {
             }
         }
         return null
+    }
+
+    internal fun frameAverageLuminance(bitmap: Bitmap): Double {
+        if (bitmap.width <= 0 || bitmap.height <= 0) return 0.0
+        if (bitmap.config == Bitmap.Config.HARDWARE) {
+            val readable = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return 0.0
+            return try { frameAverageLuminance(readable) } finally { readable.recycle() }
+        }
+        var luminanceSum = 0.0
+        val sampleCount = 25
+        for (row in 1..5) {
+            for (column in 1..5) {
+                val x = (bitmap.width * column / 6).coerceIn(0, bitmap.width - 1)
+                val y = (bitmap.height * row / 6).coerceIn(0, bitmap.height - 1)
+                val pixel = bitmap.getPixel(x, y)
+                val red = (pixel shr 16) and 0xFF
+                val green = (pixel shr 8) and 0xFF
+                val blue = pixel and 0xFF
+                luminanceSum += 0.299 * red + 0.587 * green + 0.114 * blue
+            }
+        }
+        return luminanceSum / sampleCount
+    }
+
+    internal fun isFrameTooDark(bitmap: Bitmap): Boolean {
+        if (bitmap.width <= 0 || bitmap.height <= 0) return true
+        if (bitmap.config == Bitmap.Config.HARDWARE) {
+            val readable = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return false
+            return try { isFrameTooDark(readable) } finally { readable.recycle() }
+        }
+        var darkSamples = 0
+        var luminanceSum = 0.0
+        val sampleCount = 25
+        for (row in 1..5) {
+            for (column in 1..5) {
+                val x = (bitmap.width * column / 6).coerceIn(0, bitmap.width - 1)
+                val y = (bitmap.height * row / 6).coerceIn(0, bitmap.height - 1)
+                val pixel = bitmap.getPixel(x, y)
+                val red = (pixel shr 16) and 0xFF
+                val green = (pixel shr 8) and 0xFF
+                val blue = pixel and 0xFF
+                val luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+                luminanceSum += luminance
+                if (luminance < 24.0) darkSamples += 1
+            }
+        }
+        return darkSamples == sampleCount && luminanceSum / sampleCount < 8.0
     }
 
     private fun Image.toThumbnail(maxSide: Int): Bitmap? {
@@ -272,4 +458,45 @@ internal object VideoFrameDecoder {
     private fun MediaFormat.integerOrNull(key: String): Int? {
         return if (containsKey(key)) runCatching { getInteger(key) }.getOrNull() else null
     }
+
+    private fun MediaFormat.longOrNull(key: String): Long? {
+        return if (containsKey(key)) runCatching { getLong(key) }.getOrNull() else null
+    }
+}
+
+/** Candidate order avoids black intros while preserving genuinely short clips. */
+internal fun videoThumbnailCandidateTimesUs(durationMs: Long): LongArray {
+    val durationUs = durationMs.coerceIn(0L, Long.MAX_VALUE / 1_000L) * 1_000L
+    val candidates = when {
+        durationUs > 10_000_000L -> longArrayOf(
+            durationUs / 4,
+            durationUs / 5 * 2,
+            durationUs / 20 * 3,
+            durationUs / 2,
+            minOf(durationUs / 10, 15_000_000L),
+            5_000_000L,
+            2_000_000L,
+            -1L,
+            0L
+        )
+
+        durationUs > 2_000_000L -> longArrayOf(
+            durationUs / 2,
+            durationUs / 4,
+            1_000_000L,
+            -1L,
+            0L
+        )
+
+        durationUs > 0L -> longArrayOf(
+            durationUs / 2,
+            durationUs / 4,
+            (durationUs - 1L).coerceAtLeast(0L),
+            -1L,
+            0L
+        )
+
+        else -> longArrayOf(15_000_000L, 10_000_000L, 5_000_000L, 2_000_000L, 1_000_000L, -1L, 0L)
+    }
+    return candidates.distinct().toLongArray()
 }
