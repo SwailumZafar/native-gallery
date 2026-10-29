@@ -11,8 +11,6 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.media.AudioManager
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
@@ -114,8 +112,6 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -173,7 +169,6 @@ import androidx.media3.common.Player
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -189,6 +184,13 @@ import androidx.compose.ui.zIndex
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.player.galleryVideoMediaSourceFactory
 import com.example.nativegallery.player.galleryVideoRenderersFactory
+import com.example.nativegallery.player.GalleryVideoPlayerStore
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
 import com.example.nativegallery.player.isMediaTekHardware
 import com.example.nativegallery.player.preferMediaTekHardwareAvc
 import com.example.nativegallery.ui.components.GalleryImage
@@ -572,7 +574,6 @@ fun PhotoViewerOverlay(
         } else null
         closingFrame?.let { frame ->
             currentItem.contentUri?.let { uri ->
-                DisplayedBitmapCache.register(currentItem.id, uri, frame)
                 cacheVideoFrameThumbnail(
                     context,
                     uri,
@@ -2299,41 +2300,20 @@ private fun ViewerVideoPlayer(
             onDimensionsChanged(playerVideoWidth, playerVideoHeight)
         }
     }
-    val renderersFactory = remember(context) {
-        galleryVideoRenderersFactory(context.applicationContext)
-    }
-    val mediaSourceFactory = remember(context) {
-        galleryVideoMediaSourceFactory(context.applicationContext)
-    }
-    val player = remember(context, uri, isMatroskaVideo, renderersFactory, mediaSourceFactory) {
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                15_000,
-                30_000,
-                1_500,
-                2_000
-            )
-            .setBackBuffer(0, false)
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .build()
-        ExoPlayer.Builder(context.applicationContext, renderersFactory)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .setLoadControl(loadControl)
-            .build()
-            .apply {
-                if (isMatroskaVideo) {
-                    setSeekParameters(SeekParameters.CLOSEST_SYNC)
-                }
+    val playerStore: GalleryVideoPlayerStore = viewModel()
+    val playerLease = remember(uri) { playerStore.acquire(context) }
+    val player = remember(playerLease, uri, isMatroskaVideo) {
+        playerLease.player.apply {
+                setSeekParameters(if (isMatroskaVideo) SeekParameters.CLOSEST_SYNC else SeekParameters.DEFAULT)
                 val playerMediaItem = androidx.media3.common.MediaItem.Builder()
                     .setUri(uri)
                     .apply {
                         mediaItem.mimeType?.takeIf { it.isNotBlank() }?.let(::setMimeType)
                     }
                     .build()
-                setMediaItem(playerMediaItem)
-                if (positionMs > 0) {
-                    seekTo(positionMs.toLong())
-                }
+                val reusePreparedMedia = currentMediaItem == playerMediaItem && playbackState != Player.STATE_IDLE && playerError == null
+                if (!reusePreparedMedia) setMediaItem(playerMediaItem)
+                seekTo(positionMs.toLong())
                 setAudioAttributes(AudioAttributes.DEFAULT, true)
                 setHandleAudioBecomingNoisy(true)
                 volume = localPlayerGain(playbackVolume, systemVolumeApplied = true)
@@ -2341,7 +2321,7 @@ private fun ViewerVideoPlayer(
                     isActive &&
                         playbackRequested &&
                         lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-                prepare()
+                if (!reusePreparedMedia) prepare()
         }
     }
 
@@ -2515,47 +2495,21 @@ private fun ViewerVideoPlayer(
             }
         }
         player.addListener(listener)
+        // A rapid reopen may reuse an already prepared player without a new READY event.
+        isPrepared = videoPreparedStateAfterPlaybackState(false, player.playbackState)
         onDispose {
             positionMs = player.currentPosition
                 .coerceIn(0L, Int.MAX_VALUE.toLong())
                 .toInt()
-            if (presentationReady) {
-                val textureView = playerView?.videoSurfaceView as? TextureView
-                val frame = captureVideoTransitionFrame(textureView)
-                if (frame != null) {
-                    try {
-                        cacheVideoFrameThumbnail(
-                            context,
-                            uri,
-                            frame,
-                            mediaThumbnailCacheRevision(mediaItem)
-                        )
-                    } catch (_: Throwable) {
-                    } finally {
-                        frame.recycle()
-                    }
-                }
-            }
             playerView?.player = null
             playerView = null
             player.removeListener(listener)
-            player.volume = 0f
-            player.pause()
-            val playerToRelease = player
-            Handler(Looper.getMainLooper()).postDelayed({
-                try {
-                    playerToRelease.stop()
-                    playerToRelease.clearVideoSurface()
-                    playerToRelease.release()
-                } catch (_: Throwable) {
-                }
-            }, 350L)
+            playerStore.park(playerLease)
         }
     }
 
     LaunchedEffect(hasRenderedFirstFrame, playerVideoWidth, playerVideoHeight, playerView) {
-        presentationReady = false
-        if (hasRenderedFirstFrame && playerView != null) {
+        if (!presentationReady && hasRenderedFirstFrame && playerView != null) {
             // Allow AndroidView and TextureView to adopt the final display geometry before fading in.
             repeat(2) { androidx.compose.runtime.withFrameNanos { } }
             presentationReady = true
@@ -2639,21 +2593,6 @@ private fun ViewerVideoPlayer(
         if (isViewerDragging) {
             player.playWhenReady = false
             player.pause()
-            val textureView = playerView?.videoSurfaceView as? TextureView
-            val frame = if (presentationReady) captureVideoTransitionFrame(textureView) else null
-            if (frame != null) {
-                try {
-                    cacheVideoFrameThumbnail(
-                        context,
-                        uri,
-                        frame,
-                        mediaThumbnailCacheRevision(mediaItem)
-                    )
-                } catch (_: Throwable) {
-                } finally {
-                    frame.recycle()
-                }
-            }
         }
     }
 
@@ -2708,6 +2647,15 @@ private fun ViewerVideoPlayer(
         }
     }
 
+    // Draw progress at the display cadence without recomposing the player and controls each frame.
+    val smoothPosition = remember(uri) { mutableFloatStateOf(positionMs.toFloat()) }
+    LaunchedEffect(isActive, isPrepared, player) {
+        while (isActive && isPrepared) {
+            androidx.compose.runtime.withFrameNanos { }
+            smoothPosition.floatValue = if (isScrubbing || pendingSeekPositionMs != null) positionMs.toFloat()
+                else player.currentPosition.coerceIn(0L, durationMs.coerceAtLeast(1).toLong()).toFloat()
+        }
+    }
     val currentVideoAspect = remember(mediaItem.width, mediaItem.height, playerVideoWidth, playerVideoHeight) {
         val w = playerVideoWidth.takeIf { it > 0 } ?: mediaItem.width?.takeIf { it > 0 }
         val h = playerVideoHeight.takeIf { it > 0 } ?: mediaItem.height?.takeIf { it > 0 }
@@ -2984,6 +2932,7 @@ private fun ViewerVideoPlayer(
             visible = controlsVisible && !isViewerDragging && isPrepared,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                 .navigationBarsPadding()
                 .padding(bottom = ViewerBottomChromeActionInsetDp.dp)
                 .zIndex(3f),
@@ -3004,6 +2953,7 @@ private fun ViewerVideoPlayer(
                 if (compactLandscape) {
                     CompactVideoControlDeck(
                         positionMs = positionMs,
+                        visualPosition = { if (isScrubbing) positionMs.toFloat() else smoothPosition.floatValue },
                         durationMs = durationMs,
                         onPositionChange = { value ->
                             isScrubbing = true
@@ -3042,6 +2992,7 @@ private fun ViewerVideoPlayer(
                 } else {
                     ViewerVideoSeekSlider(
                         value = positionMs.coerceIn(0, durationMs.coerceAtLeast(1)).toFloat(),
+                        visualValue = { if (isScrubbing) positionMs.toFloat() else smoothPosition.floatValue },
                         onValueChange = { value ->
                             isScrubbing = true
                             positionMs = value.roundToInt()
@@ -3155,7 +3106,8 @@ private fun ViewerVideoSeekSlider(
     onValueChangeFinished: () -> Unit,
     valueRange: ClosedFloatingPointRange<Float>,
     enabled: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    visualValue: () -> Float = { value }
 ) {
     val currentRange by rememberUpdatedState(valueRange)
     val currentEnabled by rememberUpdatedState(enabled)
@@ -3203,23 +3155,26 @@ private fun ViewerVideoSeekSlider(
                 }
             }
     ) {
-        Slider(
-            value = value.coerceIn(valueRange),
-            onValueChange = {},
-            valueRange = valueRange,
-            enabled = enabled,
-            modifier = Modifier.fillMaxWidth().clearAndSetSemantics { },
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color.White,
-                inactiveTrackColor = Color.White.copy(alpha = 0.28f)
-            )
-        )
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+            val inset = 10.dp.toPx()
+            val trackEnd = (size.width - inset).coerceAtLeast(inset)
+            val fraction = ((visualValue() - valueRange.start) /
+                (valueRange.endInclusive - valueRange.start).coerceAtLeast(1f)).coerceIn(0f, 1f)
+            val thumbX = inset + (trackEnd - inset) * fraction
+            val centerY = size.height / 2f
+            drawLine(Color.White.copy(alpha = if (enabled) 0.28f else 0.12f),
+                Offset(inset, centerY), Offset(trackEnd, centerY), 3.dp.toPx(), androidx.compose.ui.graphics.StrokeCap.Round)
+            drawLine(Color.White, Offset(inset, centerY), Offset(thumbX, centerY),
+                3.dp.toPx(), androidx.compose.ui.graphics.StrokeCap.Round)
+            drawCircle(Color.Black.copy(alpha = 0.15f), 7.dp.toPx(), Offset(thumbX, centerY + 1.dp.toPx()))
+            drawCircle(Color.White, 5.dp.toPx(), Offset(thumbX, centerY))
+        }
     }
 }
 @Composable
 private fun CompactVideoControlDeck(
     positionMs: Int,
+    visualPosition: () -> Float,
     durationMs: Int,
     onPositionChange: (Float) -> Unit,
     onPositionChangeFinished: () -> Unit,
@@ -3232,63 +3187,71 @@ private fun CompactVideoControlDeck(
     videoFillFrame: Boolean,
     onToggleFill: () -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = "${formatPlaybackTime(positionMs)} / ${formatPlaybackTime(durationMs)}",
-            color = Color.White.copy(alpha = 0.84f),
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, shadow = ViewerVideoControlTextShadow),
-            maxLines = 1
-        )
-        ViewerVideoSeekSlider(
-            value = positionMs.coerceIn(0, durationMs.coerceAtLeast(1)).toFloat(),
-            onValueChange = onPositionChange,
-            onValueChangeFinished = onPositionChangeFinished,
-            modifier = Modifier.weight(1f),
-            valueRange = 0f..durationMs.coerceAtLeast(1).toFloat(),
-            enabled = durationMs > 0
-        )
-        VideoControlButton(
-            icon = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-            contentDescription = if (isMuted) "Unmute video" else "Mute video",
-            size = 48.dp,
-            iconSize = 19.dp,
-            containerAlpha = if (isMuted) 0.56f else 0.34f,
-            onClick = onToggleMute
-        )
-        VideoControlButton(
-            icon = Icons.Filled.Replay10,
-            contentDescription = "Rewind 10 seconds",
-            size = 48.dp,
-            iconSize = 20.dp,
-            onClick = onRewind
-        )
-        VideoControlButton(
-            icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-            contentDescription = if (isPlaying) "Pause video" else "Play video",
-            size = 48.dp,
-            iconSize = 24.dp,
-            containerAlpha = 0.48f,
-            onClick = onPlayPause
-        )
-        VideoControlButton(
-            icon = Icons.Filled.Forward10,
-            contentDescription = "Forward 10 seconds",
-            size = 48.dp,
-            iconSize = 20.dp,
-            onClick = onForward
-        )
-        VideoControlButton(
-            icon = Icons.Filled.AspectRatio,
-            contentDescription = if (videoFillFrame) "Fit video" else "Fill screen",
-            size = 48.dp,
-            iconSize = 19.dp,
-            containerAlpha = if (videoFillFrame) 0.56f else 0.34f,
-            onClick = onToggleFill
-        )
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = formatPlaybackTime(positionMs),
+                color = Color.White.copy(alpha = 0.84f),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, shadow = ViewerVideoControlTextShadow),
+                maxLines = 1
+            )
+            ViewerVideoSeekSlider(
+                value = positionMs.coerceIn(0, durationMs.coerceAtLeast(1)).toFloat(),
+                visualValue = visualPosition,
+                onValueChange = onPositionChange,
+                onValueChangeFinished = onPositionChangeFinished,
+                modifier = Modifier.weight(1f),
+                valueRange = 0f..durationMs.coerceAtLeast(1).toFloat(),
+                enabled = durationMs > 0
+            )
+            Text(formatPlaybackTime(durationMs), color = Color.White.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.labelSmall.copy(shadow = ViewerVideoControlTextShadow))
+        }
+        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            VideoControlButton(
+                icon = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                contentDescription = if (isMuted) "Unmute video" else "Mute video",
+                size = 48.dp,
+                iconSize = 19.dp,
+                containerAlpha = if (isMuted) 0.56f else 0.34f,
+                onClick = onToggleMute
+            )
+            VideoControlButton(
+                icon = Icons.Filled.Replay10,
+                contentDescription = "Rewind 10 seconds",
+                size = 48.dp,
+                iconSize = 20.dp,
+                onClick = onRewind
+            )
+            VideoControlButton(
+                icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                contentDescription = if (isPlaying) "Pause video" else "Play video",
+                size = 48.dp,
+                iconSize = 24.dp,
+                containerAlpha = 0.48f,
+                onClick = onPlayPause
+            )
+            VideoControlButton(
+                icon = Icons.Filled.Forward10,
+                contentDescription = "Forward 10 seconds",
+                size = 48.dp,
+                iconSize = 20.dp,
+                onClick = onForward
+            )
+            VideoControlButton(
+                icon = Icons.Filled.AspectRatio,
+                contentDescription = if (videoFillFrame) "Fit video" else "Fill screen",
+                size = 48.dp,
+                iconSize = 19.dp,
+                containerAlpha = if (videoFillFrame) 0.56f else 0.34f,
+                onClick = onToggleFill
+            )
+        }
     }
 }
 @Composable

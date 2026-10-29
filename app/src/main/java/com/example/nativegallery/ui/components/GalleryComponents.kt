@@ -135,7 +135,7 @@ private class LayoutCoordinatesRef(var value: LayoutCoordinates? = null)
 private object ThumbnailLoadCoordinator {
     // A grid must not start sixteen simultaneous bitmap decodes beside an animation.
     private val loadSemaphore = Semaphore(permits = 4)
-    val videoDecodeSemaphore = Semaphore(permits = 4)
+    val videoDecodeSemaphore = Semaphore(permits = 1)
     private val keyLocks = ConcurrentHashMap<String, KeyLock>()
 
     private class KeyLock {
@@ -189,6 +189,7 @@ private object ThumbnailLoadCoordinator {
 }
 
 private val thumbnailPrefetchSemaphore = Semaphore(permits = 2)
+private val videoPrefetchSemaphore = Semaphore(permits = 1)
 private val videoMetadataSemaphore = Semaphore(permits = 2)
 private const val VideoPosterCacheVersion = "native-gallery-video-poster-v2"
 
@@ -970,7 +971,9 @@ suspend fun prefetchMediaThumbnails(
         coroutineScope {
             requests.map { request ->
                 async {
-                    thumbnailPrefetchSemaphore.withPermit {
+                    // A slow/paused video codec must never occupy both photo-prefetch slots.
+                    val semaphore = if (request.isVideo) videoPrefetchSemaphore else thumbnailPrefetchSemaphore
+                    semaphore.withPermit {
                         currentCoroutineContext().ensureActive()
                         val loadQuality = if (request.size >= 1024 && !request.isVideo) {
                             ImageLoadQuality.HighQuality
@@ -1016,35 +1019,37 @@ fun cacheVideoFrameThumbnail(
     if (frame.isRecycled || frame.width <= 0 || frame.height <= 0) return
     val appContext = context.applicationContext
     val cacheUri = thumbnailCacheIdentityUri(uri, isVideo = true, cacheRevision)
-
-    val highQualityKey = ThumbnailMemoryCache.key(cacheUri, 1024, ImageLoadQuality.HighQuality)
-    val highQualityBitmap = if (max(frame.width, frame.height) <= 1024) {
-        frame.copy(Bitmap.Config.ARGB_8888, false)
-    } else {
-        val scale = 1024f / max(frame.width, frame.height)
-        Bitmap.createScaledBitmap(frame, (frame.width * scale).roundToInt(), (frame.height * scale).roundToInt(), true)
-    }
-    highQualityBitmap?.let {
-        ThumbnailMemoryCache.replace(highQualityKey, it)
-    }
-
-    val entries = listOf(384, 512).map { size ->
-        val scale = (size.toFloat() / max(frame.width, frame.height)).coerceAtMost(1f)
-        val width = (frame.width * scale).roundToInt().coerceAtLeast(1)
-        val height = (frame.height * scale).roundToInt().coerceAtLeast(1)
-        val cachedFrame = if (width == frame.width && height == frame.height) {
-            frame.copy(Bitmap.Config.ARGB_8888, false)
-        } else {
-            Bitmap.createScaledBitmap(frame, width, height, true)
-        }
-        val cacheKey = ThumbnailMemoryCache.key(cacheUri, size)
-        ThumbnailMemoryCache.replace(cacheKey, cachedFrame)
-        cacheKey to cachedFrame
-    }
+    // The caller may recycle its capture. Copy once, then scale and persist off the main thread.
+    val snapshot = frame.copy(Bitmap.Config.ARGB_8888, false) ?: return
     VideoFrameCacheScope.launch {
-        entries.forEach { (cacheKey, cachedFrame) ->
-            ThumbnailDiskCache.replace(appContext, cacheKey, cachedFrame)
+        val highQualityKey = ThumbnailMemoryCache.key(cacheUri, 1024, ImageLoadQuality.HighQuality)
+        val highQualityBitmap = if (max(snapshot.width, snapshot.height) <= 1024) {
+            snapshot
+        } else {
+            val scale = 1024f / max(snapshot.width, snapshot.height)
+            Bitmap.createScaledBitmap(snapshot, (snapshot.width * scale).roundToInt(), (snapshot.height * scale).roundToInt(), true)
         }
+        highQualityBitmap?.let {
+            ThumbnailMemoryCache.replace(highQualityKey, it)
+        }
+
+        listOf(384, 512).forEach { size ->
+            val cacheKey = ThumbnailMemoryCache.key(cacheUri, size)
+            // Keep the displayed poster stable across playback sessions. Captures fill missing posters.
+            if (ThumbnailMemoryCache.get(cacheKey) != null) return@forEach
+            val scale = (size.toFloat() / max(snapshot.width, snapshot.height)).coerceAtMost(1f)
+            val width = (snapshot.width * scale).roundToInt().coerceAtLeast(1)
+            val height = (snapshot.height * scale).roundToInt().coerceAtLeast(1)
+            val cachedFrame = if (width == snapshot.width && height == snapshot.height) {
+                snapshot.copy(Bitmap.Config.ARGB_8888, false)
+            } else {
+                Bitmap.createScaledBitmap(snapshot, width, height, true)
+            }
+            ThumbnailMemoryCache.put(cacheKey, cachedFrame)
+            ThumbnailMemoryCache.pin(cacheKey, cachedFrame)
+            ThumbnailDiskCache.put(appContext, cacheKey, cachedFrame)
+        }
+        if (highQualityBitmap !== snapshot) snapshot.recycle()
     }
 }
 

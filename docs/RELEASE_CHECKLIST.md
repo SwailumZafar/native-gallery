@@ -1,4 +1,4 @@
-# Native Gallery Release Checklist
+# Luma Nook Release Checklist
 
 Use this checklist for the 0.9.0 closed beta and repeat it for every production
 release.

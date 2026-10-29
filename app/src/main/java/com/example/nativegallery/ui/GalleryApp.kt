@@ -103,12 +103,18 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.windowInsetsPadding
+import com.example.nativegallery.data.GalleryPalette
+import com.example.nativegallery.ui.theme.galleryColorScheme
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.RadioButton
@@ -262,6 +268,7 @@ private data class AlbumTransitionSpec(
     val sortMode: AlbumDetailSortMode = AlbumDetailSortMode.Newest,
     val firstVisibleRow: Int = 0,
     val firstVisibleRowOffset: Int = 0,
+    val previewBitmap: Bitmap? = null,
     val initialProgress: Float = if (mode == AlbumTransitionMode.Closing) 1f else 0f
 )
 
@@ -344,7 +351,8 @@ private data class MediaCloseTransitionSpec(
     val startBackdropAlpha: Float,
     val startRotationZ: Float = 0f,
     val startRotationX: Float = 0f,
-    val previewBitmap: Bitmap? = null
+    val previewBitmap: Bitmap? = null,
+    val targetBitmap: Bitmap? = null
 )
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -498,19 +506,6 @@ fun GalleryApp(
     var albumTransitionKey by remember { mutableIntStateOf(0) }
     var albumTransitionCommittedKey by remember { mutableIntStateOf(-1) }
     var albumTransitionAwaitingDestinationKey by remember { mutableIntStateOf(-1) }
-    val activeTransitionAlbumIdState = remember {
-        derivedStateOf {
-            albumTransition
-                ?.takeIf {
-                    it.mode == AlbumTransitionMode.Closing ||
-                        (
-                            it.mode == AlbumTransitionMode.Opening &&
-                                albumTransitionCommittedKey == it.key
-                        )
-                }
-                ?.album?.id
-        }
-    }
     var mediaOpenTransition by remember { mutableStateOf<MediaOpenTransitionSpec?>(null) }
     var pendingMediaOpenKey by remember { mutableStateOf<Int?>(null) }
     var viewerOpeningPreview by remember { mutableStateOf<Bitmap?>(null) }
@@ -543,12 +538,12 @@ fun GalleryApp(
     val albumDetailListState = rememberLazyListState()
     LaunchedEffect(anyTransitionActive, viewerVisible, mainPagerState, photosListState, albumsListState, albumDetailListState) {
         snapshotFlow {
-            anyTransitionActive || mainPagerState.isScrollInProgress ||
-                photosListState.isScrollInProgress || albumsListState.isScrollInProgress ||
-                albumDetailListState.isScrollInProgress
-        }.collect { moving ->
+            val moving = anyTransitionActive || mainPagerState.isScrollInProgress
+            moving to (viewerVisible || moving || photosListState.isScrollInProgress ||
+                albumsListState.isScrollInProgress || albumDetailListState.isScrollInProgress)
+        }.collect { (moving, blockVideoDecoder) ->
             com.example.nativegallery.ui.components.GalleryImageWorkScheduler.setNavigationMoving(moving)
-            com.example.nativegallery.ui.components.VideoThumbnailDecoder.setInteractionBlocked(viewerVisible || moving)
+            com.example.nativegallery.ui.components.VideoThumbnailDecoder.setInteractionBlocked(blockVideoDecoder)
         }
     }
     DisposableEffect(Unit) {
@@ -1370,6 +1365,7 @@ fun GalleryApp(
                     else -> 22f
                 },
                 mode = AlbumTransitionMode.Opening,
+                previewBitmap = DisplayedBitmapCache.get(album.coverUri),
                 sortMode = albumDetailSortModes[album.id] ?: AlbumDetailSortMode.Newest
             )
             return
@@ -1432,6 +1428,7 @@ fun GalleryApp(
                     else -> 22f
                 },
                 mode = AlbumTransitionMode.Closing,
+                previewBitmap = DisplayedBitmapCache.get(closingAlbum.coverUri),
                 sortMode = albumDetailSortModes[closingAlbum.id] ?: AlbumDetailSortMode.Newest,
                 firstVisibleRow = albumDetailListState.firstVisibleItemIndex,
                 firstVisibleRowOffset = albumDetailListState.firstVisibleItemScrollOffset
@@ -1557,8 +1554,13 @@ fun GalleryApp(
         viewerVisible = false
         viewerRevealMediaId = null
         mediaOpenTransition = null
-        val previewBitmap = DisplayedBitmapCache.get(transitionMediaItem.contentUri)
+        val previewBitmap = (if (transitionMediaItem.isVideo) {
+            DisplayedBitmapCache.getSmallest(transitionMediaItem.contentUri)
+        } else DisplayedBitmapCache.get(transitionMediaItem.contentUri))
             ?: DisplayedBitmapCache.get(transitionMediaItem.previewUri)
+            ?: com.example.nativegallery.ui.components.mediaThumbnailCacheUri(transitionMediaItem)?.let {
+                ThumbnailMemoryCache.getNearest(it, 384)
+            }
         mediaTileBounds.clear()
         if (bounds.isUsableTransitionBounds()) {
             viewerReturnFallbackBounds = bounds
@@ -1735,7 +1737,8 @@ fun GalleryApp(
                     startBackdropAlpha = startBackdropAlpha.coerceIn(0f, 1f),
                     startRotationZ = startRotationZ,
                     startRotationX = startRotationX,
-                    previewBitmap = previewBitmap
+                    previewBitmap = previewBitmap ?: openSpec.previewBitmap,
+                    targetBitmap = DisplayedBitmapCache.getSmallest(openSpec.mediaItem.contentUri)
                 )
                 viewerCloseInProgress = false
             } else {
@@ -1798,7 +1801,8 @@ fun GalleryApp(
                     startBackdropAlpha = startBackdropAlpha.coerceIn(0f, 1f),
                     startRotationZ = startRotationZ,
                     startRotationX = startRotationX,
-                    previewBitmap = previewBitmap
+                    previewBitmap = previewBitmap,
+                    targetBitmap = DisplayedBitmapCache.getSmallest(currentItem.contentUri)
                 )
                 viewerCloseInProgress = false
             } else {
@@ -2648,10 +2652,6 @@ fun GalleryApp(
                     Row(modifier = Modifier.fillMaxSize()) {
                         if (
                             destination == GalleryDestination.Main &&
-                            mainNavigationChromeReady &&
-                            selectedMediaIds.isEmpty() &&
-                            !viewerVisible &&
-                            navigationTransitionIdle &&
                             adaptivePolicy.useNavigationRail
                         ) {
                             GalleryNavigationRail(
@@ -2837,7 +2837,6 @@ fun GalleryApp(
                                                 },
                                                 contentPadding = innerPadding,
                                                 listState = albumsListState,
-                                                activeTransitionAlbumId = activeTransitionAlbumIdState,
                                                 mediaAccessNotice = mediaAccessNotice,
                                                 isLoading = areAlbumsLoading,
                                                 searchQuery = gallerySearchQuery,
@@ -3414,7 +3413,7 @@ fun GalleryApp(
                     title = { Text("Allow direct media changes?") },
                     text = {
                         Text(
-                            "Android requires one one-time switch. On the next screen, turn on 'Allow app to manage media', then return. Native Gallery can then move, trash, restore, and delete media without the large confirmation block. This is optional and can be revoked in Android Settings."
+                            "Android requires one one-time switch. On the next screen, turn on 'Allow app to manage media', then return. ${stringResource(R.string.app_name)} can then move, trash, restore, and delete media without the large confirmation block. This is optional and can be revoked in Android Settings."
                         )
                     },
                     confirmButton = {
@@ -3654,6 +3653,12 @@ internal fun GallerySettingsSheet(
                                 { onSettingsChange(settings.copy(themeMode = mode)) }, Modifier.weight(1f))
                         }
                     }
+                    Text("Color palette", style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(top = 6.dp))
+                    GalleryPalette.entries.forEach { palette ->
+                        GalleryPaletteChoice(palette, settings.palette == palette,
+                            onClick = { onSettingsChange(settings.copy(palette = palette)) })
+                    }
                 }
                 GallerySettingsGroup("Grid layout") {
                     Text("Columns in Photos and albums", style = MaterialTheme.typography.bodySmall,
@@ -3696,6 +3701,34 @@ internal fun GallerySettingsSheet(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun GalleryPaletteChoice(palette: GalleryPalette, selected: Boolean, onClick: () -> Unit) {
+    val preview = galleryColorScheme(palette, dark = false)
+    Surface(
+        modifier = Modifier.fillMaxWidth().solarTactile(onClick = onClick)
+            .semantics { role = Role.RadioButton; this.selected = selected },
+        shape = RoundedCornerShape(20.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    ) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                listOf(preview.primary, preview.primaryContainer, preview.tertiary).forEach { color ->
+                    Box(Modifier.size(17.dp, 34.dp).background(color, RoundedCornerShape(9.dp)))
+                }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(palette.label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(palette.description, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            RadioButton(selected = selected, onClick = null)
         }
     }
 }
@@ -4012,6 +4045,13 @@ private fun GalleryMenuScreen(
                     label = "Cleanup",
                     description = "Review duplicate candidates and large files",
                     onClick = onOpenCleanup,
+                    showDivider = true
+                )
+                GalleryMenuRow(
+                    icon = Icons.Filled.Palette,
+                    label = "Appearance",
+                    description = "Color palettes and light or dark mode",
+                    onClick = onOpenSettings,
                     showDivider = true
                 )
                 GalleryMenuRow(
@@ -4599,7 +4639,6 @@ private fun PositionAwareAlbumTransitionOverlay(
     }
     if (transition.mode == AlbumTransitionMode.Opening && !committed) {
         SideEffect { onCommitted(transition) }
-        return
     }
 
     val progress = remember(transition.key) {
@@ -4731,7 +4770,10 @@ private fun PositionAwareAlbumTransitionOverlay(
                     .fillMaxSize()
                     .graphicsLayer {
                         val expansion = progress.value.coerceIn(0f, 1f)
-                        alpha = 1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)
+                        // The real card stays painted underneath, including its labels and gradient.
+                        // Blend at the tile endpoints instead of swapping it for a bare cover.
+                        alpha = GalleryMotion.smoothstep(0f, 0.08f, expansion) *
+                            (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion))
                     },
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Crop,
@@ -4740,6 +4782,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                 backgroundColor = MaterialTheme.colorScheme.surfaceVariant,
                 cachedOnly = true,
                 animatedPlaceholder = false,
+                initialBitmap = transition.previewBitmap,
                 isVideo = transition.album.hasVideoBadge
             )
         }
@@ -4898,6 +4941,9 @@ private fun ReferenceMediaCloseOverlay(
             ?: DisplayedBitmapCache.get(transition.mediaItem.contentUri)
             ?: decodedHeroBitmap
     }
+    val returnPoster = remember(transition.key) {
+        transition.targetBitmap ?: DisplayedBitmapCache.getSmallest(transition.mediaItem.contentUri)
+    }
 
     val dismissFraction = ((1f - transition.startScale) / (1f - 0.72f)).coerceIn(0f, 1f)
     val startRadius = if (transition.startScale < 0.99f) {
@@ -4914,6 +4960,7 @@ private fun ReferenceMediaCloseOverlay(
     ReferenceMediaHeroFrame(
         mediaItem = geometryMediaItem,
         initialBitmap = closingPreview,
+        targetBitmap = returnPoster.takeIf { transition.mediaItem.isVideo },
         startBounds = startBounds,
         endBounds = tileBounds,
         progress = { progress.value },
@@ -4955,6 +5002,7 @@ private fun ReferenceMediaHeroFrame(
     loadQuality: ImageLoadQuality = ImageLoadQuality.Thumbnail,
     cachedOnly: Boolean = true,
     initialBitmap: Bitmap? = null,
+    targetBitmap: Bitmap? = null,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
@@ -4985,7 +5033,7 @@ private fun ReferenceMediaHeroFrame(
         ) {
                 GalleryImage(
                     imageRes = mediaItem.imageRes,
-                    imageUri = mediaItem.contentUri,
+                    imageUri = mediaItem.contentUri.takeUnless { mediaItem.isVideo && initialBitmap != null },
                     contentDescription = mediaItem.title,
                     modifier = Modifier.fillMaxSize(),
                     cornerRadius = 0.dp,
@@ -4994,13 +5042,21 @@ private fun ReferenceMediaHeroFrame(
                     loadQuality = loadQuality,
                     backgroundColor = Color.Transparent,
                     cachedOnly = cachedOnly,
-                    fallbackImageUri = mediaItem.previewUri ?: mediaItem.contentUri,
+                    fallbackImageUri = (mediaItem.previewUri ?: mediaItem.contentUri)
+                        .takeUnless { mediaItem.isVideo && initialBitmap != null },
                     isVideo = mediaItem.isVideo,
                     cacheRevision = com.example.nativegallery.ui.components.mediaThumbnailCacheRevision(mediaItem),
                     animatedPlaceholder = false,
                     drawBounds = bounds,
                     initialBitmap = initialBitmap
                 )
+                if (targetBitmap != null && targetBitmap !== initialBitmap) {
+                    GalleryImage(imageRes = null, imageUri = null, contentDescription = mediaItem.title,
+                        modifier = Modifier.fillMaxSize().graphicsLayer {
+                            alpha = GalleryMotion.smoothstep(0.72f, 0.98f, progress().coerceIn(0f, 1f))
+                        }, cornerRadius = 0.dp, backgroundColor = Color.Transparent,
+                        animatedPlaceholder = false, drawBounds = bounds, initialBitmap = targetBitmap)
+                }
         }
     }
 }
@@ -5298,13 +5354,16 @@ private fun GalleryNavigationRail(
     selectedTab: GalleryTab,
     onTabSelected: (GalleryTab) -> Unit
 ) {
-    NavigationRail(
-        modifier = Modifier
-            .fillMaxHeight()
-            .width(88.dp),
-        containerColor = MaterialTheme.colorScheme.background,
-        header = { Spacer(Modifier.height(44.dp)) }
-    ) {
+    // Keep this lane measured behind the viewer, so its return grid never changes width.
+    Box(Modifier.fillMaxHeight()
+        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
+        .padding(start = 12.dp, end = 12.dp), contentAlignment = Alignment.Center) {
+        Surface(shape = RoundedCornerShape(38.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 10.dp,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))) {
+        Column(Modifier.width(76.dp).padding(vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         GalleryRailItem(
             selected = selectedTab == GalleryTab.Photos,
             icon = Icons.Filled.Image,
@@ -5323,6 +5382,8 @@ private fun GalleryNavigationRail(
             label = "Menu",
             onClick = { onTabSelected(GalleryTab.Menu) }
         )
+        }
+        }
     }
 }
 
@@ -5333,14 +5394,12 @@ private fun GalleryRailItem(
     label: String,
     onClick: () -> Unit
 ) {
-    NavigationRailItem(
-        selected = selected,
-        onClick = onClick,
-        modifier = Modifier.solarTactile(scaleDown = 0.90f, onClick = onClick),
-        icon = { Icon(icon, contentDescription = null) },
-        label = { Text(label, maxLines = 1) },
-        alwaysShowLabel = true
-    )
+    Surface(modifier = Modifier.size(64.dp).solarTactile(scaleDown = 0.90f, onClick = onClick)
+        .semantics { role = Role.Tab; this.selected = selected },
+        shape = RoundedCornerShape(28.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent) {
+        GalleryNavigationItem(selected = selected, icon = icon, label = label)
+    }
 }
 
 @Composable

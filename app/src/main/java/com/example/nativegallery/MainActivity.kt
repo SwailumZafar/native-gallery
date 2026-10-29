@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
                 GalleryThemeMode.Dark -> true
             }
             var renderedDarkTheme by remember { mutableStateOf(darkTheme) }
+            var renderedPalette by remember { mutableStateOf(gallerySettings.palette) }
             var themeTransitionActive by remember { mutableStateOf(false) }
             var themeSnapshotPending by remember { mutableStateOf(false) }
             var themeSnapshotReady by remember { mutableStateOf(false) }
@@ -72,8 +73,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-            LaunchedEffect(darkTheme) {
-                if (renderedDarkTheme == darkTheme) return@LaunchedEffect
+            LaunchedEffect(darkTheme, gallerySettings.palette) {
+                if (renderedDarkTheme == darkTheme && renderedPalette == gallerySettings.palette) return@LaunchedEffect
 
                 themeSnapshotPending = true
                 snapshotFlow { themeSnapshotReady }.first { it }
@@ -81,6 +82,7 @@ class MainActivity : ComponentActivity() {
                 themeTransitionAlpha.snapTo(1f)
                 themeTransitionActive = true
                 renderedDarkTheme = darkTheme
+                renderedPalette = gallerySettings.palette
 
                 // Keep the frozen frame opaque until the replacement theme has completed a draw.
                 repeat(2) { withFrameNanos { } }
@@ -126,7 +128,7 @@ class MainActivity : ComponentActivity() {
                     }
             ) {
                 VideoThumbnailDecoderHost(themeChanging = themeTransitionActive)
-                GalleryTheme(darkTheme = renderedDarkTheme) {
+                GalleryTheme(darkTheme = renderedDarkTheme, palette = renderedPalette) {
                     GalleryApp(
                         settings = gallerySettings,
                         onInitialPresentationReady = ::setGalleryPresentationReady,

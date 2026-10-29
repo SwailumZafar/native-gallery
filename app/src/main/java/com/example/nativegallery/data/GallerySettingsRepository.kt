@@ -4,6 +4,7 @@ import android.content.Context
 
 data class GallerySettings(
     val themeMode: GalleryThemeMode = GalleryThemeMode.System,
+    val palette: GalleryPalette = GalleryPalette.Iris,
     val gridDensity: GalleryGridDensity = GalleryGridDensity.Compact,
     val folderTransitionStyle: FolderTransitionStyle = FolderTransitionStyle.Normal,
     val viewerTransitionStyle: ViewerTransitionStyle = ViewerTransitionStyle.Normal,
@@ -30,6 +31,12 @@ enum class GalleryGridDensity(
     Micro(photoColumns = 6, albumDetailColumns = 6)
 }
 
+enum class GalleryPalette(val label: String, val description: String) {
+    Iris("Iris", "Violet & lilac"),
+    Lagoon("Lagoon", "Teal & sea glass"),
+    Sunset("Sunset", "Coral & apricot")
+}
+
 enum class FolderTransitionStyle(val label: String, val description: String) {
     Normal("Normal", "Original smooth fluid LivingFlow transition"),
     Fast("Fast Enhanced", "Snappy high-speed LivingFlow transition with accelerated response")
@@ -49,6 +56,7 @@ class GallerySettingsRepository(context: Context) {
     fun initialSettings(): GallerySettings {
         return GallerySettings(
             themeMode = enumPreference(THEME_MODE_KEY, GalleryThemeMode.System),
+            palette = enumPreference(PALETTE_KEY, GalleryPalette.Iris),
             gridDensity = enumPreference(GRID_DENSITY_KEY, GalleryGridDensity.Compact),
             folderTransitionStyle = when (preferences.getString(FOLDER_TRANSITION_STYLE_KEY, null)) {
                 "Fast" -> FolderTransitionStyle.Fast
@@ -67,6 +75,7 @@ class GallerySettingsRepository(context: Context) {
     fun save(settings: GallerySettings): GallerySettings {
         preferences.edit()
             .putString(THEME_MODE_KEY, settings.themeMode.name)
+            .putString(PALETTE_KEY, settings.palette.name)
             .putString(GRID_DENSITY_KEY, settings.gridDensity.name)
             .putString(FOLDER_TRANSITION_STYLE_KEY, settings.folderTransitionStyle.name)
             .putString(VIEWER_TRANSITION_STYLE_KEY, settings.viewerTransitionStyle.name)
@@ -84,6 +93,7 @@ class GallerySettingsRepository(context: Context) {
 
     private companion object {
         const val THEME_MODE_KEY = "theme_mode"
+        const val PALETTE_KEY = "palette"
         const val GRID_DENSITY_KEY = "grid_density"
         const val FOLDER_TRANSITION_STYLE_KEY = "folder_transition_style"
         const val VIEWER_TRANSITION_STYLE_KEY = "viewer_transition_style"

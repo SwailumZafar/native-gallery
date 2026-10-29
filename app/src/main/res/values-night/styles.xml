@@ -5,8 +5,8 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowBackground">#101820</item>
-        <item name="android:navigationBarColor">#101820</item>
-        <item name="android:statusBarColor">#101820</item>
+        <item name="android:windowBackground">#131019</item>
+        <item name="android:navigationBarColor">#131019</item>
+        <item name="android:statusBarColor">#131019</item>
     </style>
 </resources>

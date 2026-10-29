@@ -1,4 +1,4 @@
-# Native Gallery App Handoff
+# Luma Nook App Handoff
 
 Last updated: 2026-10-29
 
@@ -58,6 +58,7 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-19 slice: added DocumentPhotoRepository and DocumentPhotosViewModel so cancellable OCR indexing, cache validation, scan progress, and rescan state stay outside GalleryApp composition state.
   - 2026-07-30 slice: extracted two-phase Locked Media import/rollback decisions into `LockedMediaOperations`, and added an Activity-scoped viewer/pending-MediaStore session holder so rotation cannot discard an open viewer or a required cancellation rollback.
 - [ ] Continue reducing unnecessary MediaStore reloads and background I/O.
+  - 2026-10-29 slice: visible photo/album requests continue during held scrolling, and a date-aware, bounded grid window preloads four rows behind and roughly sixteen rows ahead. Navigation/viewer morphs still gate new image work. Photo and video prefetch use separate permits; long video-codec readiness waits remain cancellable instead of expiring into a permanent missing poster. See the Luma Nook entry below.
   - 2026-10-25 slice: eliminated disk re-decodes on thumbnail memory hits, bounded decode/write concurrency, paused new image work during visible motion, and retained main pages across folder visits. The optimized build and 156 JVM/10 device tests pass; measured photo, folder, and scrolling frame drops decreased. See the performance section below.
   - 2026-07-15 slice: restore/delete-forever batches now persist Recently Deleted state once per action instead of once per media item.
   - 2026-07-15 slice: observer bursts now coalesce to one newest-page query and one full reconciliation; repeated quick refreshes cancel before queueing duplicate work.
@@ -117,8 +118,9 @@ Current repository state:
 Branch: main
 Remote tracking branch: origin/main
 Previous pushed implementation baseline: ec0cbc0 Promote selected v0.9.15 source as build 18
-Current save point: v0.9.16 / code 19; bounded photo detail, prepared viewer return, grouped settings sheet
-Installed build: v0.9.16 / code 19 on phone 30e49129; APK hash recorded below
+Previous save point: v0.9.16 / code 19; bounded photo detail, prepared viewer return, grouped settings sheet
+Current workspace: Luma Nook v0.9.17 / code 20; palettes, scroll preloading, stable transition handoffs and landscape pill
+Installed build: Luma Nook v0.9.17 / code 20 on phone 30e49129; APK hash recorded below
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -146,6 +148,68 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-10-29 Luma Nook, Appearance, Loading, and Video Refinement
+
+The user requested a distinctive, easy name in the spirit of Luma Gallery, richer themes with
+Menu access, removal of the album-tile/video flashes, reliable rapid video opening and closing,
+loading while a scrolling finger remains down, a larger nearby preload range, continuous video
+seek progress, and a floating landscape navigation pill with camera-cutout clearance. Preserve
+the existing photo/folder motion preferences and spring specifications.
+
+- Renamed the launcher, Menu identity, permission explanation, and product documentation to
+  **Luma Nook**. A web check found another Android gallery using Luma; no exact photo-gallery
+  match for Luma Nook was found in the checked results. This is a naming search, not a claim of
+  exclusive ownership. Keep the application ID, vault authority, stored preferences, restore/edit
+  folder paths, and Kotlin namespace unchanged so this remains an in-place update.
+- Added persisted Iris (default), Lagoon, and Sunset palettes, each with a coordinated light
+  and dark scheme, tonal surfaces, selected controls and readable text. Menu has an Appearance
+  entry opening the top of Settings. Palette changes reuse the existing theme crossfade.
+  Launcher accent and Android startup surfaces follow the default Iris colors.
+- Album source cards remain painted under their morph. Removed the one-composition opening
+  gap and blend the cover near its tile endpoints, retaining the source labels/gradient and
+  current cover bitmap instead of briefly substituting an empty/undecorated card. Existing
+  folder/photo spring constants, motion options, zoom and dismiss gestures are unchanged.
+- Removed the blanket scroll gate from Photos, album grids and album covers, including the
+  central image-work scheduler. Nearby prefetch refills every four rows, covers roughly four
+  rows behind and sixteen ahead, handles date headings/short sections, and jumps directly to
+  the relevant range deep in a library. Existing memory-cache limits and decode concurrency
+  remain bounded; video prefetch has its own single permit and cannot occupy photo slots.
+- Video heroes hold the actual tapped/captured preview, then blend into the displayed grid
+  poster at close. Playback captures fill missing posters without replacing an existing grid
+  poster. Scaling/cache writing runs off the UI thread. Removed duplicate capture work on drag
+  and disposal. A ViewModel-owned foreground player leases across rapid reopen gestures and
+  releases after two idle seconds; stale disposal cannot mute a newer lease. Background playback
+  remains gated by the existing lifecycle policy.
+- The seek track is drawn at display cadence from playback position without recomposing the
+  full player every frame. Scrubbing remains immediate and accessible through progress semantics.
+  Compact landscape uses a full timeline with transport controls underneath and safe side insets.
+- Landscape navigation is a rounded floating pill with start-side safe-drawing/cutout clearance.
+  Its lane stays measured behind the media viewer, preventing a grid-width jump on dismissal.
+- Additional hardening: a visible fallback-video thumbnail no longer expires merely because a
+  held scroll or viewer blocks codecs for more than 1.5 seconds. The wait resumes when allowed
+  and is cancelled normally when its tile/prefetch range is disposed.
+- Verification: all **172 JVM tests pass**. Debug lint succeeds with 0 errors (11 existing warnings,
+  2 informational items); debug APK and Android-test APK assemble. New coverage checks date-aware
+  preload bounds/edges and text contrast across all six palette/mode combinations. Instrumentation
+  sources compile for palette selection plus rapid video lease reuse/stale-disposal protection.
+  No emulator/device interaction tests or installation were performed; retain the user's prior
+  request to avoid emulator testing. Phone checks remain necessary for frame pacing and flicker.
+- Optimized `assembleBenchmark` also passes, including R8, resource shrinking and vital lint.
+  Deliverable: `tmp/Luma-Nook-0.9.17.apk`, **46,443,237 bytes**, version `0.9.17` / code `20`.
+  SHA-256: `924F593E8DC8EA07DA7A5F13EB8431589665C5C699D55CF44B921F39A622E5F2`.
+  APK signature verifies and its signer SHA-256 matches the installed v0.9.16 deliverable
+  (`41bf4c7a80e196b300c07292f61dbae36f32b2142273ded0771f37607fcb5325`). Package/label inspection
+  confirms `com.swailumzafar.nativegallery` / `Luma Nook`; this is an update-compatible APK.
+- Installation follow-up: the user requested installation. Rechecked the named APK's SHA-256,
+  found phone `30e49129` (`RMX3852`), and installed with `adb -s 30e49129 install -r`.
+  ADB returned Success. Package inspection confirms version `0.9.17`, code `20`, with
+  lastUpdateTime `2026-10-29 14:47:58`. App data was retained; no app launch or device tests
+  were performed during installation.
+- Device checks: select each palette in Menu → Appearance; hold a scrolling finger down while
+  new photos enter view, then jump far through several date sections; repeatedly open/close an
+  album and a video without pausing; inspect seek motion and controls in landscape; close both
+  photos/videos in landscape and verify that the pill clears the camera and the grid stays fixed.
 
 ## 2026-10-29 GitHub Save of Installed v0.9.16
 

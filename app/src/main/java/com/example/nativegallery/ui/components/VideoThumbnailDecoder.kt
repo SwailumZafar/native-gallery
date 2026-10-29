@@ -65,7 +65,9 @@ internal object VideoThumbnailDecoder {
             // Releasing a decoder during a transition is immediate. The same visible request
             // waits and retries after the viewer/transition finishes instead of competing for it.
             while (true) {
-                val view = withTimeoutOrNull(1_500L) { readiness.first { it != null } } ?: return@withLock null
+                // A held scroll/viewer can outlast a timeout. Keep the visible request pending
+                // until codecs are allowed again; disposing the tile still cancels this wait.
+                val view = readiness.first { it != null } ?: continue
                 val result = coroutineScope {
                     val rendering = async {
                         withTimeoutOrNull(2_500L) { render(context, uri, view, maxSide) }

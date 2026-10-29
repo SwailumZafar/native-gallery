@@ -19,6 +19,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import com.example.nativegallery.data.GallerySettings
 import com.example.nativegallery.data.GalleryThemeMode
+import com.example.nativegallery.data.GalleryPalette
 import com.example.nativegallery.data.MediaManagementAccessState
 import com.example.nativegallery.data.MediaManagementAccessStatus
 import com.example.nativegallery.ui.theme.GalleryTheme
@@ -48,6 +49,8 @@ class GallerySettingsSheetTest {
         saveSheet("settings-dark.png")
         composeRule.onNodeWithText("Dark").performClick()
         composeRule.runOnIdle { assertEquals(GalleryThemeMode.Dark, settings.themeMode) }
+        composeRule.onNodeWithText("Sunset").performScrollTo().performClick()
+        composeRule.runOnIdle { assertEquals(GalleryPalette.Sunset, settings.palette) }
         composeRule.onNodeWithText("Autoplay videos").performScrollTo().performClick()
         composeRule.runOnIdle { assertFalse(settings.autoplayVideos) }
         composeRule.onNodeWithText("Done").performClick()

@@ -208,9 +208,12 @@ fun PhotosScreen(
     val gridBottomInsetPx = with(density) { contentPadding.calculateBottomPadding().toPx() }
     val pinchScaleAnim = remember { Animatable(1f) }
     val trackTileBounds = shouldTrackPhotoTileBounds(isSelectionMode, revealMediaId != null)
-    val deferThumbnailLoads = remember(listState) {
-        derivedStateOf { shouldDeferPhotoThumbnailLoads(listState.isScrollInProgress) }
+    // Visible requests remain live during touch scrolling; bounded IO keeps them off the UI thread.
+    val deferThumbnailLoads = remember { mutableStateOf(false) }
+    val prefetchRowStarts = remember(sections, gridColumns) {
+        photoGridRowStarts(sections.map { it.value.size }, gridColumns)
     }
+    PrefetchMediaGrid(filteredMediaItems, listState, gridColumns, prefetchRowStarts)
 
     val currentGridColumns by rememberUpdatedState(gridColumns)
     val currentOnGridColumnsChange by rememberUpdatedState(onGridColumnsChange)
@@ -1054,7 +1057,6 @@ internal fun shouldTrackPhotoTileBounds(selectionMode: Boolean, revealInProgress
     return selectionMode || revealInProgress
 }
 
-internal fun shouldDeferPhotoThumbnailLoads(scrolling: Boolean): Boolean = scrolling
 
 private fun interpolate(start: Float, end: Float, fraction: Float): Float {
     val boundedFraction = fraction.coerceIn(0f, 1f)

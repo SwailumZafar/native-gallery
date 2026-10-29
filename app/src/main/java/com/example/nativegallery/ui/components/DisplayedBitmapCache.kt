@@ -26,4 +26,12 @@ internal object DisplayedBitmapCache {
             .mapNotNull { it.second.get()?.takeUnless(Bitmap::isRecycled) }
             .maxByOrNull { it.width.toLong() * it.height }
     }
+
+    @Synchronized
+    fun getSmallest(uri: Uri?): Bitmap? {
+        if (uri == null) return null
+        return entries.values.asSequence().filter { it.first == uri.toString() }
+            .mapNotNull { it.second.get()?.takeUnless(Bitmap::isRecycled) }
+            .minByOrNull { it.width.toLong() * it.height }
+    }
 }

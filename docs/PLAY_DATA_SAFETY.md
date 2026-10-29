@@ -1,12 +1,12 @@
 # Google Play Data Safety Draft
 
-This document is a release-owner checklist for Native Gallery 0.9.0. Confirm
+This document is a release-owner checklist for Luma Nook 0.9.0. Confirm
 every answer against the final Play bundle, Google's current definitions, and
 all included SDK versions before submission.
 
 ## Proposed Play Console disclosure
 
-Native Gallery does not upload photos, videos, media metadata, recognized text,
+Luma Nook does not upload photos, videos, media metadata, recognized text,
 or vault contents to the developer or Google. OCR inputs and results stay on the
 device. User-directed Android sharing sends selected media only to the user's
 chosen destination.
