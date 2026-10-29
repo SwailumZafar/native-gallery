@@ -10,6 +10,21 @@ import org.junit.Test
 
 class GalleryImageWorkSchedulerTest {
     @Test
+    fun aFailedThumbnailWaitsForALibraryUpdateAndDoesNotMissAnEarlyNotification() = runBlocking {
+        val failedAt = GalleryImageWorkScheduler.mediaRevision()
+        var retried = false
+        val retry = launch(start = CoroutineStart.UNDISPATCHED) {
+            GalleryImageWorkScheduler.awaitLibraryChange(failedAt)
+            retried = true
+        }
+        assertFalse(retried)
+        GalleryImageWorkScheduler.notifyLibrarySettled()
+        retry.join()
+        assertTrue(retried)
+        GalleryImageWorkScheduler.awaitLibraryChange(failedAt)
+    }
+
+    @Test
     fun decodesResumeOnlyAfterBothNavigationAndViewerSettle() = runBlocking {
         GalleryImageWorkScheduler.setNavigationMoving(true)
         GalleryImageWorkScheduler.setViewerMoving(true)

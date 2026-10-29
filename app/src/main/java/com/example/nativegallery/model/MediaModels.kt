@@ -53,7 +53,9 @@ data class Album(
     val coverUri: Uri? = null,
     val isHidden: Boolean = false,
     val isAllPhotos: Boolean = false,
-    val hasVideoBadge: Boolean = false
+    val hasVideoBadge: Boolean = false,
+    val coverMediaItem: MediaItem? = null,
+    val isSmart: Boolean = false
 )
 
 enum class AlbumLayoutMode {

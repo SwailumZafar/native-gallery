@@ -4,6 +4,9 @@ import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -53,6 +56,20 @@ class AlbumReturnGeometryTest {
     }
 
     @Test
+    fun landscapeRailLaneRemainsMeasuredWhileAnAlbumCoversTheLibrary() {
+        showRetainedPage(useRail = true)
+        val restingBounds = coverBounds
+        composeRule.runOnIdle { destination.value = GalleryDestination.AlbumDetail; heroVisible.value = true }
+        assertStationaryForFrames(restingBounds)
+        composeRule.runOnIdle { heroVisible.value = false }
+        assertStationaryForFrames(restingBounds)
+        composeRule.runOnIdle { destination.value = GalleryDestination.Main; heroVisible.value = true }
+        assertStationaryForFrames(restingBounds)
+        composeRule.runOnIdle { heroVisible.value = false }
+        assertStationaryForFrames(restingBounds)
+    }
+
+    @Test
     fun secondaryPagesKeepTheirExistingSlideAndReturnToTheExactRestingBounds() {
         showRetainedPage()
         val restingBounds = coverBounds
@@ -68,7 +85,7 @@ class AlbumReturnGeometryTest {
         assertEquals(restingBounds.top, coverBounds.top, 0.5f)
     }
 
-    private fun showRetainedPage() {
+    private fun showRetainedPage(useRail: Boolean = false) {
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             pageWidthPx = with(LocalDensity.current) { 320.dp.toPx() }
@@ -82,9 +99,13 @@ class AlbumReturnGeometryTest {
                 alpha = if (destination.value == GalleryDestination.Main) 1f else 0f
                 translationX = offset.value * size.width / if (albumNavigation) 8f else 10f
             }) {
+                GalleryMainPane(useRail, rail = { Box(Modifier.width(88.dp).fillMaxHeight()) }) {
+                Box(Modifier.fillMaxSize()) {
                 Box(Modifier.offset(80.dp, 40.dp).size(80.dp).onGloballyPositioned {
                     coverBounds = it.boundsInWindow()
                 })
+                }
+                }
             }
         }
         composeRule.waitForIdle()

@@ -1,16 +1,21 @@
 package com.example.nativegallery.ui
 
 import android.os.SystemClock
+import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.nativegallery.data.GallerySnapshot
 import com.example.nativegallery.data.GallerySnapshotRefreshPolicy
+import com.example.nativegallery.data.GalleryMediaSource
+import com.example.nativegallery.data.GalleryMutationGate
+import com.example.nativegallery.ui.components.GalleryImageWorkScheduler
 import com.example.nativegallery.data.MediaAccessState
 import com.example.nativegallery.data.MediaStoreGalleryRepository
 import com.example.nativegallery.model.RecentlyDeletedMedia
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,7 +36,7 @@ internal data class GalleryMediaUiState(
 )
 
 internal class GalleryMediaViewModel(
-    private val repository: MediaStoreGalleryRepository,
+    private val repository: GalleryMediaSource,
     initialAccess: MediaAccessState
 ) : ViewModel() {
     private val refreshMutex = Mutex()
@@ -40,7 +45,9 @@ internal class GalleryMediaViewModel(
     private var trashedRefresh: Job? = null
     private var lastFullRefreshElapsedMillis = -1L
     private var recentlyDeletedVisible = false
-    private var appWriteInFlight = false
+    private val mutationGate = GalleryMutationGate()
+    private var observerRefresh: Job? = null
+    private var observerRefreshPending = false
     private var suppressObserverFullRefreshUntilMillis = -1L
 
     private val _uiState = MutableStateFlow(
@@ -63,6 +70,7 @@ internal class GalleryMediaViewModel(
         scheduledRefresh?.cancel()
         quickRefresh?.cancel()
         trashedRefresh?.cancel()
+        observerRefresh?.cancel()
         lastFullRefreshElapsedMillis = -1L
         _uiState.value = GalleryMediaUiState(
             mediaAccess = access,
@@ -75,16 +83,18 @@ internal class GalleryMediaViewModel(
     }
 
     fun requestQuickRefresh() {
+        if (mutationGate.isWriting) { observerRefreshPending = true; return }
         val access = _uiState.value.mediaAccess
         if (!access.hasAccess || scheduledRefresh?.isActive == true) return
         quickRefresh?.cancel()
         quickRefresh = viewModelScope.launch {
-            refreshMutex.withLock { refreshLatestPage(access) }
+            refreshSafely { refreshMutex.withLock { refreshLatestPage(access) } }
         }
     }
 
     fun requestFullRefresh() {
-        scheduledRefresh?.cancel()
+        if (mutationGate.isWriting) { observerRefreshPending = true; return }
+        if (scheduledRefresh?.isActive == true) return
         quickRefresh?.cancel()
         trashedRefresh?.cancel()
         val access = _uiState.value.mediaAccess
@@ -95,18 +105,25 @@ internal class GalleryMediaViewModel(
             return
         }
         scheduledRefresh = viewModelScope.launch {
-            val presentingFromCache = _uiState.value.snapshot != null
-            refreshMutex.withLock { refreshLatestPage(access) }
-            if (!presentingFromCache) {
-                // Let the first page render and its visible thumbnails begin decoding before the
-                // full-library query competes for I/O on a cold process start.
-                delay(ColdStartFullRefreshYieldMillis)
-            }
-            refreshMutex.withLock { refreshFullLibrary(access) }
+            do {
+                observerRefreshPending = false
+                val presentingFromCache = _uiState.value.snapshot != null
+                if (presentingFromCache) delay(160L)
+                refreshSafely {
+                    if (!presentingFromCache) {
+                        refreshMutex.withLock { refreshLatestPage(access) }
+                        delay(ColdStartFullRefreshYieldMillis)
+                    }
+                    // Warm-library writes need one complete reconciliation, not three newest-page
+                    // queries followed by a full scan for each item in a batch.
+                    refreshMutex.withLock { refreshFullLibrary(access) }
+                }
+            } while (observerRefreshPending && !mutationGate.isWriting && isCurrentAccess(access))
         }
     }
 
     fun onAppResumed() {
+        if (mutationGate.isWriting) { observerRefreshPending = true; return }
         val access = _uiState.value.mediaAccess
         if (!access.hasAccess) return
         if (
@@ -116,7 +133,7 @@ internal class GalleryMediaViewModel(
         ) return
 
         scheduledRefresh = viewModelScope.launch {
-            refreshMutex.withLock {
+            refreshSafely { refreshMutex.withLock {
                 val latestPageChanged = refreshLatestPage(access)
                 if (
                     isCurrentAccess(access) &&
@@ -130,42 +147,43 @@ internal class GalleryMediaViewModel(
                 } else if (recentlyDeletedVisible) {
                     refreshTrashedMedia(access)
                 }
-            }
+            } }
         }
     }
 
     fun onMediaStoreChanged() {
         if (!_uiState.value.mediaAccess.hasAccess) return
+        if (mutationGate.isWriting) { observerRefreshPending = true; return }
         val suppressFullRefresh = GallerySnapshotRefreshPolicy.shouldSuppressObserverFullRefresh(
-            appWriteInFlight = appWriteInFlight,
+            appWriteInFlight = mutationGate.isWriting,
             suppressionUntilMillis = suppressObserverFullRefreshUntilMillis,
             nowMillis = SystemClock.elapsedRealtime()
         )
-        if (suppressFullRefresh) {
-            requestQuickRefresh()
-            return
-        }
-
-        scheduledRefresh?.cancel()
-        quickRefresh?.cancel()
-        trashedRefresh?.cancel()
-        scheduledRefresh = viewModelScope.launch {
-            delay(120L)
-            val access = _uiState.value.mediaAccess
-            refreshMutex.withLock { refreshLatestPage(access) }
-            delay(780L)
-            refreshMutex.withLock { refreshFullLibrary(_uiState.value.mediaAccess) }
-        }
+        if (suppressFullRefresh && scheduledRefresh?.isActive == true) return
+        observerRefreshPending = true
+        observerRefresh?.cancel()
+        observerRefresh = viewModelScope.launch { delay(180L); requestFullRefresh() }
     }
 
     fun beginAppMediaStoreWrite() {
-        appWriteInFlight = true
+        mutationGate.begin()
+        observerRefreshPending = true
+        scheduledRefresh?.cancel()
+        quickRefresh?.cancel()
+        trashedRefresh?.cancel()
+        observerRefresh?.cancel()
     }
 
     fun finishAppMediaStoreWrite() {
-        appWriteInFlight = false
+        if (!mutationGate.finish()) return
         suppressObserverFullRefreshUntilMillis = SystemClock.elapsedRealtime() +
             GallerySnapshotRefreshPolicy.AppWriteObserverGraceMillis
+        requestFullRefresh()
+    }
+
+    suspend inline fun <T> withAppMediaStoreWrite(block: () -> T): T {
+        beginAppMediaStoreWrite()
+        return try { block() } finally { finishAppMediaStoreWrite() }
     }
 
     fun setRecentlyDeletedVisible(visible: Boolean) {
@@ -178,15 +196,23 @@ internal class GalleryMediaViewModel(
         }
     }
 
+    fun applyMovedItems(ids: Set<String>, albumId: String?, relativePath: String?) {
+        if (ids.isEmpty() || albumId == null) return
+        _uiState.update { current -> current.copy(snapshot = current.snapshot?.let { snapshot ->
+            snapshot.copy(mediaItems = snapshot.mediaItems.map { if (it.id in ids) it.copy(albumId = albumId, relativePath = relativePath) else it })
+        }) }
+    }
+
     private suspend fun refreshLatestPage(access: MediaAccessState): Boolean {
         if (!isCurrentAccess(access)) return false
+        val queryRevision = mutationGate.revision
         val latestPage = withContext(Dispatchers.IO) {
             repository.loadGalleryPage(
                 mediaKinds = access.mediaKinds,
                 limit = MediaStoreGalleryRepository.InitialGalleryPageSize
             )
         }
-        if (!isCurrentAccess(access)) return false
+        if (!isCurrentAccess(access) || !mutationGate.canPublish(queryRevision)) return false
 
         val baseSnapshot = _uiState.value.snapshot
         val mergedSnapshot = withContext(Dispatchers.Default) {
@@ -197,6 +223,7 @@ internal class GalleryMediaViewModel(
             )
         }
         val changed = mergedSnapshot !== baseSnapshot
+        if (!mutationGate.canPublish(queryRevision)) return false
         _uiState.update { current ->
             if (!changed && current.initialSyncComplete) {
                 current
@@ -207,15 +234,17 @@ internal class GalleryMediaViewModel(
                 )
             }
         }
+        if (changed) GalleryImageWorkScheduler.notifyLibrarySettled()
         return changed
     }
 
     private suspend fun refreshFullLibrary(access: MediaAccessState) {
         if (!isCurrentAccess(access)) return
+        val queryRevision = mutationGate.revision
         val snapshot = withContext(Dispatchers.IO) {
             repository.loadGallery(access.mediaKinds)
         }
-        if (!isCurrentAccess(access)) return
+        if (!isCurrentAccess(access) || !mutationGate.canPublish(queryRevision)) return
         lastFullRefreshElapsedMillis = SystemClock.elapsedRealtime()
         _uiState.update { current ->
             val next = current.copy(
@@ -224,24 +253,27 @@ internal class GalleryMediaViewModel(
             )
             if (next == current) current else next
         }
+        GalleryImageWorkScheduler.notifyLibrarySettled()
         if (recentlyDeletedVisible) refreshTrashedMedia(access)
     }
 
     private fun requestTrashedRefresh() {
+        if (mutationGate.isWriting) { observerRefreshPending = true; return }
         val access = _uiState.value.mediaAccess
         if (!access.hasAccess || scheduledRefresh?.isActive == true) return
         trashedRefresh?.cancel()
         trashedRefresh = viewModelScope.launch {
-            refreshMutex.withLock { refreshTrashedMedia(access) }
+            refreshSafely { refreshMutex.withLock { refreshTrashedMedia(access) } }
         }
     }
 
     private suspend fun refreshTrashedMedia(access: MediaAccessState) {
         if (!recentlyDeletedVisible || !isCurrentAccess(access)) return
+        val queryRevision = mutationGate.revision
         val trashedMedia = withContext(Dispatchers.IO) {
             repository.loadTrashedMedia(access.mediaKinds)
         }
-        if (!recentlyDeletedVisible || !isCurrentAccess(access)) return
+        if (!recentlyDeletedVisible || !isCurrentAccess(access) || !mutationGate.canPublish(queryRevision)) return
         _uiState.update { current ->
             if (current.trashedMedia == trashedMedia) {
                 current
@@ -252,7 +284,18 @@ internal class GalleryMediaViewModel(
     }
 
     private fun isCurrentAccess(access: MediaAccessState): Boolean {
-        return access.hasAccess && access == _uiState.value.mediaAccess
+        return !mutationGate.isWriting && access.hasAccess && access == _uiState.value.mediaAccess
+    }
+
+    private suspend fun refreshSafely(block: suspend () -> Unit) {
+        repeat(2) { attempt ->
+            try { block(); return }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                Log.w("GalleryRefresh", "Keeping the current library while MediaStore settles", failure)
+                if (attempt == 0) delay(350L)
+            }
+        }
     }
 
     private companion object {

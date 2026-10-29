@@ -74,7 +74,7 @@ fun AlbumMediaPickerScreen(
             shadowElevation = 3.dp
         ) {
             Row(
-                modifier = Modifier.padding(start = 8.dp, top = 44.dp, end = 12.dp, bottom = 14.dp),
+                modifier = Modifier.padding(start = 8.dp, top = galleryHeaderTop(), end = 12.dp, bottom = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onCancel) {

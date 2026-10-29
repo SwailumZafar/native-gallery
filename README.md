@@ -1,10 +1,10 @@
-# Luma Nook
+# Aster
 
-Luma Nook is a privacy-focused Android photo and video gallery built with
+Aster is a privacy-focused Android photo and video gallery built with
 Kotlin and Jetpack Compose. It reads the device library through MediaStore and
 keeps its core organization, search, editing, and vault flows on the device.
 
-> Status: version 0.9.17 pre-release. A candidate Play identity and reproducible
+> Status: version 0.9.20 pre-release. A candidate Play identity and reproducible
 > release configuration are in place. Confirm ownership of the final application
 > ID, then complete physical-device, accessibility, and large-library testing
 > before public launch.
@@ -13,8 +13,10 @@ keeps its core organization, search, editing, and vault flows on the device.
 
 - Date-grouped photo and video timeline with configurable grid density
 - Albums, favorites, hidden albums, search, selection, sharing, and trash flows
+- Saved smart albums with media-type, date, folder/name, and favorite filters
 - Photo viewing, video playback, metadata, and basic photo editing
 - PIN/biometric-gated locked media stored with Android Keystore-backed AES-GCM
+- Vault PIN/password/pattern access, escalating lockouts, recovery, and a curated decoy view
 - On-device ML Kit OCR-based document photo discovery and text search
 - Duplicate-candidate and large-file cleanup views
 - Light, dark, and system themes plus playback and motion preferences

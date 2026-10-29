@@ -6,6 +6,10 @@
 
 package com.example.nativegallery.ui
 
+import androidx.compose.foundation.layout.navigationBarsPadding
+
+import androidx.compose.foundation.gestures.scrollBy
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.BoundsTransform
@@ -318,6 +322,7 @@ fun AlbumsScreen(
     onOpenLockedMedia: () -> Unit,
     onOpenRecentlyDeleted: () -> Unit,
     onCreateAlbum: (String) -> Unit = {},
+    onCreateSmartAlbum: () -> Unit = {},
     onDeleteAlbum: (Album) -> Unit = {},
     canDeleteAlbum: (Album) -> Boolean = { !it.isAllPhotos },
     onOpenSettings: () -> Unit = {},
@@ -644,7 +649,7 @@ fun AlbumsScreen(
                 AlbumLayoutMode.List -> 14.dp
                 else -> 18.dp
             },
-            top = 58.dp,
+            top = galleryHeaderTop(),
             end = when (layoutMode) {
                 AlbumLayoutMode.Basic, AlbumLayoutMode.Compact -> 8.dp
                 AlbumLayoutMode.List -> 14.dp
@@ -718,6 +723,9 @@ fun AlbumsScreen(
                                 onOpenSettings()
                             }
                         )
+                        PremiumDropdownMenuItem(text = { Text("Create smart album") },
+                            leadingIcon = { Icon(Icons.Filled.Add, null) },
+                            onClick = { overflowExpanded = false; onCreateSmartAlbum() })
                     }
                 }
             }
@@ -882,12 +890,15 @@ fun AlbumsScreen(
             properties = DialogProperties(usePlatformDefaultWidth = false),
             title = { Text("Create album") },
             text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = createAlbumName,
                     onValueChange = { createAlbumName = it },
                     singleLine = true,
                     label = { Text("Album name") }
                 )
+                TextButton(onClick = { showCreateDialog = false; onCreateSmartAlbum() }) { Text("Create a smart album instead") }
+                }
             },
             confirmButton = {
                 TextButton(
@@ -920,8 +931,8 @@ fun AlbumsScreen(
                 .widthIn(min = 340.dp, max = 460.dp)
                 .fillMaxWidth(0.92f),
             properties = DialogProperties(usePlatformDefaultWidth = false),
-            title = { Text("Delete ${album.name}?") },
-            text = { Text("The album’s photos and videos will move to Recently deleted.") },
+            title = { Text(if (album.isSmart) "Remove ${album.name}?" else "Delete ${album.name}?") },
+            text = { Text(if (album.isSmart) "Remove this saved filter. Its photos and videos stay in their original folders." else "The album’s photos and videos will move to Recently deleted.") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -1462,6 +1473,7 @@ private fun BasicAlbumRow(
                     ) {
                         Box {
                             GalleryImage(
+                                sharpenThumbnail = true,
                                 imageRes = album.coverRes,
                                 imageUri = album.coverUri,
                                 contentDescription = album.name,
@@ -1476,6 +1488,7 @@ private fun BasicAlbumRow(
                                 thumbnailSize = 384,
                                 animatedPlaceholder = false,
                                 isVideo = album.hasVideoBadge,
+                                cacheRevision = album.coverMediaItem?.let { com.example.nativegallery.ui.components.mediaThumbnailCacheRevision(it) },
                                 deferUncachedLoad = deferThumbnailLoads
                             )
                             AlbumContextMenu(
@@ -1544,6 +1557,7 @@ private fun AlbumListRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             GalleryImage(
+                sharpenThumbnail = true,
                 imageRes = album.coverRes,
                 imageUri = album.coverUri,
                 contentDescription = album.name,
@@ -1558,6 +1572,7 @@ private fun AlbumListRow(
                 thumbnailSize = 256,
                 animatedPlaceholder = false,
                 isVideo = album.hasVideoBadge,
+                cacheRevision = album.coverMediaItem?.let { com.example.nativegallery.ui.components.mediaThumbnailCacheRevision(it) },
                 deferUncachedLoad = deferThumbnailLoads
             )
             Spacer(Modifier.width(14.dp))
@@ -1688,7 +1703,7 @@ fun AlbumDetailScreen(
     }
     PrefetchMediaGrid(sortedMediaItems, listState, columns)
     val revealProgress = albumEnterProgress.coerceIn(0f, 1f)
-    val gridTopPadding = 150.dp
+    val gridTopPadding = galleryHeaderTop() + 102.dp
     val gridTopInsetPx = with(LocalDensity.current) { gridTopPadding.toPx() }
     val gridBottomInsetPx = with(LocalDensity.current) { contentPadding.calculateBottomPadding().toPx() }
     val interactiveGridReady = revealProgress >= 0.95f
@@ -1700,48 +1715,9 @@ fun AlbumDetailScreen(
                 rootBounds.value = it.boundsInWindow()
                 onGridViewportChanged(gridReturnViewport(rootBounds.value, gridTopInsetPx, gridBottomInsetPx))
             }
-            .pointerInput(isSelectionMode, sortedMediaItems) {
-                var dragMode: AlbumDragSelectMode? = null
-                var baseSelectedIds = emptySet<String>()
-                val visitedMediaIds = mutableSetOf<String>()
-
-                fun applyDragSelectionAt(localPoint: Offset) {
-                    val hit = hitMedia(localPoint) ?: return
-                    val mode = dragMode ?: return
-                    if (!visitedMediaIds.add(hit.id)) return
-
-                    when (mode) {
-                        AlbumDragSelectMode.Add -> if (!baseSelectedIds.contains(hit.id)) onMediaSelectionToggle(hit)
-                        AlbumDragSelectMode.Remove -> if (baseSelectedIds.contains(hit.id)) onMediaSelectionToggle(hit)
-                    }
-                }
-
-                if (isSelectionMode) {
-                    detectDragGestures(
-                        onDragStart = { startOffset ->
-                            baseSelectedIds = latestSelectedMediaIds
-                            visitedMediaIds.clear()
-                            val hit = hitMedia(startOffset)
-                            dragMode = hit?.let {
-                                if (baseSelectedIds.contains(it.id)) AlbumDragSelectMode.Remove else AlbumDragSelectMode.Add
-                            }
-                            applyDragSelectionAt(startOffset)
-                        },
-                        onDrag = { change, _ ->
-                            applyDragSelectionAt(change.position)
-                            change.consume()
-                        },
-                        onDragEnd = {
-                            dragMode = null
-                            visitedMediaIds.clear()
-                        },
-                        onDragCancel = {
-                            dragMode = null
-                            visitedMediaIds.clear()
-                        }
-                    )
-                }
-            }
+            .dragSelectWithAutoScroll(isSelectionMode, sortedMediaItems,
+                selected = { latestSelectedMediaIds }, hit = ::hitMedia, toggle = onMediaSelectionToggle,
+                scroll = { listState.scrollBy(it) }, invalidateBounds = { tileBounds.clear() })
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
@@ -1873,7 +1849,7 @@ fun AlbumDetailScreen(
                 onHideSelected = onHideSelected,
                 onHideAlbum = onHideAlbum,
                 onBack = onBack,
-                modifier = Modifier.padding(start = 10.dp, top = 48.dp, end = 10.dp, bottom = 14.dp)
+                modifier = Modifier.padding(start = 10.dp, top = galleryHeaderTop(), end = 10.dp, bottom = 14.dp)
             )
         }
         if (selectedMediaIds.isEmpty() && sortedMediaItems.isNotEmpty()) {
@@ -1921,10 +1897,10 @@ fun AlbumDetailScreen(
                 onMove = onMoveSelected,
                 onDelete = onDeleteSelected,
                 onHide = onHideSelected,
-                modifier = Modifier.padding(
+                modifier = Modifier.navigationBarsPadding().padding(
                     start = 12.dp,
                     end = 12.dp,
-                    bottom = contentPadding.calculateBottomPadding() + 4.dp
+                    bottom = 2.dp
                 )
             )
         }
@@ -1993,7 +1969,7 @@ fun AlbumDetailTransitionPreview(
             userScrollEnabled = false,
             contentPadding = PaddingValues(
                 start = 8.dp,
-                top = 150.dp,
+                top = galleryHeaderTop() + 102.dp,
                 end = 8.dp,
                 bottom = contentPadding.calculateBottomPadding() + 34.dp
             )
@@ -2028,7 +2004,7 @@ fun AlbumDetailTransitionPreview(
                 onHideSelected = {},
                 onHideAlbum = null,
                 onBack = onBack,
-                modifier = Modifier.padding(start = 10.dp, top = 48.dp, end = 10.dp, bottom = 14.dp)
+                modifier = Modifier.padding(start = 10.dp, top = galleryHeaderTop(), end = 10.dp, bottom = 14.dp)
             )
         }
     }
@@ -2334,6 +2310,7 @@ private fun AlbumDetailTransitionRow(
         mediaItems.forEach { mediaItem ->
             Box(modifier = Modifier.size(cellSize)) {
                 GalleryImage(
+                    sharpenThumbnail = true,
                     imageRes = mediaItem.imageRes,
                     imageUri = mediaItem.contentUri,
                     contentDescription = mediaItem.title,
@@ -2376,6 +2353,7 @@ private fun AlbumDetailPreviewRow(
                     .aspectRatio(1f)
             ) {
                 GalleryImage(
+                    sharpenThumbnail = true,
                     imageRes = mediaItem.imageRes,
                     imageUri = mediaItem.contentUri,
                     contentDescription = mediaItem.title,
@@ -2595,6 +2573,7 @@ private fun AlbumImageCard(
 
     ) {
         GalleryImage(
+            sharpenThumbnail = true,
             imageRes = album.coverRes,
             imageUri = album.coverUri,
             contentDescription = album.name,
@@ -2603,6 +2582,7 @@ private fun AlbumImageCard(
             thumbnailSize = 512,
             animatedPlaceholder = false,
             isVideo = album.hasVideoBadge,
+            cacheRevision = album.coverMediaItem?.let { com.example.nativegallery.ui.components.mediaThumbnailCacheRevision(it) },
             deferUncachedLoad = deferThumbnailLoads
         )
         Box(

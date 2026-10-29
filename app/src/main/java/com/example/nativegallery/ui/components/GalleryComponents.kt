@@ -92,6 +92,8 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.draw.drawBehind
@@ -132,10 +134,10 @@ enum class ImageLoadQuality {
 
 private class LayoutCoordinatesRef(var value: LayoutCoordinates? = null)
 
-private object ThumbnailLoadCoordinator {
+internal object ThumbnailLoadCoordinator {
     // A grid must not start sixteen simultaneous bitmap decodes beside an animation.
     private val loadSemaphore = Semaphore(permits = 4)
-    val videoDecodeSemaphore = Semaphore(permits = 1)
+    val videoDecodeSemaphore = Semaphore(permits = 2)
     private val keyLocks = ConcurrentHashMap<String, KeyLock>()
 
     private class KeyLock {
@@ -204,12 +206,16 @@ internal fun mediaThumbnailCacheRevision(mediaItem: MediaItem): String {
     return "${mediaItem.fileSizeBytes ?: -1L}:${mediaItem.dateModifiedMillis}"
 }
 
+internal fun mediaThumbnailIsVideo(mediaItem: MediaItem): Boolean =
+    mediaItem.isVideo && (mediaItem.previewUri == null || mediaItem.contentUri != mediaItem.previewUri)
+
 internal fun shouldShowVideoThumbnailFallback(isVideo: Boolean, loadComplete: Boolean, cachedOnly: Boolean): Boolean {
     return isVideo && loadComplete && !cachedOnly
 }
 
 @Composable
 internal fun rememberVideoDurationMillis(mediaItem: MediaItem): Long? {
+    if (mediaItem.previewUri != null && mediaItem.contentUri == mediaItem.previewUri) return mediaItem.durationMillis
     val context = LocalContext.current.applicationContext
     val uri = mediaItem.contentUri
     val revision = mediaThumbnailCacheRevision(mediaItem)
@@ -220,8 +226,8 @@ internal fun rememberVideoDurationMillis(mediaItem: MediaItem): Long? {
             videoMetadataSemaphore.withPermit {
                 val key = VideoDurationCache.identity(uri, mediaItem.id, mediaItem.fileSizeBytes, mediaItem.dateModifiedMillis)
                 VideoDurationCache.get(context, key).takeIf { it > 0L } ?: run {
-                    val needsRecovery = duration == null || duration!! <= 0L ||
-                        mediaItem.title.substringAfterLast('.').lowercase() in setOf("avi", "flv", "mkv")
+                    // Grid badges use known metadata; the full viewer resolves container timing.
+                    val needsRecovery = duration == null || duration!! <= 0L
                     if (needsRecovery) {
                         VideoDurationResolver.resolve(context, uri, mediaItem.title, mediaItem.mimeType)
                             .takeIf { it > 0L }
@@ -247,7 +253,7 @@ internal fun thumbnailCacheIdentityUri(
 }
 
 internal fun mediaThumbnailCacheUri(mediaItem: MediaItem): Uri? = mediaItem.contentUri?.let {
-    thumbnailCacheIdentityUri(it, mediaItem.isVideo, mediaThumbnailCacheRevision(mediaItem))
+    thumbnailCacheIdentityUri(it, mediaThumbnailIsVideo(mediaItem), mediaThumbnailCacheRevision(mediaItem))
 }
 
 @Composable
@@ -520,7 +526,16 @@ fun MediaThumbnail(
     } else {
         containerModifier
     }
-    Box(modifier = visibleContainerModifier) {
+    val departing = mediaItem.id in com.example.nativegallery.ui.LocalDepartingMediaIds.current
+    val removal = remember(mediaItem.id) { androidx.compose.animation.core.Animatable(1f) }
+    LaunchedEffect(departing) {
+        if (departing) removal.animateTo(0f, tween(180)) else removal.snapTo(1f)
+    }
+    Box(modifier = if (departing) visibleContainerModifier.graphicsLayer {
+        alpha = removal.value
+        scaleX = 0.82f + removal.value * 0.18f
+        scaleY = scaleX
+    } else visibleContainerModifier) {
         GalleryImage(
             imageRes = mediaItem.imageRes,
             imageUri = mediaItem.contentUri,
@@ -528,9 +543,11 @@ fun MediaThumbnail(
             modifier = imageModifier,
             cornerRadius = cornerRadius,
             thumbnailSize = 384,
+            sharpenThumbnail = true,
+            displayedBitmapKey = sharedElementKey,
             animatedPlaceholder = false,
             deferUncachedLoad = deferUncachedLoad,
-            isVideo = mediaItem.isVideo,
+            isVideo = mediaThumbnailIsVideo(mediaItem),
             cacheRevision = mediaThumbnailCacheRevision(mediaItem)
         )
         if (selected) {
@@ -670,11 +687,17 @@ fun GalleryImage(
     deferUncachedLoad: State<Boolean>? = null,
     drawBounds: (() -> Rect)? = null,
     initialBitmap: Bitmap? = null,
-    previewContentScale: ContentScale? = null
+    previewContentScale: ContentScale? = null,
+    sharpenThumbnail: Boolean = false,
+    displayedBitmapKey: Any? = null
 ) {
+    var renderedSize by remember { mutableStateOf(IntSize.Zero) }
+    val requestSize = if (sharpenThumbnail && isVideo && renderedSize != IntSize.Zero) {
+        gridVideoThumbnailSize(renderedSize.width, renderedSize.height, thumbnailSize)
+    } else thumbnailSize
     val imageState = rememberContentUriBitmap(
         imageUri = imageUri,
-        thumbnailSize = thumbnailSize,
+        thumbnailSize = requestSize,
         loadQuality = loadQuality,
         cachedOnly = cachedOnly,
         allowApproximateCache = allowApproximateCache,
@@ -682,7 +705,9 @@ fun GalleryImage(
         isVideo = isVideo,
         cacheRevision = cacheRevision
     )
-    val bitmap = imageState.bitmap ?: initialBitmap?.takeUnless { it.isRecycled }
+    val detailBitmap = rememberGridThumbnailDetail(imageUri, cacheRevision, renderedSize.width, renderedSize.height,
+        enabled = sharpenThumbnail && !isVideo && !cachedOnly && contentScale == ContentScale.Crop)
+    val bitmap = detailBitmap ?: imageState.bitmap ?: initialBitmap?.takeUnless { it.isRecycled }
     val fallbackBitmap = rememberContentUriBitmap(
         imageUri = fallbackImageUri?.takeUnless { it == imageUri },
         thumbnailSize = min(thumbnailSize, 512),
@@ -694,9 +719,9 @@ fun GalleryImage(
         cacheRevision = null
     ).bitmap
     val displayedBitmap = bitmap ?: fallbackBitmap
-    androidx.compose.runtime.DisposableEffect(imageUri, displayedBitmap) {
+    androidx.compose.runtime.DisposableEffect(imageUri, displayedBitmap, displayedBitmapKey) {
         val owner = Any()
-        if (imageUri != null && displayedBitmap != null) DisplayedBitmapCache.register(owner, imageUri, displayedBitmap)
+        if (imageUri != null && displayedBitmap != null) DisplayedBitmapCache.register(owner, imageUri, displayedBitmap, displayedBitmapKey)
         onDispose { DisplayedBitmapCache.unregister(owner) }
     }
     val shapedModifier = if (cornerRadius > 0.dp) {
@@ -705,7 +730,8 @@ fun GalleryImage(
         modifier
     }
     Box(
-        modifier = shapedModifier.background(backgroundColor)
+        modifier = shapedModifier.background(backgroundColor).then(
+            if (sharpenThumbnail) Modifier.onSizeChanged { renderedSize = it } else Modifier)
     ) {
         when {
             bitmap != null || fallbackBitmap != null -> {
@@ -723,7 +749,9 @@ fun GalleryImage(
                                 )
                                 scale(scale, scale, pivot = Offset.Zero)
                             }) {
-                                drawImage(image, colorFilter = colorFilter)
+                                drawImage(image, colorFilter = colorFilter,
+                                    filterQuality = if (sharpenThumbnail) androidx.compose.ui.graphics.FilterQuality.High
+                                        else androidx.compose.ui.graphics.FilterQuality.Low)
                             }
                         }
                     }
@@ -732,6 +760,8 @@ fun GalleryImage(
                         bitmap = image,
                         contentDescription = contentDescription,
                         contentScale = if (imageState.loadComplete) contentScale else previewContentScale ?: contentScale,
+                        filterQuality = if (sharpenThumbnail) androidx.compose.ui.graphics.FilterQuality.High
+                            else androidx.compose.ui.graphics.FilterQuality.Low,
                         modifier = Modifier.fillMaxSize(),
                         colorFilter = colorFilter
                     )
@@ -953,7 +983,7 @@ suspend fun prefetchMediaThumbnails(
     val requests = mediaItems.asSequence()
         .mapNotNull { mediaItem ->
             mediaItem.contentUri?.let { uri ->
-                Triple(uri, mediaItem.isVideo, mediaThumbnailCacheRevision(mediaItem))
+                Triple(uri, mediaThumbnailIsVideo(mediaItem), mediaThumbnailCacheRevision(mediaItem))
             }
         }
         .distinctBy { it.first }
@@ -1147,18 +1177,22 @@ private fun rememberContentUriBitmap(
             }
             if (!allowUncached) return
 
-            loadCachedBitmap(
-                context,
-                imageUri,
-                thumbnailSize,
-                loadQuality,
-                isVideo,
-                cacheRevision
-            )?.let { loadedBitmap ->
-                GalleryImageWorkScheduler.awaitIdle()
-                bitmap = loadedBitmap
+            var observedRevision = GalleryImageWorkScheduler.mediaRevision()
+            while (true) {
+                val loadedBitmap = loadCachedBitmap(context, imageUri, thumbnailSize, loadQuality, isVideo, cacheRevision)
+                if (loadedBitmap != null) {
+                    GalleryImageWorkScheduler.awaitIdle()
+                    bitmap = loadedBitmap
+                    loadComplete = true
+                    return
+                }
+                loadComplete = true
+                if (bitmap != null) return
+                // Failed visible requests retry after a completed library mutation. Successful
+                // cache hits never subscribe or restart, and no decoder permit is held here.
+                GalleryImageWorkScheduler.awaitLibraryChange(observedRevision)
+                observedRevision = GalleryImageWorkScheduler.mediaRevision()
             }
-            loadComplete = true
         }
 
         val loadGate = deferUncachedLoad
@@ -1185,7 +1219,7 @@ private suspend fun loadCachedBitmap(
 ): Bitmap? {
     val cacheUri = thumbnailCacheIdentityUri(imageUri, isVideo, cacheRevision)
     val cacheKey = ThumbnailMemoryCache.key(cacheUri, thumbnailSize, loadQuality)
-    val diskCacheEligible = loadQuality == ImageLoadQuality.Thumbnail && thumbnailSize <= 512
+    val diskCacheEligible = loadQuality == ImageLoadQuality.Thumbnail && thumbnailSize <= if (isVideo) 1536 else 512
     val validator: (Bitmap) -> Boolean = { bitmap ->
         !bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0
     }
@@ -1249,7 +1283,7 @@ private suspend fun loadPersistedThumbnail(
     isVideo: Boolean,
     cacheRevision: String?
 ): Bitmap? {
-    if (loadQuality != ImageLoadQuality.Thumbnail || thumbnailSize > 512) return null
+    if (loadQuality != ImageLoadQuality.Thumbnail || thumbnailSize > if (isVideo) 1536 else 512) return null
     val cacheUri = thumbnailCacheIdentityUri(imageUri, isVideo, cacheRevision)
     val cacheKey = ThumbnailMemoryCache.key(cacheUri, thumbnailSize)
     val validator: (Bitmap) -> Boolean = { bitmap ->

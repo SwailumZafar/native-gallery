@@ -117,6 +117,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.MutableState
@@ -141,9 +142,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.Image
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
@@ -260,6 +267,7 @@ fun PhotoViewerOverlay(
     onHide: (MediaItem, Int) -> Unit = { _, _ -> },
     onRestore: (MediaItem, Int) -> Unit = { _, _ -> },
     actionMode: ViewerActionMode = ViewerActionMode.Normal,
+    readOnly: Boolean = false,
     favoriteMediaIds: Set<String> = emptySet(),
     onFavoriteChange: (MediaItem, Boolean) -> Unit = { _, _ -> },
     onEdit: (MediaItem) -> Unit = {},
@@ -557,6 +565,8 @@ fun PhotoViewerOverlay(
     }
 
     var activeVideoTextureView by remember { mutableStateOf<TextureView?>(null) }
+    var videoDismissFrame by remember(currentItem.id) { mutableStateOf<Bitmap?>(null) }
+    var videoPresentationAspect by remember(currentItem.id) { mutableStateOf<Float?>(null) }
 
     fun closeViewerWithChromeFade(
         closeOffset: Offset = Offset.Zero,
@@ -570,18 +580,8 @@ fun PhotoViewerOverlay(
         controlsVisible = false
         detailsVisible = false
         val closingFrame = if (currentItem.isVideo) {
-            captureVideoTransitionFrame(activeVideoTextureView)
+            videoDismissFrame ?: captureVideoTransitionFrame(activeVideoTextureView, videoPresentationAspect)
         } else null
-        closingFrame?.let { frame ->
-            currentItem.contentUri?.let { uri ->
-                cacheVideoFrameThumbnail(
-                    context,
-                    uri,
-                    frame,
-                    mediaThumbnailCacheRevision(currentItem)
-                )
-            }
-        }
         val dispatch = {
             if (onCloseWithMotion != null) {
                 onCloseWithMotion(closeOffset, closeScale, closeBackdropAlpha, closeRotationZ, closeRotationX, closingFrame)
@@ -653,7 +653,7 @@ fun PhotoViewerOverlay(
                         }
                         return@awaitEachGesture
                     }
-                    val startedInVideoControlZone = currentItemHasVideoPlayerState &&
+                    val startedInVideoControlZone = currentItemHasVideoPlayerState && !currentDetailsVisible &&
                         (
                             down.position.x <= videoSideControlZonePx ||
                                 down.position.x >= size.width - videoSideControlZonePx
@@ -668,6 +668,7 @@ fun PhotoViewerOverlay(
                     var closingDetailsGesture = false
                     var isDownwardDrag = false
                     var isDetailsDrag = false
+                    var detailsGestureCommitted = false
 
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Main)
@@ -686,6 +687,11 @@ fun PhotoViewerOverlay(
                         lastPosition = change.position
                         lastUptimeMs = change.uptimeMillis
 
+                        if (detailsGestureCommitted) {
+                            change.consume()
+                            continue
+                        }
+
                         if (!passedTouchSlop) {
                             val totalDrag = change.position - down.position
                             if (positionDistance(change.position, down.position) < touchSlop) {
@@ -703,7 +709,20 @@ fun PhotoViewerOverlay(
                             isDetailsDrag = !dismissDetailsIntent && detailsIntent
                             passedTouchSlop = true
                             handlingViewerDrag = true
+                            if (isDownwardDrag && currentItem.isVideo) {
+                                // Read the texture before pausing or transforming its native view.
+                                // Both the held drag and the close overlay paint this same frame.
+                                videoDismissFrame = captureVideoTransitionFrame(activeVideoTextureView, videoPresentationAspect)
+                                    ?: DisplayedBitmapCache.get(currentItem.contentUri)
+                                    ?: initialPreview
+                            }
                             isViewerDragging = true
+                            if (closingDetailsGesture && currentItem.isVideo) {
+                                detailsVisible = false
+                                controlsVisible = true
+                                detailsGestureCommitted = true
+                                isViewerDragging = false
+                            }
                             if (isDownwardDrag) {
                                 val slopOffsetY = totalDrag.y - touchSlop * 0.35f
                                 dragOffset = Offset(
@@ -736,13 +755,22 @@ fun PhotoViewerOverlay(
                                 dragOffset = Offset.Zero
                                 detailsDragOffset = (detailsDragOffset + delta.y)
                                     .coerceIn(-detailsThresholdPx * 1.8f, 0f)
+                                if (currentItem.isVideo && detailsDragOffset < -with(density) { 36.dp.toPx() }) {
+                                    detailsVisible = true
+                                    controlsVisible = false
+                                    detailsGestureCommitted = true
+                                    isViewerDragging = false
+                                }
                             }
                             change.consume()
                         }
                     }
 
                     if (handlingViewerDrag) {
-                        if (closingDetailsGesture) {
+                        if (detailsGestureCommitted) {
+                            isViewerDragging = false
+                            dragOffset = Offset.Zero
+                        } else if (closingDetailsGesture) {
                             detailsVisible = false
                             controlsVisible = true
                             isViewerDragging = false
@@ -760,6 +788,7 @@ fun PhotoViewerOverlay(
                             } else {
                                 isViewerDragging = false
                                 dragOffset = Offset.Zero
+                                videoDismissFrame = null
                             }
                         } else if (isDetailsDrag) {
                             if (detailsDragOffset < -detailsThresholdPx) {
@@ -848,6 +877,10 @@ fun PhotoViewerOverlay(
             ) {
                 ZoomableViewerMedia(
                     initialPreview = initialPreview.takeIf { pageItem.id == mediaItem.id },
+                    dismissPreview = videoDismissFrame.takeIf { page == currentPageForState },
+                    onVideoPresentationAspectChanged = { aspect ->
+                        if (page == currentPageForState) videoPresentationAspect = aspect
+                    },
                     mediaItem = pageItem,
                     isActive = page == currentPageForState,
                     isViewerDragging = isViewerDragging || closeRequested,
@@ -936,12 +969,23 @@ fun PhotoViewerOverlay(
                 isMotionPhoto = currentItem.isMotionPhoto,
                 isPlayingMotion = isPlayingMotionPhoto,
                 onToggleMotion = ::toggleMotionPlayback,
-                onOpenBurstReview = { isBurstReviewOpen = true }
+                onOpenBurstReview = { isBurstReviewOpen = true },
+                onShare = if (readOnly || (compactLandscape && currentItem.isVideo && actionMode == ViewerActionMode.Normal)) ::shareCurrentMedia else null,
+                onFavorite = if (compactLandscape && currentItem.isVideo && actionMode == ViewerActionMode.Normal) {
+                    { onFavoriteChange(currentItem, !favoriteMediaIds.contains(currentItem.id)) }
+                } else null,
+                isFavorite = favoriteMediaIds.contains(currentItem.id),
+                onDelete = if (!readOnly && compactLandscape && currentItem.isVideo) {
+                    { onDelete(currentItem, deleteDirection) }
+                } else null,
+                onRestore = if (!readOnly && compactLandscape && currentItem.isVideo && actionMode != ViewerActionMode.Normal) {
+                    { onRestore(currentItem, deleteDirection) }
+                } else null
             )
         }
 
         AnimatedVisibility(
-            visible = controlsVisible && !isViewerDragging,
+            visible = controlsVisible && !isViewerDragging && !(compactLandscape && currentItem.isVideo),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(3f),
@@ -983,6 +1027,7 @@ fun PhotoViewerOverlay(
                 ) {
                     ViewerActionBar(
                         actionMode = actionMode,
+                        readOnly = readOnly,
                         isPhoto = !currentItem.isVideo,
                         isFavorite = favoriteMediaIds.contains(currentItem.id),
                         onFavorite = {
@@ -1004,11 +1049,11 @@ fun PhotoViewerOverlay(
                 .zIndex(4f),
             enter = fadeIn(animationSpec = tween(120)) + slideInVertically(
                 initialOffsetY = { it / 2 },
-                animationSpec = tween(GalleryMotion.ViewerDetailsEnterMillis, easing = ViewerEnterEasing)
+                animationSpec = tween(if (currentItem.isVideo) 160 else GalleryMotion.ViewerDetailsEnterMillis, easing = ViewerEnterEasing)
             ),
             exit = fadeOut(animationSpec = tween(100)) + slideOutVertically(
                 targetOffsetY = { it / 3 },
-                animationSpec = tween(GalleryMotion.ViewerDetailsExitMillis, easing = ViewerExitEasing)
+                animationSpec = tween(if (currentItem.isVideo) 120 else GalleryMotion.ViewerDetailsExitMillis, easing = ViewerExitEasing)
             )
         ) {
             MediaDetailsPanel(
@@ -1054,7 +1099,12 @@ private fun ViewerTopBar(
     isMotionPhoto: Boolean = false,
     isPlayingMotion: Boolean = false,
     onToggleMotion: () -> Unit = {},
-    onOpenBurstReview: () -> Unit = {}
+    onOpenBurstReview: () -> Unit = {},
+    onShare: (() -> Unit)? = null,
+    onFavorite: (() -> Unit)? = null,
+    isFavorite: Boolean = false,
+    onDelete: (() -> Unit)? = null,
+    onRestore: (() -> Unit)? = null
 ) {
     val hapticFeedback = LocalHapticFeedback.current
     var menuExpanded by remember { mutableStateOf(false) }
@@ -1176,6 +1226,22 @@ private fun ViewerTopBar(
                 expanded = menuExpanded,
                 onDismissRequest = { menuExpanded = false }
             ) {
+                if (onShare != null) PremiumDropdownMenuItem(
+                    text = { Text("Share") },
+                    leadingIcon = { Icon(Icons.Outlined.Share, null) },
+                    onClick = { menuExpanded = false; onShare() })
+                if (onFavorite != null) PremiumDropdownMenuItem(
+                    text = { Text(if (isFavorite) "Remove favorite" else "Add to favorites") },
+                    leadingIcon = { Icon(if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder, null) },
+                    onClick = { menuExpanded = false; onFavorite() })
+                if (onRestore != null) PremiumDropdownMenuItem(
+                    text = { Text(if (actionMode == ViewerActionMode.Locked) "Show" else "Restore") },
+                    leadingIcon = { Icon(Icons.Outlined.Restore, null) },
+                    onClick = { menuExpanded = false; onRestore() })
+                if (onDelete != null) PremiumDropdownMenuItem(
+                    text = { Text(if (actionMode == ViewerActionMode.RecentlyDeleted) "Delete forever" else "Delete") },
+                    leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                    onClick = { menuExpanded = false; onDelete() })
                 if (actionMode == ViewerActionMode.Normal) {
                     PremiumDropdownMenuItem(
                         text = { Text("Move to album") },
@@ -1291,6 +1357,7 @@ internal fun viewerVideoControlMaxWidthDp(screenWidthDp: Int): Int = when {
 @Composable
 private fun ViewerActionBar(
     actionMode: ViewerActionMode,
+    readOnly: Boolean = false,
     isPhoto: Boolean,
     isFavorite: Boolean,
     onFavorite: () -> Unit,
@@ -1308,7 +1375,10 @@ private fun ViewerActionBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (actionMode == ViewerActionMode.Normal) {
+        if (readOnly) {
+            ViewerActionButton(icon = Icons.Outlined.Share, contentDescription = "Share", label = "Share",
+                modifier = Modifier.weight(1f), onClick = onShare)
+        } else if (actionMode == ViewerActionMode.Normal) {
             ViewerActionButton(
                 icon = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
                 contentDescription = "Favorite",
@@ -1448,10 +1518,32 @@ private fun MediaDetailsPanel(
     val durationLabel = mediaItem.durationLabel?.takeIf { it.isNotBlank() }
     val accent = MaterialTheme.colorScheme.primary
     val maximumHeight = (LocalConfiguration.current.screenHeightDp * 0.82f).dp
+    val scrollState = rememberScrollState()
+    val currentOnDismiss by rememberUpdatedState(onDismiss)
+    val dismissSlop = with(LocalDensity.current) { 12.dp.toPx() }
+    val videoSheetScroll = remember(mediaItem.id, dismissSlop) {
+        object : NestedScrollConnection {
+            var pull = 0f
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (!mediaItem.isVideo || source != NestedScrollSource.UserInput || scrollState.value > 0) return Offset.Zero
+                pull = if (available.y > 0f) pull + available.y else 0f
+                if (pull >= dismissSlop) {
+                    currentOnDismiss()
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                pull = 0f
+                return Velocity.Zero
+            }
+        }
+    }
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .testTag("media-details-panel")
             .navigationBarsPadding()
             .padding(horizontal = 12.dp, vertical = 12.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
@@ -1462,7 +1554,8 @@ private fun MediaDetailsPanel(
         Column(
             modifier = Modifier
                 .heightIn(max = maximumHeight)
-                .verticalScroll(rememberScrollState())
+                .nestedScroll(videoSheetScroll)
+                .verticalScroll(scrollState)
                 .padding(horizontal = 18.dp, vertical = 14.dp)
         ) {
             Box(
@@ -1667,16 +1760,29 @@ private fun ZoomableViewerMedia(
     onStartMotionPlayback: () -> Unit = {},
     onStopMotionPlayback: () -> Unit = {},
     initialPreview: Bitmap? = null,
+    dismissPreview: Bitmap? = null,
+    onVideoPresentationAspectChanged: (Float) -> Unit = {},
     onVideoTextureViewAvailable: (TextureView?) -> Unit = {}
 ) {
     val activeSharedElementKeyPrefix: String? = null
     val activeMediaAlpha = 1f
     val scope = rememberCoroutineScope()
+    val geometryContext = LocalContext.current.applicationContext
+    LaunchedEffect(mediaItem.id, isActive) {
+        if (isActive && !mediaItem.isVideo) {
+            val resolved = com.example.nativegallery.data.PhotoPresentationGeometry.resolve(geometryContext, mediaItem)
+            if (resolved.width != mediaItem.width || resolved.height != mediaItem.height) {
+                resolved.width?.let { width -> resolved.height?.let { height -> onDimensionsChanged(width, height) } }
+            }
+        }
+    }
 
     if (mediaItem.isVideo && mediaItem.contentUri != null) {
         if (isActive) {
             ViewerVideoPlayer(
                 initialPreview = initialPreview,
+                dismissPreview = dismissPreview,
+                onPresentationAspectChanged = onVideoPresentationAspectChanged,
                 mediaItem = mediaItem,
                 isActive = true,
                 isViewerDragging = isViewerDragging,
@@ -2232,6 +2338,8 @@ private fun ViewerVideoPlayer(
     onActiveMediaPlaced: () -> Unit,
     onToggleControls: () -> Unit,
     initialPreview: Bitmap? = null,
+    dismissPreview: Bitmap? = null,
+    onPresentationAspectChanged: (Float) -> Unit = {},
     onVideoTextureViewAvailable: (TextureView?) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -2515,8 +2623,8 @@ private fun ViewerVideoPlayer(
             presentationReady = true
         }
     }
-    LaunchedEffect(playerView, isActive) {
-        if (isActive) {
+    LaunchedEffect(playerView, isActive, presentationReady) {
+        if (isActive && presentationReady) {
             onVideoTextureViewAvailable(playerView?.videoSurfaceView as? TextureView)
         } else {
             onVideoTextureViewAvailable(null)
@@ -2526,17 +2634,25 @@ private fun ViewerVideoPlayer(
         if (!presentationReady || cachedPlayerFrame) return@LaunchedEffect
         val textureView = playerView?.videoSurfaceView as? TextureView ?: return@LaunchedEffect
         delay(16)
-        val frame = captureVideoTransitionFrame(textureView) ?: return@LaunchedEffect
-        try {
-            cacheVideoFrameThumbnail(
-                context,
-                uri,
-                frame,
-                mediaThumbnailCacheRevision(mediaItem)
-            )
-            cachedPlayerFrame = true
-        } finally {
-            frame.recycle()
+        repeat(4) {
+            val frame = captureVideoTransitionFrame(textureView)
+            if (frame != null) {
+                try {
+                    // An intro fade must not overwrite an already useful gallery poster.
+                    if (!com.example.nativegallery.data.VideoFrameDecoder.isFrameTooDark(frame)) {
+                        cacheVideoFrameThumbnail(context, uri, frame, mediaThumbnailCacheRevision(mediaItem))
+                        if (uri.authority == com.example.nativegallery.data.LockedMediaVaultRepository.vaultAuthority(context)) {
+                            val saved = withContext(Dispatchers.IO) {
+                                com.example.nativegallery.data.LockedMediaVaultRepository(context).saveMissingPreview(mediaItem.id, frame)
+                            }
+                            if (saved) com.example.nativegallery.ui.components.GalleryImageWorkScheduler.notifyLibrarySettled()
+                        }
+                        cachedPlayerFrame = true
+                        return@LaunchedEffect
+                    }
+                } finally { frame.recycle() }
+            }
+            delay(400)
         }
     }
 
@@ -2684,7 +2800,7 @@ private fun ViewerVideoPlayer(
     ) {
         val effW = playerVideoWidth.takeIf { it > 0 } ?: mediaItem.width?.takeIf { it > 0 }
         val effH = playerVideoHeight.takeIf { it > 0 } ?: mediaItem.height?.takeIf { it > 0 }
-        val shouldFill = videoFillFrame && !isViewerDragging
+        val shouldFill = videoFillFrame
         val (cardWidth, cardHeight) = if (shouldFill) {
             Pair(maxWidth, maxHeight)
         } else {
@@ -2697,6 +2813,7 @@ private fun ViewerVideoPlayer(
             )
             Pair(wPx.dp, hPx.dp)
         }
+        SideEffect { onPresentationAspectChanged(cardWidth.value / cardHeight.value.coerceAtLeast(1f)) }
 
         val density = LocalDensity.current
         Box(
@@ -2740,7 +2857,7 @@ private fun ViewerVideoPlayer(
             AndroidView(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { alpha = playerAlpha }
+                    .graphicsLayer { alpha = if (dismissPreview != null && isViewerDragging) 0f else playerAlpha }
                 .pointerInput(uri) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -2854,7 +2971,7 @@ private fun ViewerVideoPlayer(
             update = { view ->
                 view.player = player
                 playerView = view
-                onVideoTextureViewAvailable(view.videoSurfaceView as? TextureView)
+                onVideoTextureViewAvailable((view.videoSurfaceView as? TextureView).takeIf { presentationReady })
                 view.resizeMode = if (shouldFill) {
                     AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                 } else {
@@ -2869,6 +2986,10 @@ private fun ViewerVideoPlayer(
                 }
             }
         )
+            if (dismissPreview != null && isViewerDragging) {
+                Image(bitmap = dismissPreview.asImageBitmap(), contentDescription = null,
+                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().testTag("video-dismiss-frame"))
+            }
         }
 
         if (hasPlaybackError) {
@@ -2934,7 +3055,7 @@ private fun ViewerVideoPlayer(
                 .align(Alignment.BottomCenter)
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                 .navigationBarsPadding()
-                .padding(bottom = ViewerBottomChromeActionInsetDp.dp)
+                .padding(bottom = if (compactLandscape) 8.dp else ViewerBottomChromeActionInsetDp.dp)
                 .zIndex(3f),
             enter = fadeIn(animationSpec = tween(120)),
             exit = fadeOut(animationSpec = tween(140))
@@ -3172,7 +3293,7 @@ private fun ViewerVideoSeekSlider(
     }
 }
 @Composable
-private fun CompactVideoControlDeck(
+internal fun CompactVideoControlDeck(
     positionMs: Int,
     visualPosition: () -> Float,
     durationMs: Int,
@@ -3187,70 +3308,38 @@ private fun CompactVideoControlDeck(
     videoFillFrame: Boolean,
     onToggleFill: () -> Unit
 ) {
-    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = formatPlaybackTime(positionMs),
-                color = Color.White.copy(alpha = 0.84f),
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, shadow = ViewerVideoControlTextShadow),
-                maxLines = 1
-            )
+    Surface(
+        modifier = Modifier.fillMaxWidth().testTag("compact-video-deck"),
+        shape = RoundedCornerShape(30.dp),
+        color = Color.Black.copy(alpha = 0.62f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+            VideoControlButton(icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                contentDescription = if (isPlaying) "Pause video" else "Play video",
+                size = 48.dp, iconSize = 24.dp, containerAlpha = 0f, onClick = onPlayPause)
+            Text(formatPlaybackTime(positionMs), color = Color.White,
+                style = MaterialTheme.typography.labelSmall, maxLines = 1)
             ViewerVideoSeekSlider(
                 value = positionMs.coerceIn(0, durationMs.coerceAtLeast(1)).toFloat(),
                 visualValue = visualPosition,
-                onValueChange = onPositionChange,
-                onValueChangeFinished = onPositionChangeFinished,
-                modifier = Modifier.weight(1f),
-                valueRange = 0f..durationMs.coerceAtLeast(1).toFloat(),
-                enabled = durationMs > 0
-            )
-            Text(formatPlaybackTime(durationMs), color = Color.White.copy(alpha = 0.72f),
-                style = MaterialTheme.typography.labelSmall.copy(shadow = ViewerVideoControlTextShadow))
-        }
-        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically) {
+                onValueChange = onPositionChange, onValueChangeFinished = onPositionChangeFinished,
+                modifier = Modifier.weight(1f).testTag("compact-video-seek"),
+                valueRange = 0f..durationMs.coerceAtLeast(1).toFloat(), enabled = durationMs > 0)
+            Text(formatPlaybackTime(durationMs), color = Color.White.copy(alpha = 0.7f),
+                style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            VideoControlButton(icon = Icons.Filled.Replay10, contentDescription = "Rewind 10 seconds",
+                size = 48.dp, iconSize = 22.dp, containerAlpha = 0f, onClick = onRewind)
+            VideoControlButton(icon = Icons.Filled.Forward10, contentDescription = "Forward 10 seconds",
+                size = 48.dp, iconSize = 22.dp, containerAlpha = 0f, onClick = onForward)
+            VideoControlButton(icon = Icons.Filled.AspectRatio,
+                contentDescription = if (videoFillFrame) "Fit video" else "Fill screen",
+                size = 48.dp, iconSize = 20.dp, containerAlpha = 0f, onClick = onToggleFill)
             VideoControlButton(
                 icon = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
                 contentDescription = if (isMuted) "Unmute video" else "Mute video",
-                size = 48.dp,
-                iconSize = 19.dp,
-                containerAlpha = if (isMuted) 0.56f else 0.34f,
-                onClick = onToggleMute
-            )
-            VideoControlButton(
-                icon = Icons.Filled.Replay10,
-                contentDescription = "Rewind 10 seconds",
-                size = 48.dp,
-                iconSize = 20.dp,
-                onClick = onRewind
-            )
-            VideoControlButton(
-                icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                contentDescription = if (isPlaying) "Pause video" else "Play video",
-                size = 48.dp,
-                iconSize = 24.dp,
-                containerAlpha = 0.48f,
-                onClick = onPlayPause
-            )
-            VideoControlButton(
-                icon = Icons.Filled.Forward10,
-                contentDescription = "Forward 10 seconds",
-                size = 48.dp,
-                iconSize = 20.dp,
-                onClick = onForward
-            )
-            VideoControlButton(
-                icon = Icons.Filled.AspectRatio,
-                contentDescription = if (videoFillFrame) "Fit video" else "Fill screen",
-                size = 48.dp,
-                iconSize = 19.dp,
-                containerAlpha = if (videoFillFrame) 0.56f else 0.34f,
-                onClick = onToggleFill
-            )
+                size = 48.dp, iconSize = 20.dp, containerAlpha = 0f, onClick = onToggleMute)
         }
     }
 }
@@ -3362,17 +3451,34 @@ private fun VideoControlButton(
 }
 
 
-private fun captureVideoTransitionFrame(textureView: TextureView?): Bitmap? {
+private fun captureVideoTransitionFrame(textureView: TextureView?, presentationAspect: Float? = null): Bitmap? {
     if (textureView == null || !textureView.isAvailable) return null
     val width = textureView.width
     val height = textureView.height
     if (width <= 0 || height <= 0) return null
     val scale = (1024f / max(width, height)).coerceAtMost(1f)
     return runCatching {
-        textureView.getBitmap((width * scale).roundToInt().coerceAtLeast(1),
+        val frame = textureView.getBitmap((width * scale).roundToInt().coerceAtLeast(1),
             (height * scale).roundToInt().coerceAtLeast(1))
+        if (frame == null || presentationAspect == null || presentationAspect <= 0f) frame else {
+            val crop = videoFrameCrop(frame.width, frame.height, presentationAspect)
+            Bitmap.createBitmap(frame, crop.left, crop.top, crop.width, crop.height).also { cropped ->
+                if (cropped !== frame) frame.recycle()
+            }
+        }
     }.getOrNull()
 }
+
+internal data class VideoFrameCrop(val left: Int, val top: Int, val width: Int, val height: Int)
+
+/** Center crop matches PlayerView's fill presentation without changing the stored poster. */
+internal fun videoFrameCrop(width: Int, height: Int, aspect: Float): VideoFrameCrop {
+    val croppedWidth = minOf(width, (height * aspect).roundToInt()).coerceAtLeast(1)
+    val croppedHeight = minOf(height, (width / aspect).roundToInt()).coerceAtLeast(1)
+    return VideoFrameCrop((width - croppedWidth) / 2, (height - croppedHeight) / 2, croppedWidth, croppedHeight)
+}
+
+internal fun videoDismissStartRadius(scale: Float): Float = 28f * viewerDismissFraction(scale) * scale
 
 private fun viewerBackdropAlpha(offset: Offset, dismissThresholdPx: Float): Float {
     return 1f - viewerDismissProgress(offset, dismissThresholdPx)

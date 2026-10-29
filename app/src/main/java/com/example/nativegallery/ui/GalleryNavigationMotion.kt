@@ -7,6 +7,26 @@ import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import com.example.nativegallery.ui.components.MotionSpecs
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.Modifier
+
+/** The retained library owns its rail, so opening a full-width album cannot resize its tiles. */
+@Composable
+internal fun GalleryMainPane(
+    useNavigationRail: Boolean,
+    rail: @Composable () -> Unit,
+    content: @Composable () -> Unit
+) {
+    if (useNavigationRail) {
+        Row(Modifier.fillMaxSize()) {
+            rail()
+            Box(Modifier.weight(1f).fillMaxHeight()) { content() }
+        }
+    } else content()
+}
 
 @Composable
 internal fun rememberRetainedMainPageOffset(

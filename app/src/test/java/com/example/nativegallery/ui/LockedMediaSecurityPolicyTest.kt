@@ -12,7 +12,7 @@ class LockedMediaSecurityPolicyTest {
             LockedMediaSecurityPolicy.pinCreationError("1234", "4321")
         )
         assertEquals(
-            "Use 4 to 12 digits for the PIN.",
+            "Use 4 to 16 digits for the PIN.",
             LockedMediaSecurityPolicy.pinCreationError("12a4", "12a4")
         )
         assertNull(LockedMediaSecurityPolicy.pinCreationError("1234", "1234"))

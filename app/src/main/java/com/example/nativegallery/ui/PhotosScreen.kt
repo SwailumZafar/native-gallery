@@ -6,6 +6,8 @@
 
 package com.example.nativegallery.ui
 
+import androidx.compose.foundation.gestures.scrollBy
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedVisibilityScope
@@ -261,46 +263,9 @@ fun PhotosScreen(
                 rootBounds.value = it.boundsInWindow()
                 onGridViewportChanged(gridReturnViewport(rootBounds.value, gridTopInsetPx, gridBottomInsetPx))
             }
-            .pointerInput(isSelectionMode, mediaItems) {
-                var dragMode: DragSelectMode? = null
-                var baseSelectedIds = emptySet<String>()
-                val visitedMediaIds = mutableSetOf<String>()
-
-                fun applyDragSelectionAt(localPoint: Offset) {
-                    val hit = hitMedia(localPoint) ?: return
-                    val mode = dragMode ?: return
-                    if (!visitedMediaIds.add(hit.id)) return
-
-                    when (mode) {
-                        DragSelectMode.Add -> if (!baseSelectedIds.contains(hit.id)) onMediaSelectionToggle(hit)
-                        DragSelectMode.Remove -> if (baseSelectedIds.contains(hit.id)) onMediaSelectionToggle(hit)
-                    }
-                }
-
-                if (isSelectionMode) {
-                    detectDragGestures(
-                        onDragStart = { startOffset ->
-                            baseSelectedIds = latestSelectedMediaIds
-                            visitedMediaIds.clear()
-                            val hit = hitMedia(startOffset)
-                            dragMode = hit?.let { if (baseSelectedIds.contains(it.id)) DragSelectMode.Remove else DragSelectMode.Add }
-                            applyDragSelectionAt(startOffset)
-                        },
-                        onDrag = { change, _ ->
-                            applyDragSelectionAt(change.position)
-                            change.consume()
-                        },
-                        onDragEnd = {
-                            dragMode = null
-                            visitedMediaIds.clear()
-                        },
-                        onDragCancel = {
-                            dragMode = null
-                            visitedMediaIds.clear()
-                        }
-                    )
-                }
-            }
+            .dragSelectWithAutoScroll(isSelectionMode, mediaItems,
+                selected = { latestSelectedMediaIds }, hit = ::hitMedia, toggle = onMediaSelectionToggle,
+                scroll = { listState.scrollBy(it) }, invalidateBounds = { tileBounds.clear() })
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
@@ -400,7 +365,7 @@ fun PhotosScreen(
                             collapseProgress = headerCollapse,
                             searchQuery = searchQuery,
                             onSearchQueryChange = onSearchQueryChange,
-                            selectedCount = selectedMediaIds.size,
+                            selectedCount = 0,
                             totalVisibleCount = filteredMediaItems.size,
                             allPhotosCount = remember(mediaItems) { mediaItems.count { !it.isVideo } },
                             allVideosCount = remember(mediaItems) { mediaItems.count { it.isVideo } },
@@ -548,7 +513,7 @@ private fun PicturesHeader(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 20.dp, top = 88.dp, end = 20.dp),
+            .padding(start = 20.dp, top = galleryHeaderTop() + 36.dp, end = 20.dp),
         horizontalAlignment = Alignment.Start
     ) {
         if (selectedCount > 0) {

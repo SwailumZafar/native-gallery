@@ -21,36 +21,38 @@ import java.util.Locale
 
 class MediaStoreGalleryRepository(
     context: Context
-) {
+) : GalleryMediaSource {
     private val appContext = context.applicationContext
 
-    fun cachedGallery(mediaKinds: Set<MediaKind>): GallerySnapshot? {
+    override fun cachedGallery(mediaKinds: Set<MediaKind>): GallerySnapshot? {
         val cacheKey = mediaKinds.toSet()
         return synchronized(SnapshotLock) {
             CachedSnapshots[cacheKey]
         }
     }
 
-    fun loadGallery(mediaKinds: Set<MediaKind>): GallerySnapshot {
+    override fun loadGallery(mediaKinds: Set<MediaKind>): GallerySnapshot {
         return GalleryPerformanceMonitor.trace("MediaStore full gallery load") {
             if (mediaKinds.isEmpty()) {
                 return@trace GallerySnapshot(emptyList(), emptyList())
             }
 
             val rawRows = queryMedia(mediaKinds)
-            val rows = groupBurstRows(rawRows)
+            val rows = groupBurstRows(normalizeBurstAlbumRows(rawRows))
             val snapshot = GallerySnapshot(
                 mediaItems = rows.map { it.mediaItem },
                 albums = buildAlbums(rows)
             )
             synchronized(SnapshotLock) {
-                CachedSnapshots[mediaKinds.toSet()] = snapshot
+                val key = mediaKinds.toSet()
+                val previous = CachedSnapshots[key]
+                // Equality stays on the IO worker; an unchanged scan must not rebuild every grid.
+                if (previous == snapshot) previous!! else snapshot.also { CachedSnapshots[key] = it }
             }
-            snapshot
         }
     }
 
-    fun loadTrashedMedia(mediaKinds: Set<MediaKind>): List<RecentlyDeletedMedia> {
+    override fun loadTrashedMedia(mediaKinds: Set<MediaKind>): List<RecentlyDeletedMedia> {
         return GalleryPerformanceMonitor.trace("MediaStore trashed media load") {
             if (mediaKinds.isEmpty() || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
                 return@trace emptyList()
@@ -65,10 +67,10 @@ class MediaStoreGalleryRepository(
         }
     }
 
-    fun loadGalleryPage(
+    override fun loadGalleryPage(
         mediaKinds: Set<MediaKind>,
         limit: Int,
-        offset: Int = 0
+        offset: Int
     ): GallerySnapshot {
         return GalleryPerformanceMonitor.trace("MediaStore gallery page load") {
             if (mediaKinds.isEmpty() || limit <= 0) {
@@ -112,7 +114,7 @@ class MediaStoreGalleryRepository(
                     compareByDescending<MediaStoreRow> { it.mediaItem.sortTimestampMillis }
                         .thenByDescending { it.mediaItem.id }
                 )
-            val groupedRows = groupBurstRows(rawRows)
+            val groupedRows = groupBurstRows(normalizeBurstAlbumRows(rawRows))
             val rows = groupedRows
                 .drop(offset.coerceAtLeast(0))
                 .take(limit)
@@ -123,7 +125,7 @@ class MediaStoreGalleryRepository(
         }
     }
 
-    fun mergeLatestPage(
+    override fun mergeLatestPage(
         mediaKinds: Set<MediaKind>,
         baseSnapshot: GallerySnapshot?,
         latestPage: GallerySnapshot
@@ -220,13 +222,14 @@ class MediaStoreGalleryRepository(
             projection = projection,
             selection = selection,
             selectionArgs = selectionArgs,
-                sortOrder = sortOrder,
+            sortOrder = sortOrder,
             onlyTrashed = onlyTrashed,
             limit = limit,
             offset = offset
         )
 
-        cursor?.use { mediaCursor ->
+        // A provider which is temporarily unavailable is not an empty photo library.
+        checkNotNull(cursor) { "MediaStore did not return a media cursor" }.use { mediaCursor ->
             val idColumn = mediaCursor.getColumnIndexOrThrow(BaseColumns._ID)
             val typeColumn = mediaCursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MEDIA_TYPE)
             val titleColumn = mediaCursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
@@ -403,6 +406,8 @@ class MediaStoreGalleryRepository(
             itemCount = rows.size,
             coverMediaIds = rows.take(4).map { it.mediaItem.id },
             coverUri = allCover.contentUri,
+            coverMediaItem = allCover,
+            hasVideoBadge = allCover.isVideo,
             isAllPhotos = true
         )
         val nonClutterRows = rows.filterNot { row ->
@@ -417,7 +422,9 @@ class MediaStoreGalleryRepository(
                     name = albumRows.first().albumName,
                     itemCount = albumRows.size,
                     coverMediaIds = albumRows.take(4).map { it.mediaItem.id },
-                    coverUri = cover.contentUri
+                    coverUri = cover.contentUri,
+                    coverMediaItem = cover,
+                    hasVideoBadge = cover.isVideo
                 )
             }
         return listOf(allPhotos) + regularAlbums
@@ -436,6 +443,8 @@ class MediaStoreGalleryRepository(
             itemCount = mediaItems.size,
             coverMediaIds = mediaItems.take(4).map { it.id },
             coverUri = allCover.contentUri,
+            coverMediaItem = allCover,
+            hasVideoBadge = allCover.isVideo,
             isAllPhotos = true
         )
         val nonClutterMedia = mediaItems.filterNot { item ->
@@ -451,7 +460,9 @@ class MediaStoreGalleryRepository(
                     name = albumNames[albumId] ?: "Other",
                     itemCount = albumMedia.size,
                     coverMediaIds = albumMedia.take(4).map { it.id },
-                    coverUri = cover.contentUri
+                    coverUri = cover.contentUri,
+                    coverMediaItem = cover,
+                    hasVideoBadge = cover.isVideo
                 )
             }
         return listOf(allPhotos) + regularAlbums
@@ -552,6 +563,21 @@ internal fun isBurstClutterAlbum(albumName: String, relativePath: String?): Bool
         relativePath?.contains("Burst", ignoreCase = true) == true
 }
 
+/** OEM burst subfolders belong to their camera album, rather than one album per sequence. */
+internal fun normalizeBurstAlbumRows(rows: List<MediaStoreGalleryRepository.MediaStoreRow>): List<MediaStoreGalleryRepository.MediaStoreRow> {
+    val folders = rows.associateBy { it.mediaItem.relativePath.orEmpty().trimEnd('/').lowercase(Locale.ROOT) }
+    return rows.map { row ->
+        val path = row.mediaItem.relativePath ?: return@map row
+        val parts = path.trim('/').split('/')
+        val burstIndex = parts.indexOfFirst { it.startsWith("BURST", true) || it.startsWith(".BURST", true) }
+        if (burstIndex < 2 || !parts.first().equals("DCIM", true)) return@map row
+        val parentPath = parts.take(burstIndex).joinToString("/", postfix = "/")
+        val parent = folders[parentPath.trimEnd('/').lowercase(Locale.ROOT)]
+        row.copy(mediaItem = row.mediaItem.copy(albumId = parent?.mediaItem?.albumId ?: "burst-parent:$parentPath"),
+            albumName = parent?.albumName ?: parts[burstIndex - 1])
+    }
+}
+
 internal fun isMotionPhotoCandidate(title: String, mimeType: String?, path: String?): Boolean {
     if (title.startsWith("MVIMG_", ignoreCase = true)) return true
     if (title.contains("_MP.", ignoreCase = true) || title.endsWith("_MP", ignoreCase = true)) return true
@@ -566,7 +592,7 @@ internal fun groupBurstRows(rows: List<MediaStoreGalleryRepository.MediaStoreRow
     val rowBurstKey = mutableMapOf<String, String>()
 
     for (row in rows) {
-        val key = extractBurstGroupKey(row.mediaItem, row.albumName)
+        val key = extractBurstGroupKey(row.mediaItem, row.albumName)?.let { "${row.mediaItem.albumId}:$it" }
         if (key != null) {
             burstGroups.getOrPut(key) { mutableListOf() }.add(row)
             rowBurstKey[row.mediaItem.id] = key

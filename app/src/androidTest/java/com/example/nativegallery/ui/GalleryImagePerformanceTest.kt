@@ -31,6 +31,10 @@ import com.example.nativegallery.ui.components.GalleryImageWorkScheduler
 import com.example.nativegallery.ui.components.ImageLoadQuality
 import com.example.nativegallery.ui.components.ThumbnailDiskCache
 import com.example.nativegallery.ui.components.ThumbnailMemoryCache
+import com.example.nativegallery.ui.components.gridThumbnailDetailKey
+import com.example.nativegallery.ui.components.gridThumbnailDimensionBucket
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.min
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -45,6 +49,81 @@ import java.io.File
 class GalleryImagePerformanceTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test fun aVisibleMissingImageRetriesAfterTheLibrarySettlesWithoutScrolling() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = File(context.cacheDir, "restored-thumbnail-${System.nanoTime()}.png")
+        val uri = Uri.fromFile(file)
+        val key = ThumbnailMemoryCache.key(uri, 128, ImageLoadQuality.HighQuality)
+        try {
+            composeRule.setContent {
+                GalleryImage(null, uri, "Restored thumbnail", Modifier.size(100.dp), thumbnailSize = 128,
+                    loadQuality = ImageLoadQuality.HighQuality, animatedPlaceholder = false)
+            }
+            // Allow the original failed request to finish before the provider becomes readable.
+            Thread.sleep(300)
+            val bitmap = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(android.graphics.Color.GREEN)
+            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+            GalleryImageWorkScheduler.notifyLibrarySettled()
+            composeRule.waitUntil(5_000) { ThumbnailMemoryCache.get(key) != null }
+            composeRule.waitUntil(5_000) { DisplayedBitmapCache.get(uri) != null }
+        } finally {
+            ThumbnailMemoryCache.remove(key)
+            file.delete()
+        }
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 28)
+    fun visibleThumbnailsPromoteToOriginalDetailWithoutChangingTheSource() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = File(context.cacheDir, "grid-detail-${System.nanoTime()}.png")
+        val fixture = Bitmap.createBitmap(2048, 1536, Bitmap.Config.ARGB_8888)
+        fixture.eraseColor(android.graphics.Color.BLUE)
+        file.outputStream().use { fixture.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        fixture.recycle()
+        val original = file.readBytes()
+        val uri = Uri.fromFile(file)
+        var bucket = 0
+        try {
+            composeRule.setContent {
+                bucket = gridThumbnailDimensionBucket(with(LocalDensity.current) { 160.dp.roundToPx() })
+                GalleryImage(null, uri, "Sharp thumbnail", Modifier.size(160.dp), thumbnailSize = 128,
+                    animatedPlaceholder = false, sharpenThumbnail = true)
+            }
+            composeRule.waitUntil(5_000) {
+                DisplayedBitmapCache.get(uri)?.let { min(it.width, it.height) >= bucket } == true
+            }
+            assertTrue(original.contentEquals(file.readBytes()))
+        } finally {
+            ThumbnailMemoryCache.remove(ThumbnailMemoryCache.key(uri, 128))
+            val detailKey = gridThumbnailDetailKey(uri.toString(), null, bucket, bucket)
+            ThumbnailMemoryCache.remove(detailKey)
+            ThumbnailDiskCache.remove(context, detailKey)
+            file.delete()
+        }
+    }
+
+    @Test fun videoReturnUsesItsActualGridPosterWhenOtherSurfacesShowTheSameVideo() {
+        val uri = Uri.parse("content://gallery-performance/source-${System.nanoTime()}")
+        val gridOwner = Any()
+        val otherOwner = Any()
+        val gridPoster = Bitmap.createBitmap(384, 216, Bitmap.Config.ARGB_8888)
+        val otherPoster = Bitmap.createBitmap(128, 72, Bitmap.Config.ARGB_8888)
+        try {
+            DisplayedBitmapCache.register(gridOwner, uri, gridPoster, "photos-media-video")
+            DisplayedBitmapCache.register(otherOwner, uri, otherPoster, "album-media-video")
+            assertSame(gridPoster, DisplayedBitmapCache.getForSource(uri, "photos-media-video"))
+            assertSame(otherPoster, DisplayedBitmapCache.getForSource(uri, "album-media-video"))
+        } finally {
+            DisplayedBitmapCache.unregister(gridOwner)
+            DisplayedBitmapCache.unregister(otherOwner)
+            gridPoster.recycle()
+            otherPoster.recycle()
+        }
+    }
 
     @Test
     @SdkSuppress(minSdkVersion = 28)

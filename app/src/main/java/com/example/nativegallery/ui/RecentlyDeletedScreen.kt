@@ -9,6 +9,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.testTag
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -75,6 +82,15 @@ import com.example.nativegallery.ui.components.mediaSelectionAccentColor
 
 private class RecentlyDeletedBoundsRef(var value: Rect = Rect.Zero)
 
+internal fun retainDepartingTrashItems(
+    displayed: List<RecentlyDeletedMedia>, incoming: List<RecentlyDeletedMedia>
+): List<RecentlyDeletedMedia> {
+    val nextById = incoming.associateBy { it.mediaItem.id }
+    val currentIds = displayed.mapTo(hashSetOf()) { it.mediaItem.id }
+    return (displayed.map { nextById[it.mediaItem.id] ?: it } + incoming.filterNot { it.mediaItem.id in currentIds })
+        .sortedByDescending { it.deletedAtMillis }
+}
+
 private enum class RecentlyDeletedDragSelectMode {
     Add,
     Remove
@@ -108,6 +124,17 @@ fun RecentlyDeletedScreen(
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
     val isSelectionMode = selectedMediaIds.isNotEmpty()
     val availableIds = remember(deletedItems) { deletedItems.map { it.mediaItem.id }.toSet() }
+    var displayedItems by remember { mutableStateOf(deletedItems) }
+    var departingIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(deletedItems) {
+        val previous = displayedItems
+        val departing = previous.map { it.mediaItem.id }.toSet() - availableIds
+        displayedItems = withContext(Dispatchers.Default) { retainDepartingTrashItems(previous, deletedItems) }
+        departingIds = departing
+        if (departing.isNotEmpty()) delay(210L)
+        displayedItems = deletedItems
+        departingIds = emptySet()
+    }
 
     BackHandler(enabled = isSelectionMode) {
         selectedMediaIds = emptySet()
@@ -192,9 +219,9 @@ fun RecentlyDeletedScreen(
             columns = GridCells.Fixed(gridColumns.coerceAtLeast(2)),
             contentPadding = PaddingValues(
                 start = 4.dp,
-                top = 48.dp,
+                top = galleryHeaderTop(),
                 end = 4.dp,
-                bottom = contentPadding.calculateBottomPadding() + if (isSelectionMode) 132.dp else 34.dp
+                bottom = contentPadding.calculateBottomPadding() + if (isSelectionMode || departingIds.isNotEmpty()) 132.dp else 34.dp
             ),
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -225,7 +252,7 @@ fun RecentlyDeletedScreen(
                             }
                         }
                     )
-                    if (!isSelectionMode) {
+                    Column(Modifier.graphicsLayer { alpha = if (isSelectionMode) 0f else 1f }) {
                         Spacer(Modifier.height(12.dp))
                         Text(
                             text = "Photos and videos are permanently removed after 30 days.",
@@ -243,7 +270,7 @@ fun RecentlyDeletedScreen(
                 }
             }
 
-            if (deletedItems.isEmpty()) {
+            if (displayedItems.isEmpty()) {
                 item(
                     key = "recently-deleted-empty",
                     span = { GridItemSpan(maxLineSpan) },
@@ -258,21 +285,35 @@ fun RecentlyDeletedScreen(
                 }
             } else {
                 items(
-                    items = deletedItems,
+                    items = displayedItems,
                     key = { entry -> entry.mediaItem.id },
                     contentType = { "recently-deleted-tile" }
                 ) { entry ->
-                    RecentlyDeletedTile(
-                        entry = entry,
-                        selected = entry.mediaItem.id in selectedMediaIds,
-                        onBoundsChanged = { bounds -> tileBounds[entry.mediaItem.id] = bounds },
-                        onLongClick = {
-                            if (entry.mediaItem.id !in selectedMediaIds) toggleSelection(entry)
-                        },
-                        onClick = { bounds ->
-                            if (isSelectionMode) toggleSelection(entry) else onOpenMedia(entry, bounds)
-                        }
-                    )
+                    val removing = entry.mediaItem.id in departingIds
+                    val removal by animateFloatAsState(if (removing) 0f else 1f, tween(190), label = "trash removal")
+                    Box(Modifier.animateItem(fadeInSpec = tween(140), fadeOutSpec = null,
+                        placementSpec = spring(dampingRatio = 0.9f, stiffness = 460f))
+                        .testTag("trash-item-${entry.mediaItem.id}")
+                        .graphicsLayer {
+                            alpha = removal
+                            scaleX = 0.82f + 0.18f * removal
+                            scaleY = scaleX
+                            translationY = -8.dp.toPx() * (1f - removal)
+                        }) {
+                        RecentlyDeletedTile(
+                            entry = entry,
+                            selected = entry.mediaItem.id in selectedMediaIds,
+                            onBoundsChanged = { bounds -> tileBounds[entry.mediaItem.id] = bounds },
+                            onLongClick = {
+                                if (!removing && entry.mediaItem.id !in selectedMediaIds) toggleSelection(entry)
+                            },
+                            onClick = { bounds ->
+                                if (!removing) {
+                                    if (isSelectionMode) toggleSelection(entry) else onOpenMedia(entry, bounds)
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -354,7 +395,6 @@ fun RecentlyDeletedScreen(
                 TextButton(
                     onClick = {
                         confirmation = null
-                        selectedMediaIds = emptySet()
                         when (pending.mode) {
                             RecentlyDeletedConfirmationMode.Restore -> onRestoreSelected(pending.items)
                             RecentlyDeletedConfirmationMode.DeleteForever -> onDeleteForeverSelected(pending.items)

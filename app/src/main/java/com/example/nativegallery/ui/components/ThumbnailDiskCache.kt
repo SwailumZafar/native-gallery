@@ -102,7 +102,10 @@ object ThumbnailDiskCache {
             val temporary = File(directory, "${target.name}.tmp")
             val written = runCatching {
                 FileOutputStream(temporary).use { stream ->
-                    val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    val format = if (cacheKey.contains("#grid-detail-v1:")) {
+                        // Original-derived visible detail must survive cache reloads without another lossy encode.
+                        Bitmap.CompressFormat.PNG
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         Bitmap.CompressFormat.WEBP_LOSSY
                     } else {
                         @Suppress("DEPRECATION")

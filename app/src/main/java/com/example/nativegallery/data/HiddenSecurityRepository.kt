@@ -36,6 +36,7 @@ class HiddenSecurityRepository(context: Context) {
                 .putInt(PIN_ITERATIONS_KEY, Pbkdf2Iterations)
                 .putString(PIN_SALT_KEY, salt.toHexString())
                 .putString(PIN_HASH_KEY, hash.toHexString())
+                .putString("credential_kind", VaultCredentialKind.Pin.name)
                 .remove(PIN_FAILED_ATTEMPTS_KEY)
                 .remove(PIN_LOCKOUT_UNTIL_KEY)
                 .commit()
@@ -43,7 +44,7 @@ class HiddenSecurityRepository(context: Context) {
     }
 
     fun verifyPin(pin: String): Boolean {
-        if (!isValidPin(pin)) return false
+        if (!validVaultCredential(credentialKind(), pin)) return false
         val encodedSalt = preferences.getString(PIN_SALT_KEY, null) ?: return false
         val savedHash = preferences.getString(PIN_HASH_KEY, null) ?: return false
         val credentialVersion = preferences.getInt(PIN_VERSION_KEY, LegacyCredentialVersion)
@@ -73,7 +74,7 @@ class HiddenSecurityRepository(context: Context) {
                     preferences.getInt(PIN_ITERATIONS_KEY, 0) < Pbkdf2Iterations
                 )
         ) {
-            setPin(pin)
+            setCredential(credentialKind(), pin)
         }
         return verified
     }
@@ -93,7 +94,7 @@ class HiddenSecurityRepository(context: Context) {
         preferences.edit()
             .putInt(
                 PIN_FAILED_ATTEMPTS_KEY,
-                if (failureState.lockoutUntilMillis > nowMillis) 0 else failureState.failedAttempts
+                failureState.failedAttempts
             )
             .putLong(PIN_LOCKOUT_UNTIL_KEY, failureState.lockoutUntilMillis)
             .commit()
@@ -116,6 +117,10 @@ class HiddenSecurityRepository(context: Context) {
             .remove(PIN_ITERATIONS_KEY)
             .remove(PIN_FAILED_ATTEMPTS_KEY)
             .remove(PIN_LOCKOUT_UNTIL_KEY)
+            .remove("credential_kind")
+            .remove("decoy_hash").remove("decoy_salt").remove("decoy_media_ids")
+            .remove("recovery_hash").remove("recovery_salt").remove("recovery_prompt")
+            .remove("last_vault_was_decoy")
             .commit()
     }
 
@@ -156,7 +161,7 @@ class HiddenSecurityRepository(context: Context) {
         private const val MaximumStoredIterations = 1_000_000
         internal const val Pbkdf2Iterations = 210_000
         private const val MaxFailedPinAttempts = 5
-        private const val PinLockoutMillis = 30_000L
+        private const val PinLockoutMillis = 60_000L
 
         internal fun derivePinHash(
             pin: String,
@@ -177,7 +182,7 @@ class HiddenSecurityRepository(context: Context) {
         }
 
         fun isValidPin(pin: String): Boolean {
-            return pin.length in 4..12 && pin.all { it.isDigit() }
+            return pin.length in 4..16 && pin.all { it in '0'..'9' }
         }
 
         fun nextPinFailureState(
@@ -191,12 +196,74 @@ class HiddenSecurityRepository(context: Context) {
             val failedAttempts = currentFailedAttempts.coerceAtLeast(0) + 1
             return PinFailureState(
                 failedAttempts = failedAttempts,
-                lockoutUntilMillis = if (failedAttempts >= MaxFailedPinAttempts) {
-                    nowMillis + PinLockoutMillis
-                } else {
-                    0L
+                lockoutUntilMillis = when {
+                    failedAttempts > 30 -> nowMillis + ((failedAttempts - 30L) * PinLockoutMillis).coerceAtMost(3_600_000L)
+                    failedAttempts == 30 -> 0L
+                    failedAttempts % MaxFailedPinAttempts == 0 -> nowMillis + when (failedAttempts) {
+                        5 -> PinLockoutMillis
+                        10 -> 120_000L
+                        15 -> 300_000L
+                        20 -> 600_000L
+                        else -> 1_800_000L
+                    }
+                    else -> 0L
                 }
             )
         }
     }
+
+    fun credentialKind(): VaultCredentialKind = runCatching {
+        VaultCredentialKind.valueOf(preferences.getString("credential_kind", VaultCredentialKind.Pin.name)!!)
+    }.getOrDefault(VaultCredentialKind.Pin)
+
+    fun setCredential(kind: VaultCredentialKind, secret: String): Boolean {
+        if (!validVaultCredential(kind, secret) || verifyDecoyPin(secret)) return false
+        val salt = randomSalt()
+        val hash = derivePinHash(secret, salt)
+        return preferences.edit().putInt(PIN_VERSION_KEY, CurrentCredentialVersion)
+            .putInt(PIN_ITERATIONS_KEY, Pbkdf2Iterations).putString(PIN_SALT_KEY, salt.toHexString())
+            .putString(PIN_HASH_KEY, hash.toHexString()).putString("credential_kind", kind.name)
+            .remove(PIN_FAILED_ATTEMPTS_KEY).remove(PIN_LOCKOUT_UNTIL_KEY).commit()
+    }
+
+    fun requiresRecovery(): Boolean = preferences.getInt(PIN_FAILED_ATTEMPTS_KEY, 0) >= 30
+    fun hasRecovery(): Boolean = preferences.contains("recovery_hash")
+    fun recoveryPrompt(): String = preferences.getString("recovery_prompt", null) ?: "Enter your recovery phrase"
+    fun setRecovery(prompt: String, secret: String): Boolean {
+        if (secret.length !in 12..128 || prompt.isBlank()) return false
+        return storeSeparateSecret("recovery", secret, preferences.edit().putString("recovery_prompt", prompt.trim().take(160)))
+    }
+    fun verifyRecovery(secret: String): Boolean = verifySeparateSecret("recovery", secret)
+    fun hasDecoyPin(): Boolean = preferences.contains("decoy_hash")
+    fun setDecoyPin(pin: String): Boolean {
+        if (!isValidPin(pin) || verifyPin(pin)) return false
+        return storeSeparateSecret("decoy", pin, preferences.edit())
+    }
+    fun removeDecoyPin() { preferences.edit().remove("decoy_hash").remove("decoy_salt").apply() }
+    fun verifyDecoyPin(pin: String): Boolean = isValidPin(pin) && verifySeparateSecret("decoy", pin)
+    fun decoyMediaIds(): Set<String> = preferences.getStringSet("decoy_media_ids", emptySet())!!.toSet()
+    fun lastVaultWasDecoy(): Boolean = preferences.getBoolean("last_vault_was_decoy", false) && hasDecoyPin()
+    fun rememberVaultView(decoy: Boolean) { preferences.edit().putBoolean("last_vault_was_decoy", decoy).apply() }
+    fun addDecoyMedia(ids: Set<String>) { preferences.edit().putStringSet("decoy_media_ids", decoyMediaIds() + ids).apply() }
+    fun clearDecoyMedia() { preferences.edit().remove("decoy_media_ids").apply() }
+
+    private fun storeSeparateSecret(prefix: String, secret: String, editor: android.content.SharedPreferences.Editor): Boolean {
+        val salt = randomSalt()
+        return editor.putString("${prefix}_salt", salt.toHexString())
+            .putString("${prefix}_hash", derivePinHash(secret, salt).toHexString()).commit()
+    }
+    private fun verifySeparateSecret(prefix: String, secret: String): Boolean {
+        if (secret.length > 128) return false
+        val salt = preferences.getString("${prefix}_salt", null)?.hexToByteArrayOrNull() ?: return false
+        val hash = preferences.getString("${prefix}_hash", null)?.hexToByteArrayOrNull() ?: return false
+        return MessageDigest.isEqual(hash, derivePinHash(secret.ifEmpty { "\u0000" }, salt))
+    }
+}
+
+enum class VaultCredentialKind { Pin, Pattern, Password }
+
+internal fun validVaultCredential(kind: VaultCredentialKind, secret: String): Boolean = when (kind) {
+    VaultCredentialKind.Pin -> HiddenSecurityRepository.isValidPin(secret)
+    VaultCredentialKind.Password -> secret.length in 8..128 && secret.isNotBlank()
+    VaultCredentialKind.Pattern -> secret.length in 4..9 && secret.all { it in '1'..'9' } && secret.toSet().size == secret.length
 }

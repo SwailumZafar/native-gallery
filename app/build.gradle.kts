@@ -31,8 +31,8 @@ android {
         applicationId = "com.swailumzafar.nativegallery"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "0.9.17"
+        versionCode = 23
+        versionName = "0.9.20"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables {
@@ -115,6 +115,7 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.window:window:1.5.1")
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")

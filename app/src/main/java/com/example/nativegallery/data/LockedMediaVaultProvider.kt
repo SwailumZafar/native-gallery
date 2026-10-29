@@ -15,6 +15,9 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 
 class LockedMediaVaultProvider : ContentProvider() {
     private var vaultRepository: LockedMediaVaultRepository? = null
@@ -93,9 +96,11 @@ class LockedMediaVaultProvider : ContentProvider() {
             ?: throw FileNotFoundException("Missing locked media token")
         val preview = uri.pathSegments.firstOrNull() == LockedMediaVaultRepository.VaultPreviewPath
         val repository = vaultRepository ?: LockedMediaVaultRepository(appContext)
-        val readyFile = ensureSessionFile(appContext, repository, token, preview)
-        val pfd = ParcelFileDescriptor.open(readyFile, ParcelFileDescriptor.MODE_READ_ONLY)
-        return AssetFileDescriptor(pfd, 0, readyFile.length())
+        return sessionGuard.read {
+            val readyFile = ensureSessionFile(appContext, repository, token, preview)
+            val pfd = ParcelFileDescriptor.open(readyFile, ParcelFileDescriptor.MODE_READ_ONLY)
+            AssetFileDescriptor(pfd, 0, readyFile.length())
+        }
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
@@ -106,13 +111,16 @@ class LockedMediaVaultProvider : ContentProvider() {
             ?: throw FileNotFoundException("Missing locked media token")
         val preview = uri.pathSegments.firstOrNull() == LockedMediaVaultRepository.VaultPreviewPath
         val repository = vaultRepository ?: LockedMediaVaultRepository(appContext)
-        val readyFile = ensureSessionFile(appContext, repository, token, preview)
-        return ParcelFileDescriptor.open(readyFile, ParcelFileDescriptor.MODE_READ_ONLY)
+        return sessionGuard.read {
+            val readyFile = ensureSessionFile(appContext, repository, token, preview)
+            ParcelFileDescriptor.open(readyFile, ParcelFileDescriptor.MODE_READ_ONLY)
+        }
     }
 
     companion object {
         private const val SessionCacheDir = "locked_media_vault_open"
         private val cacheLock = Any()
+        private val sessionGuard = ReentrantReadWriteLock(true)
         private val sessionLocks = ConcurrentHashMap<String, Any>()
 
         @Volatile
@@ -129,7 +137,7 @@ class LockedMediaVaultProvider : ContentProvider() {
             if (uri.pathSegments.firstOrNull() == LockedMediaVaultRepository.VaultPreviewPath) return false
             val token = uri.lastPathSegment?.takeIf { it.isNotBlank() } ?: return false
             awaitScheduledSessionCacheClear()
-            return runCatching {
+            return runCatching { sessionGuard.read {
                 ensureSessionFile(
                     context = appContext,
                     repository = LockedMediaVaultRepository(appContext),
@@ -137,7 +145,7 @@ class LockedMediaVaultProvider : ContentProvider() {
                     preview = false
                 )
                 true
-            }.getOrDefault(false)
+            } }.getOrDefault(false)
         }
 
         private fun ensureSessionFile(
@@ -229,7 +237,7 @@ class LockedMediaVaultProvider : ContentProvider() {
         }
 
         private fun clearSessionCacheFiles(context: Context) {
-            synchronized(cacheLock) {
+            sessionGuard.write { synchronized(cacheLock) {
                 File(context.applicationContext.cacheDir, SessionCacheDir)
                     .listFiles()
                     ?.forEach { it.delete() }
@@ -238,14 +246,14 @@ class LockedMediaVaultProvider : ContentProvider() {
                     LockedMediaVaultRepository.PreviewMigrationDirName
                 ).listFiles()?.forEach { it.delete() }
                 sessionLocks.clear()
-            }
+            } }
         }
 
         fun clearCachedToken(context: Context, token: String) {
-            synchronized(cacheLock) {
+            sessionGuard.write { synchronized(cacheLock) {
                 sessionFile(context.applicationContext, token, preview = false).delete()
                 sessionFile(context.applicationContext, token, preview = true).delete()
-            }
+            } }
         }
 
         private fun sessionFile(context: Context, token: String, preview: Boolean): File {

@@ -314,8 +314,10 @@ class LockedMediaVaultRepository(context: Context) {
 
     fun delete(mediaId: String) {
         val token = fileToken(mediaId)
+        synchronized(PreviewWriteLock) {
         encryptedFileForToken(token).delete()
         encryptedPreviewFileForToken(token).delete()
+        }
         LockedMediaVaultProvider.clearCachedToken(appContext, token)
         removeMetadata(token)
     }
@@ -369,12 +371,22 @@ class LockedMediaVaultRepository(context: Context) {
         }
     }
 
+    /** Recover an absent encrypted poster from the foreground player's decoded frame. */
+    fun saveMissingPreview(mediaId: String, bitmap: Bitmap): Boolean {
+        return synchronized(PreviewWriteLock) {
+            if (!hasEncryptedCopy(mediaId) || hasEncryptedPreview(mediaId)) false
+            else encryptPreviewBitmap(bitmap, encryptedPreviewFileForToken(fileToken(mediaId)))
+        }
+    }
+
     private fun encryptPreviewBitmap(bitmap: Bitmap, targetFile: File): Boolean {
+        return synchronized(PreviewWriteLock) {
         val encoded = ByteArrayOutputStream().use { output ->
             if (!bitmap.compress(Bitmap.CompressFormat.JPEG, PreviewJpegQuality, output)) return false
             output.toByteArray()
         }
-        return encoded.inputStream().use { input -> encryptInputToFile(input, targetFile) }
+        encoded.inputStream().use { input -> encryptInputToFile(input, targetFile) }
+        }
     }
 
     private fun loadPreviewBitmap(mediaItem: MediaItem): Bitmap? {
@@ -611,6 +623,7 @@ class LockedMediaVaultRepository(context: Context) {
         private const val GcmTagBits = 128
         private const val MinimumEncryptedFileBytes = IvByteCount + (GcmTagBits / 8)
         private const val DefaultBufferSize = 64 * 1024
+        private val PreviewWriteLock = Any()
         private const val PreviewSize = 512
         private const val PreviewJpegQuality = 88
         private const val PreviewMimeType = "image/jpeg"

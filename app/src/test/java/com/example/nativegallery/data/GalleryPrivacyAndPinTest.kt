@@ -40,10 +40,10 @@ class GalleryPrivacyAndPinTest {
 
         val fifthFailure = HiddenSecurityRepository.nextPinFailureState(4, 0L, 1_000L)
         assertEquals(5, fifthFailure.failedAttempts)
-        assertEquals(31_000L, fifthFailure.lockoutUntilMillis)
+        assertEquals(61_000L, fifthFailure.lockoutUntilMillis)
 
-        val stillLocked = HiddenSecurityRepository.nextPinFailureState(0, 31_000L, 2_000L)
-        assertEquals(31_000L, stillLocked.lockoutUntilMillis)
+        val stillLocked = HiddenSecurityRepository.nextPinFailureState(0, 61_000L, 2_000L)
+        assertEquals(61_000L, stillLocked.lockoutUntilMillis)
     }
 
     @Test

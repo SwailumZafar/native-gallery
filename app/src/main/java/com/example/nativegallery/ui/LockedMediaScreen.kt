@@ -2,6 +2,8 @@
 
 package com.example.nativegallery.ui
 
+import androidx.compose.foundation.gestures.scrollBy
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -111,7 +113,19 @@ fun LockedMediaScreen(
     onDeleteSelected: (List<MediaItem>) -> Unit,
     onOpenMedia: (MediaItem, Rect, Int) -> Unit,
     contentPadding: PaddingValues,
-    gridColumns: Int = 4
+    gridColumns: Int = 4,
+    credentialKind: com.example.nativegallery.data.VaultCredentialKind = com.example.nativegallery.data.VaultCredentialKind.Pin,
+    isDecoy: Boolean = false,
+    requiresRecovery: Boolean = false,
+    hasRecovery: Boolean = false,
+    recoveryPrompt: String = "Enter your recovery phrase",
+    lockoutRemainingMillis: Long = 0,
+    hasDecoyPin: Boolean = false,
+    deviceRecoveryVerified: Boolean = false,
+    onRecovery: (String, String) -> Unit = { _, _ -> },
+    onDeviceRecovery: () -> Unit = {},
+    onOpenSecurity: () -> Unit = {},
+    onAddDecoySelected: (List<MediaItem>) -> Unit = {}
 ) {
     val hapticFeedback = LocalHapticFeedback.current
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -120,7 +134,7 @@ fun LockedMediaScreen(
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
     val isSelectionMode = selectedMediaIds.isNotEmpty()
     var activeGridColumns by remember(gridColumns) {
-        mutableIntStateOf(gridColumns.coerceIn(2, 10))
+        mutableIntStateOf(gridColumns.coerceIn(2, 6))
     }
     val coroutineScope = rememberCoroutineScope()
     val pinchScaleAnim = remember { Animatable(1f) }
@@ -135,7 +149,7 @@ fun LockedMediaScreen(
     }
 
     LaunchedEffect(Unit) {
-        if (shouldAutoLaunchLockedMediaBiometric(isUnlocked, hasPin, biometricAvailable)) {
+        if (!hasDecoyPin && !requiresRecovery && lockoutRemainingMillis <= 0 && shouldAutoLaunchLockedMediaBiometric(isUnlocked, hasPin, biometricAvailable)) {
             onBiometricUnlock()
         }
     }
@@ -145,6 +159,7 @@ fun LockedMediaScreen(
     }
 
     fun toggleSelection(mediaItem: MediaItem) {
+        if (isDecoy) return
         hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
         selectedMediaIds = if (mediaItem.id in selectedMediaIds) {
             selectedMediaIds - mediaItem.id
@@ -168,47 +183,9 @@ fun LockedMediaScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .onGloballyPositioned { rootBounds.value = it.boundsInWindow() }
-            .pointerInput(isSelectionMode, lockedMediaItems) {
-                var dragMode: LockedMediaDragSelectMode? = null
-                var baseSelectedIds = emptySet<String>()
-                val visitedMediaIds = mutableSetOf<String>()
-
-                fun applyDragSelectionAt(localPoint: Offset) {
-                    val hit = hitMedia(localPoint) ?: return
-                    val mode = dragMode ?: return
-                    if (!visitedMediaIds.add(hit.id)) return
-                    when (mode) {
-                        LockedMediaDragSelectMode.Add -> if (hit.id !in baseSelectedIds) toggleSelection(hit)
-                        LockedMediaDragSelectMode.Remove -> if (hit.id in baseSelectedIds) toggleSelection(hit)
-                    }
-                }
-
-                if (isSelectionMode) {
-                    detectDragGestures(
-                        onDragStart = { startOffset ->
-                            baseSelectedIds = latestSelectedMediaIds
-                            visitedMediaIds.clear()
-                            val hit = hitMedia(startOffset)
-                            dragMode = hit?.let {
-                                if (it.id in baseSelectedIds) LockedMediaDragSelectMode.Remove else LockedMediaDragSelectMode.Add
-                            }
-                            applyDragSelectionAt(startOffset)
-                        },
-                        onDrag = { change, _ ->
-                            applyDragSelectionAt(change.position)
-                            change.consume()
-                        },
-                        onDragEnd = {
-                            dragMode = null
-                            visitedMediaIds.clear()
-                        },
-                        onDragCancel = {
-                            dragMode = null
-                            visitedMediaIds.clear()
-                        }
-                    )
-                }
-            }
+            .dragSelectWithAutoScroll(isSelectionMode, lockedMediaItems,
+                selected = { latestSelectedMediaIds }, hit = ::hitMedia, toggle = ::toggleSelection,
+                scroll = { listState.scrollBy(it) }, invalidateBounds = { tileBounds.clear() })
             .pointerInput(isUnlocked) {
                 if (!isUnlocked) return@pointerInput
                 awaitEachGesture {
@@ -223,8 +200,8 @@ fun LockedMediaScreen(
                             if (pressed.size >= 2) {
                                 val zoomChange = event.calculateZoom()
                                 cumulativeZoom *= zoomChange
-                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.38f)
-                                    .coerceIn(0.70f, 1.45f)
+                                val targetScale = (1f + (cumulativeZoom - 1f) * 0.12f)
+                                    .coerceIn(0.95f, 1.05f)
                                 coroutineScope.launch { pinchScaleAnim.snapTo(targetScale) }
                                 if (!densityChanged && cumulativeZoom >= 1.20f) {
                                     if (activeGridColumns > 2) {
@@ -233,9 +210,9 @@ fun LockedMediaScreen(
                                         densityChanged = true
                                     }
                                 } else if (!densityChanged && cumulativeZoom <= 0.82f) {
-                                    if (activeGridColumns < 10) {
+                                    if (activeGridColumns < 6) {
                                         hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        activeGridColumns = (activeGridColumns + 1).coerceAtMost(10)
+                                        activeGridColumns = (activeGridColumns + 1).coerceAtMost(6)
                                         densityChanged = true
                                     }
                                 }
@@ -270,7 +247,7 @@ fun LockedMediaScreen(
             state = listState,
             contentPadding = PaddingValues(
                 start = 18.dp,
-                top = 48.dp,
+                top = galleryHeaderTop(),
                 end = 18.dp,
                 bottom = contentPadding.calculateBottomPadding() + if (isSelectionMode) 132.dp else 34.dp
             )
@@ -320,7 +297,11 @@ fun LockedMediaScreen(
                             authInProgress = authInProgress,
                             onPinCreated = onPinCreated,
                             onPinUnlock = onPinUnlock,
-                            onBiometricUnlock = onBiometricUnlock
+                            onBiometricUnlock = onBiometricUnlock,
+                            credentialKind = credentialKind, requiresRecovery = requiresRecovery,
+                            hasRecovery = hasRecovery, recoveryPrompt = recoveryPrompt,
+                            remainingMillis = lockoutRemainingMillis, onRecovery = onRecovery, onDeviceRecovery = onDeviceRecovery,
+                            deviceRecoveryVerified = deviceRecoveryVerified
                         )
                     }
                 }
@@ -340,6 +321,7 @@ fun LockedMediaScreen(
                             }
                     ) {
                         Column {
+                            if (!isDecoy) TextButton(onClick = onOpenSecurity) { Text("Vault security") }
                             LockedMediaSummary(lockedItemCount = lockedMediaItems.size)
                             Spacer(Modifier.height(24.dp))
                             Text(
@@ -384,8 +366,12 @@ fun LockedMediaScreen(
             }
         }
 
+        if (isSelectionMode && !isDecoy && hasDecoyPin) {
+            TextButton(onClick = { onAddDecoySelected(lockedMediaItems.filter { it.id in selectedMediaIds }); selectedMediaIds = emptySet() },
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 64.dp)) { Text("Add selected to decoy") }
+        }
         AnimatedVisibility(
-            visible = isSelectionMode,
+            visible = isSelectionMode && !isDecoy,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .zIndex(4f),
@@ -409,7 +395,7 @@ fun LockedMediaScreen(
             )
         }
         AnimatedVisibility(
-            visible = isSelectionMode,
+            visible = isSelectionMode && !isDecoy,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(4f),
@@ -470,109 +456,54 @@ private fun LockedMediaHeader(
 
 @Composable
 private fun LockedMediaAuthCard(
-    hasPin: Boolean,
-    biometricAvailable: Boolean,
-    authMessage: String?,
-    authInProgress: Boolean,
-    onPinCreated: (String, String) -> Unit,
-    onPinUnlock: (String) -> Unit,
-    onBiometricUnlock: () -> Unit
+    hasPin: Boolean, biometricAvailable: Boolean, authMessage: String?, authInProgress: Boolean,
+    onPinCreated: (String, String) -> Unit, onPinUnlock: (String) -> Unit, onBiometricUnlock: () -> Unit,
+    credentialKind: com.example.nativegallery.data.VaultCredentialKind,
+    requiresRecovery: Boolean, hasRecovery: Boolean, recoveryPrompt: String, remainingMillis: Long,
+    onRecovery: (String, String) -> Unit, onDeviceRecovery: () -> Unit, deviceRecoveryVerified: Boolean
 ) {
-    var pin by remember(hasPin) { mutableStateOf("") }
-    var confirmPin by remember(hasPin) { mutableStateOf("") }
-    val pinIsReady = pin.length >= 4
-    val setupReady = pinIsReady && pin == confirmPin
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(30.dp),
-        shadowElevation = 2.dp
-    ) {
-        Column(modifier = Modifier.padding(22.dp)) {
-            Icon(
-                imageVector = Icons.Filled.Lock,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(34.dp)
-            )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = if (hasPin) "Unlock locked media" else "Set up locked media",
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = if (hasPin) {
-                    "Use your PIN, face unlock, fingerprint, or another Android biometric method."
+    var secret by remember(hasPin) { mutableStateOf("") }
+    var confirm by remember(hasPin) { mutableStateOf("") }
+    var recovery by remember { mutableStateOf("") }
+    var entryKind by remember(credentialKind) { mutableStateOf(credentialKind) }
+    val ready = !authInProgress && remainingMillis <= 0
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(if (requiresRecovery) "Verify vault recovery" else if (hasPin) "Unlock locked media" else "Set up locked media",
+                style = MaterialTheme.typography.titleLarge)
+            if (requiresRecovery) {
+                Text("30 incorrect combinations. Your private media remains protected.")
+                if (hasRecovery) {
+                    Text(recoveryPrompt)
+                    VaultCredentialField(com.example.nativegallery.data.VaultCredentialKind.Password, recovery,
+                        { recovery = it }, "Recovery phrase", ready)
+                    VaultCredentialField(credentialKind, secret, { secret = it }, "Vault credential", ready)
+                    Button(onClick = { onRecovery(recovery, secret); secret = ""; recovery = "" }, enabled = ready) { Text("Recover access") }
                 } else {
-                    "Create a PIN before opening locked photos and videos. Face or fingerprint unlock can be used after setup when this phone supports it."
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(18.dp))
-            LockedPinField(
-                value = pin,
-                label = if (hasPin) "PIN" else "New PIN",
-                enabled = !authInProgress,
-                onValueChange = { pin = it }
-            )
-            if (!hasPin) {
-                Spacer(Modifier.height(12.dp))
-                LockedPinField(
-                    value = confirmPin,
-                    label = "Confirm PIN",
-                    enabled = !authInProgress,
-                    onValueChange = { confirmPin = it }
-                )
-            }
-            if (!authMessage.isNullOrBlank()) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    text = authMessage,
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-            Spacer(Modifier.height(18.dp))
-            Button(
-                enabled = !authInProgress && if (hasPin) pinIsReady else setupReady,
-                onClick = {
-                    if (hasPin) {
-                        onPinUnlock(pin)
-                    } else {
-                        onPinCreated(pin, confirmPin)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-            ) {
-                Icon(
-                    imageVector = if (hasPin) Icons.Filled.LockOpen else Icons.Filled.Security,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(if (hasPin) "Unlock" else "Set PIN and unlock")
-            }
-            if (hasPin && biometricAvailable) {
-                Spacer(Modifier.height(8.dp))
-                TextButton(
-                    onClick = onBiometricUnlock,
-                    enabled = !authInProgress,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Fingerprint,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("Use face or fingerprint")
+                    Text("This vault predates recovery setup. Verify your phone's screen lock and vault credential to regain access.")
+                    if (deviceRecoveryVerified) {
+                        VaultCredentialField(credentialKind, secret, { secret = it }, "Vault credential", ready)
+                        Button(onClick = { onRecovery("", secret); secret = "" }, enabled = ready) { Text("Recover access") }
+                    } else Button(onClick = onDeviceRecovery, enabled = !authInProgress) { Text("Verify phone owner") }
                 }
+            } else {
+                if (hasPin) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    com.example.nativegallery.data.VaultCredentialKind.entries.forEach { kind ->
+                        androidx.compose.material3.FilterChip(entryKind == kind, { entryKind = kind; secret = "" }, { Text(kind.name) })
+                    }
+                }
+                VaultCredentialField(if (hasPin) entryKind else com.example.nativegallery.data.VaultCredentialKind.Pin,
+                    secret, { secret = it }, if (hasPin) "Credential" else "New PIN", ready)
+                if (!hasPin) VaultCredentialField(com.example.nativegallery.data.VaultCredentialKind.Pin, confirm,
+                    { confirm = it }, "Confirm PIN", ready)
+                Button(onClick = {
+                    if (hasPin) onPinUnlock(secret) else onPinCreated(secret, confirm)
+                    secret = ""
+                }, enabled = ready && secret.isNotBlank() && (hasPin || secret == confirm)) { Text(if (hasPin) "Unlock" else "Create PIN") }
+                if (hasPin && biometricAvailable) TextButton(onClick = onBiometricUnlock, enabled = ready) { Text("Use biometrics") }
             }
+            if (remainingMillis > 0) Text("Try again in ${kotlin.math.ceil(remainingMillis / 1000.0).toInt()}s", color = MaterialTheme.colorScheme.error)
+            authMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }
 }

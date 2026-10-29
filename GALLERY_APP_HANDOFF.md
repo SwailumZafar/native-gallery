@@ -1,6 +1,6 @@
-# Luma Nook App Handoff
+# Aster App Handoff
 
-Last updated: 2026-10-29
+Last updated: 2026-10-30
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -58,6 +58,8 @@ Choose the item closest to the requested work instead of following this list mec
   - 2026-07-19 slice: added DocumentPhotoRepository and DocumentPhotosViewModel so cancellable OCR indexing, cache validation, scan progress, and rescan state stay outside GalleryApp composition state.
   - 2026-07-30 slice: extracted two-phase Locked Media import/rollback decisions into `LockedMediaOperations`, and added an Activity-scoped viewer/pending-MediaStore session holder so rotation cannot discard an open viewer or a required cancellation rollback.
 - [ ] Continue reducing unnecessary MediaStore reloads and background I/O.
+  - 2026-10-30 slice: nested app mutations now share one refresh boundary; observer notifications during writes queue one full reconciliation, without cancelling/rescanning per item. Keep the current snapshot on provider failure, retry once, and wake only failed visible thumbnail requests when reconciliation completes. Album cover decoder type and poster revision follow the actual surviving cover. See v0.9.19 below.
+  - 2026-10-29 thumbnail-detail slice: retain the working fast 384 px preload, then promote visible tiles/covers to original-derived detail sized for the real Crop viewport. Detail decode shares the four-request coordinator, has a heap-aware pixel/edge budget, uses lossless disk entries and source-revision/tile-size cache keys, and leaves original bytes untouched. See the v0.9.18 entry below.
   - 2026-10-29 slice: visible photo/album requests continue during held scrolling, and a date-aware, bounded grid window preloads four rows behind and roughly sixteen rows ahead. Navigation/viewer morphs still gate new image work. Photo and video prefetch use separate permits; long video-codec readiness waits remain cancellable instead of expiring into a permanent missing poster. See the Luma Nook entry below.
   - 2026-10-25 slice: eliminated disk re-decodes on thumbnail memory hits, bounded decode/write concurrency, paused new image work during visible motion, and retained main pages across folder visits. The optimized build and 156 JVM/10 device tests pass; measured photo, folder, and scrolling frame drops decreased. See the performance section below.
   - 2026-07-15 slice: restore/delete-forever batches now persist Recently Deleted state once per action instead of once per media item.
@@ -117,10 +119,11 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Previous pushed implementation baseline: ec0cbc0 Promote selected v0.9.15 source as build 18
-Previous save point: v0.9.16 / code 19; bounded photo detail, prepared viewer return, grouped settings sheet
-Current workspace: Luma Nook v0.9.17 / code 20; palettes, scroll preloading, stable transition handoffs and landscape pill
-Installed build: Luma Nook v0.9.17 / code 20 on phone 30e49129; APK hash recorded below
+Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
+Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
+Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
+Current workspace: Aster v0.9.20 / code 23; live media removal, vault access options/recovery/decoy, smart albums, insets and selection scrolling
+Installed build: Aster v0.9.20 / code 23 on RMX3852 (30e49129), installed over wireless ADB; APK hash recorded below
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -128,6 +131,8 @@ Repository visibility: private
 Recent saved work:
 
 ```text
+c729e02 Introduce Luma Nook palettes and continuous grid preloading
+c7a0424 Improve photo detail, viewer return, and settings in v0.9.16
 ec0cbc0 Promote selected v0.9.15 source as build 18
 edcd34d Optimize Gallery performance and stabilize media transitions
 2f23627 Refine navigation bar touch physics, burst review back navigation, and video dismissal
@@ -148,6 +153,233 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-10-30 GitHub Save of Installed Aster v0.9.20
+
+The user requested committing the installed update to GitHub. This save point includes the
+complete Aster v0.9.20/code 23 source, resources, tests, and documentation, including the preceding
+v0.9.18/v0.9.19 changes after baseline `c729e02`. Push target is the existing `origin/main`.
+
+Verification belongs to the installed artifact: 195 passing JVM tests, debug lint with 0 errors
+and 11 existing warnings, successful debug/test/optimized APK and local bundle builds. The
+installed APK SHA-256 is `8B6D63058F23C0F70514CAAB3D5742C000B9A23BEFEA0494F83950F3013860A7`.
+Phone installation was verified as v0.9.20/code 23 on RMX3852 at `2026-10-30 04:37:12`.
+Generated binaries, captures, signing material, and machine-local files remain ignored.
+
+## 2026-10-30 v0.9.20 Live Library, Vault Access, and Smart Albums
+
+User requests: fix moving media, top/system-bar overlap and elevated selection toolbars; improve
+vault previews/playback and slow video thumbnails; animate approved batch removals without a
+loading overlay; add escalating vault protection, recovery, decoy PIN, pattern/password/longer PIN;
+add smart albums; constrain vault pinch density; confirm Recently Deleted viewer restoration;
+handle complete bursts, fold OEM burst folders into normal albums, stabilize photo aspect on
+dismiss, and edge-scroll while holding a selection drag.
+
+Implementation:
+
+- Headers use the real status-bar inset. Album grids/previews follow the same header origin;
+  selection action bars use the bottom system inset rather than the hidden main navigation's
+  reserved height. The move picker uses a bounded scrolling list on compact screens.
+- Moves use the parent camera folder for burst-derived covers, select a collision-free filename,
+  report partial failures, retain failed originals, and publish successful album membership before
+  the normal full reconciliation. Existing MediaStore confirmation/permission flows remain.
+- Library tiles retain departing items for a 180 ms shrink/fade, then reflow; confirmed trash is
+  removed from the visible snapshot immediately. Vault import uses the same live removal path.
+  No progress spinner/loading overlay is added. The Photos header stays at its resting size
+  under the selection toolbar. Source/target album lists retain their own departing tile slots.
+- Batch delete/move/vault actions expand burst stacks into distinct original frames. OEM
+  `DCIM/Camera/BURST...` folders resolve to their camera album; grouping keys include album
+  identity to avoid merging equal burst names from different folders. Moving to Camera never
+  uses a burst subfolder as the target path.
+- Shared edge-selection scrolls up/down while the finger stays near a viewport edge and selects
+  newly exposed tiles; bounds are refreshed after actual scrolling. Vault pinch uses the same
+  subtle scale range as other grids and caps phone density at six columns.
+- Recently Deleted viewer Restore now asks for confirmation, including burst restoration.
+  Existing batch restore confirmation stays in place.
+- Photo geometry reads original bounds/EXIF orientation through AndroidX ExifInterface before
+  opening and when a different photo becomes active. Close geometry uses those resolved
+  dimensions, avoiding the letterbox/aspect correction at the handoff; original bytes are untouched.
+- Video poster size follows actual viewport pixels instead of doubling an already rounded
+  bucket; cached posters remain immediately visible. Two bounded platform video reads prevent
+  one slow file from blocking all posters. Grid duration badges reuse known metadata; full
+  container-duration recovery remains in the player. Large persisted posters are eligible for
+  cache-only prefetch. Intro-black playback frames never replace a useful poster.
+- Vault cleanup/decryption now share a read/write boundary so cleanup cannot delete a partial
+  session file while a reader/player opens it. Preview writers are serialized. A successfully
+  decoded foreground video can create an absent encrypted preview, then wake missing thumbnails.
+- Vault accepts 4–16 ASCII-digit PINs, 8–128 character passwords, or a 3×3 pattern with 4–9
+  distinct dots and standard skipped-dot insertion. Existing PIN hashes/salts and encrypted
+  payloads remain compatible; all new secrets use salted PBKDF2.
+- Failed counts persist across timeouts/restarts: attempts 5/10/15/20/25 wait 1/2/5/10/30 minutes;
+  attempt 30 requires recovery. Further wrong recovery attempts are rate limited. Configured
+  recovery requires both the private recovery phrase and the vault credential. Legacy vaults
+  without a recovery phrase require Android device-owner confirmation plus the vault credential;
+  phone confirmation alone cannot unlock. Biometrics cannot bypass a lockout/recovery requirement.
+- Vault → Security offers Access, Recovery, and Decoy settings after real authentication. A
+  separate decoy PIN opens only explicitly selected media; select items in the real vault and
+  choose Add selected to decoy. The decoy view permits viewing/sharing and hides mutation/security
+  controls. Its limited count and last view persist across restarts, so Menu badges do not expose
+  the real vault count. Decoy authentication does not reset the real vault's failed-attempt counter.
+- Albums → + → Create a smart album instead (also Album options → Create smart album) saves
+  type, 7/30-day date range, filename/folder text and favorite filters. Matching runs off the UI
+  thread and refreshes with the library/time. Saved filters persist and can be removed without
+  deleting media, hidden/unhidden, and are excluded from physical move targets.
+- Related hardening: legacy recovery still needs the vault credential; decoy access cannot
+  change real credentials, recover the real vault, or mutate its contents.
+
+Final verification:
+
+- `:app:testDebugUnitTest`, `:app:lintDebug`, `:app:assembleDebug`,
+  `:app:assembleDebugAndroidTest`, `:app:assembleBenchmark`, and `:app:bundleBenchmark` all pass
+  on the delivered source. **195 JVM tests pass, 0 failures/errors**; debug lint reports
+  **0 errors, 11 existing warnings**. Benchmark vital lint passes. Final log:
+  `tmp/aster-20-packaging.log`. A workspace-session interruption stopped an earlier packaging
+  run; the final run completed normally.
+- Android fixtures compile for isolated credential/decoy persistence and legacy recovery,
+  original EXIF geometry, and existing media/gesture regressions. No emulator/device tests
+  were executed; the user self-tests on RMX3852.
+- Optimized APK: `tmp/Aster-0.9.20.apk`, **46,493,021 bytes**, version `0.9.20` / code `23`.
+  SHA-256: `8B6D63058F23C0F70514CAAB3D5742C000B9A23BEFEA0494F83950F3013860A7`.
+  Signature verifies with the same signer as installed v0.9.19:
+  `41bf4c7a80e196b300c07292f61dbae36f32b2142273ded0771f37607fcb5325`.
+  AAPT confirms `Aster` / `com.swailumzafar.nativegallery`; the named copy matches the build.
+- Local benchmark bundle: `tmp/Aster-0.9.20.aab`, **26,240,579 bytes**.
+  SHA-256: `C7708C6D9BA853502F97481C5BE21B61FC82CBDE1E0316E3B5B8D549B481C712`.
+  JAR signature and required manifest/resources/dex module entries verify. This local bundle
+  uses debug signing; final Play upload signing remains the existing release-owner task.
+- Subsequent user-requested installation: USB was detected but denied by the restricted session.
+  Connected over wireless ADB to the user-provided `192.168.18.95:38301`; the RMX3852 was
+  already trusted, so no pairing code was needed. Reverified the named APK hash and installed
+  using `adb -s 192.168.18.95:38301 install -r`; ADB returned Success. Package inspection confirms
+  version `0.9.20`, code `23`, lastUpdateTime `2026-10-30 04:37:12`. App data/vault files were
+  preserved. The wireless endpoint is temporary and may change when wireless debugging restarts.
+  Source is captured by the installed-v0.9.20 save point above; the previous baseline was `c729e02`.
+
+Phone check: move a burst/ordinary batch into an album with a duplicate filename; delete and
+vault several items while watching the grid; hold a selection drag at both edges; view rotated
+photos and repeat dismissal; play vault videos repeatedly; configure recovery/decoy/access type
+in the real vault and verify that a decoy PIN shows only approved media. Exercise smart-filter
+creation/removal and viewer/batch Restore confirmation. Do not brute-force the real vault for
+testing; lockout policy is covered with isolated fixtures/virtual timestamps.
+
+## 2026-10-30 v0.9.19 Aster, Mutation Stability, and Video Gestures
+
+User requests: replace the rejected Luma Nook name and icon, animate permanent trash removal,
+keep the library responsive after delete/vault/restore operations, fix the video blink specifically
+on downward drag dismissal, make video Information responsive, and put rewind/forward/fit directly
+after the landscape seekbar. Suggest future features without adding them in this pass.
+
+Implementation:
+
+- Rename the launcher and README to **Aster**, with a flat six-blade aperture icon: slate
+  `#253238`, warm white `#F4F0E7`, one sage blade `#ADBDB7`. Native adaptive/monochrome vectors;
+  preview `tmp/aster-icon.png`. Exact Android-gallery naming searches found no clear competing
+  match, though the word is used elsewhere in photography; no exclusivity claim. Package identity,
+  signing, preference keys and vault paths are preserved for update compatibility.
+- Add a nested mutation gate around vault imports/restores and existing MediaStore writes.
+  Notifications during writes queue one full warm-library scan, replacing repeated page scans
+  and cancellation storms. Reject stale publications; retain the current snapshot when a provider
+  returns no cursor or throws, then retry once. Unchanged full scans reuse the snapshot reference.
+- Album models retain their actual cover item. Privacy/delete filtering now updates cover type
+  and video poster fingerprint together, so promoting a video after deleting/locking its photo
+  cover uses the correct decoder and existing cache identity.
+- JPEG vault preview sidecars decode as images while retaining video badges/duration metadata.
+  Failed visible thumbnail requests wait for the next completed library reconciliation and retry;
+  successful cached requests remain untouched, and waiting requests hold no decoder permit.
+- Confirmed removed Recently Deleted rows fade, shrink and lift for 190 ms before removal;
+  surviving tiles use placement springs. Preserve header geometry as selection ends, and keep
+  selection if Android cancels/fails deletion rather than animating an unconfirmed success.
+- Video drag captures a frozen frame before pause/transform and uses it for both held drag and
+  close overlay. Preserve fill crop, corner radius and elevation through the handoff; only expose
+  a TextureView after its first frame has settled, falling back to the poster for immediate closes.
+  Existing portrait photo/folder motion constants are unchanged.
+- Video Information opens after a short upward pull while the finger is still down, uses
+  160/120 ms panel motion, and dismisses promptly on downward pull at the top of its scroll.
+  Photo Information gesture thresholds/timing are preserved.
+- Keep the landscape playback pill 56 dp high with 48 dp touch targets; rewind 10, forward 10,
+  and fit/fill are inline after the seekbar. Existing top Share/other actions remain in place.
+- Related hardening: a successful Android album-write grant stays inside the mutation boundary
+  until the subsequent move IO completes, avoiding a scan during a half-finished album move.
+
+Verification/delivery:
+
+- `:app:testDebugUnitTest`, `:app:lintDebug`, `:app:assembleDebug`,
+  `:app:assembleDebugAndroidTest`, and `:app:assembleBenchmark` all pass on final source.
+  **186 JVM tests pass**; debug lint reports **0 errors, 11 existing warnings**. Benchmark vital
+  lint also passes. Final log: `tmp/aster-final-verify.log`.
+- Added JVM coverage for nested write/revision boundaries, changed photo/video album covers,
+  retained departing trash rows, video crop/corner handoff, and failed-thumbnail wakeups.
+  Android regression fixtures compile for batched refresh/provider retry, a visible-thumbnail
+  retry without scrolling, held video drag/Information gestures, and inline landscape transport.
+- Optimized APK: `tmp/Aster-0.9.19.apk`, **46,460,253 bytes**, version `0.9.19` / code `22`.
+  SHA-256: `9FE4473203152DBB9679298B1EFF3F11DB29687665FAF01A5F84F03B8885A5AA`.
+  APK signature verifies, signer SHA-256 matches the installed v0.9.18, and the named copy matches
+  the built APK. Label is `Aster`; application ID remains `com.swailumzafar.nativegallery`.
+- No emulator or device tests were run in this pass; the user self-tests on the physical phone.
+  On the user's subsequent install request, verified the named APK hash and installed with
+  `adb -s 30e49129 install -r`; ADB returned Success. Package inspection confirms version
+  `0.9.19`, code `22`, lastUpdateTime `2026-10-30 01:01:57` on the RMX3852. App data was preserved.
+  Check repeated short/long downward video drags,
+  fill/fit and Information pulls, then delete/trash/vault/restore batches and album covers.
+- New source remains uncommitted; the previous GitHub save is `c729e02`.
+
+Suggested next features: tags/saved smart albums, side-by-side photo comparison, and a
+share-without-location option. The current app already has OCR, cleanup, favorites, and a vault.
+
+## 2026-10-29 v0.9.18 Thumbnail Detail and Landscape Return Refinement
+
+The user confirmed that continuous preloading and video opening no longer blink. They requested
+saving the installed version to GitHub first, then sharper unopened media, removal of video-close
+jitter, exact landscape folder dismissal, and smaller landscape video controls. Preserve portrait
+photo/folder styling and animation springs.
+
+- Fetched `origin`, committed the complete installed v0.9.17 source/tests/documentation as
+  `c729e029e5145e01fd6b8c01e2182015ea715768`, and pushed `main` to `origin/main` before starting
+  these fixes. Generated APKs/captures remain ignored. The new v0.9.18 work is separate from that
+  saved phone-tested baseline and has not yet been committed. Installation is recorded below.
+- Keep the confirmed 384 px nearby preload unchanged. Visible media tiles and album covers
+  request original-derived detail using their physical pixel dimensions and Crop aspect ratio.
+  This supplies pixels for both edges rather than enlarging a small platform thumbnail. The
+  current preview stays painted until the sharper bitmap is ready; full original aspect ratio
+  is retained for existing viewer morphs. Visible video posters reserve enough pixels for
+  square cropping of wide frames, capped at 1536 px, and retain those larger posters on disk.
+  Grid sampling uses the high-quality filter.
+- Additional hardening: original-derived detail uses a separate, lossless PNG disk-cache key
+  including media revision and tile dimensions. Shared decode concurrency, a 4096 px edge cap,
+  and a heap-aware 0.75–2 MP pixel budget bound memory. Original files are never rewritten and
+  a failed detail decode leaves the fast preview available.
+- Displayed previews now retain their source tile identity. Video return targets use the exact
+  Photos/album tile's current bitmap rather than picking an unrelated smaller poster for the
+  same URI from another retained page/viewer. The captured video frame covers AndroidView
+  removal for two display frames before the existing close spring starts; return navigation
+  can settle beneath it instead of appearing after the hero finishes.
+- The retained main page now owns its navigation rail and its measurement lane, independently
+  of the full-width Album Detail destination. Hidden album covers keep their real coordinates
+  while an album is open, including rotation. Landscape closing targets retain their measured
+  bounds without viewport clamping. Portrait paths keep the existing geometry and springs.
+- Landscape phone video transport is a single 56 dp rounded pill near the bottom inset, with
+  play/pause, timeline, time labels, mute and a playback menu. Rewind/forward/fit remain in that
+  menu. The extra landscape video action strip is removed; normal Share/Favorite/Delete move
+  to the top menu, and locked/trash videos retain Show/Restore/Delete there. Portrait controls
+  and landscape photo actions keep their existing layout.
+- Verification: all **176 JVM tests pass**; debug lint succeeds with 0 errors, 11 existing warnings
+  and 2 informational items. The debug APK assembled during development; the final Android-test
+  and optimized APK builds succeed. New instrumentation coverage
+  compiles for original-detail promotion without source changes, exact poster provenance,
+  retained rail geometry, and compact playback-menu actions. No emulator/device interaction
+  tests have been run; the user's no-emulator preference remains in effect.
+- Deliverable: `tmp/Luma-Nook-0.9.18.apk`, **46,459,621 bytes**, version `0.9.18` / code `21`.
+  SHA-256: `CC1480F75475D584832309DB311606DCA81F4835F5987473FCFB5D7CE44490DD`.
+  Signature verifies with the same signer as installed v0.9.17; label/application ID remain
+  `Luma Nook` / `com.swailumzafar.nativegallery`. The named copy matches the final optimized build.
+  Installation follow-up: the user requested the update. Rechecked the named APK's SHA-256 and
+  installed with `adb -s 30e49129 install -r`; ADB returned Success. Package inspection confirms
+  version `0.9.18`, code `21`, lastUpdateTime `2026-10-29 23:49:01` on phone `30e49129` (`RMX3852`).
+  App data was retained. No app launch or device interaction tests were performed during installation.
+- Phone checks: compare unopened tiles/large covers with their opened originals, hold a scroll
+  through newly visible images, close videos repeatedly from Photos and albums, open/close
+  folders in both landscape directions (including after rotation), and inspect the single-row
+  landscape controls and their menus. Confirm that portrait folder/photo motion feels unchanged.
 
 ## 2026-10-29 Luma Nook, Appearance, Loading, and Video Refinement
 

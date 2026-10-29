@@ -40,7 +40,9 @@ object GalleryPrivacyFilter {
                         itemCount = albumMedia.size,
                         coverMediaIds = albumMedia.take(4).map { it.id },
                         coverRes = cover.imageRes ?: album.coverRes,
-                        coverUri = cover.contentUri ?: album.coverUri
+                        coverUri = cover.contentUri ?: album.coverUri,
+                        coverMediaItem = cover,
+                        hasVideoBadge = cover.isVideo
                     )
                 }
             }
@@ -62,7 +64,9 @@ object GalleryPrivacyFilter {
                         itemCount = visibleMedia.size,
                         coverMediaIds = visibleMedia.take(4).map { it.id },
                         coverRes = cover?.imageRes ?: album.coverRes,
-                        coverUri = cover?.contentUri ?: album.coverUri
+                        coverUri = cover?.contentUri,
+                        coverMediaItem = cover,
+                        hasVideoBadge = cover?.isVideo == true
                     )
                 }
                 hiddenAlbumIds.contains(album.id) -> null
@@ -76,7 +80,9 @@ object GalleryPrivacyFilter {
                             itemCount = albumMedia.size,
                             coverMediaIds = albumMedia.take(4).map { it.id },
                             coverRes = cover.imageRes ?: album.coverRes,
-                            coverUri = cover.contentUri ?: album.coverUri
+                            coverUri = cover.contentUri ?: album.coverUri,
+                            coverMediaItem = cover,
+                            hasVideoBadge = cover.isVideo
                         )
                     }
                 }
