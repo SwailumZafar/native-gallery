@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.SystemClock
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -44,6 +45,43 @@ import java.io.File
 class GalleryImagePerformanceTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    @SdkSuppress(minSdkVersion = 28)
+    fun promotingZoomDetailKeepsThePreviewAndNeverChangesTheOriginalFile() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = File(context.cacheDir, "photo-detail-${System.nanoTime()}.png")
+        val fixture = Bitmap.createBitmap(2048, 1536, Bitmap.Config.ARGB_8888)
+        fixture.eraseColor(android.graphics.Color.BLUE)
+        file.outputStream().use { fixture.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        fixture.recycle()
+        val originalBytes = file.readBytes()
+        val uri = Uri.fromFile(file)
+        val request = mutableIntStateOf(512)
+        val smallKey = ThumbnailMemoryCache.key(uri, 512, ImageLoadQuality.HighQuality)
+        val fullKey = ThumbnailMemoryCache.key(uri, 2048, ImageLoadQuality.HighQuality)
+        try {
+            composeRule.setContent {
+                GalleryImage(null, uri, "Photo detail fixture", Modifier.size(160.dp).testTag("photo-detail"),
+                    cornerRadius = 0.dp, thumbnailSize = request.intValue,
+                    loadQuality = ImageLoadQuality.HighQuality, animatedPlaceholder = false)
+            }
+            composeRule.waitUntil(5_000) { ThumbnailMemoryCache.get(smallKey) != null }
+            GalleryImageWorkScheduler.setViewerMoving(true)
+            composeRule.runOnIdle { request.intValue = 2048 }
+            val pixels = composeRule.onNodeWithTag("photo-detail").captureToImage().toPixelMap()
+            assertEquals(Color.Blue, pixels[pixels.width / 2, pixels.height / 2])
+            GalleryImageWorkScheduler.setViewerMoving(false)
+            composeRule.waitUntil(5_000) { ThumbnailMemoryCache.get(fullKey) != null }
+            assertEquals(2048, ThumbnailMemoryCache.get(fullKey)?.width)
+            assertTrue(originalBytes.contentEquals(file.readBytes()))
+        } finally {
+            GalleryImageWorkScheduler.setViewerMoving(false)
+            ThumbnailMemoryCache.remove(smallKey)
+            ThumbnailMemoryCache.remove(fullKey)
+            file.delete()
+        }
+    }
 
     @Test
     fun tappedPreviewSurvivesEvictionAndRepeatedViewerHandoffsWithoutDecoding() {

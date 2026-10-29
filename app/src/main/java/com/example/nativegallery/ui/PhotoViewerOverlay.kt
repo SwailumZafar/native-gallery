@@ -1898,6 +1898,10 @@ private fun ZoomableViewerMedia(
         val w = mediaItem.width?.takeIf { it > 0 }
         val h = mediaItem.height?.takeIf { it > 0 }
         val isZoomed = (photoZoomed || gestureActive) && !isViewerDragging
+        var zoomDecodeRequested by remember(mediaItem.id) { mutableStateOf(false) }
+        LaunchedEffect(photoZoomed, gestureActive, isViewerDragging) {
+            if (!gestureActive && !isViewerDragging) zoomDecodeRequested = photoZoomed
+        }
         val (cardWidth, cardHeight) = if (isZoomed) {
             Pair(maxWidth, maxHeight)
         } else {
@@ -1932,7 +1936,9 @@ private fun ZoomableViewerMedia(
                     .then(photoTransform),
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Fit,
-                thumbnailSize = if (isActive) activePhotoDecodeSize else minOf(activePhotoDecodeSize, 2048),
+                thumbnailSize = if (isActive) viewerPhotoResolution(
+                    mediaItem.width, mediaItem.height, activePhotoDecodeSize, zoomDecodeRequested
+                ) else minOf(activePhotoDecodeSize, 2048),
                 loadQuality = ImageLoadQuality.HighQuality,
                 backgroundColor = ViewerPhotoStageBackground,
                 allowApproximateCache = true,

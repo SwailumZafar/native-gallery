@@ -466,6 +466,17 @@ fun MediaThumbnail(
         }
     }
     val coordinatesRef = remember { LayoutCoordinatesRef() }
+    val latestBoundsCallback = androidx.compose.runtime.rememberUpdatedState(onBoundsChanged)
+    if (onBoundsChanged != null) {
+        // A pager selection changes alpha without a layout pass. Republish the actual tile
+        // coordinates so a newly selected, already visible photo still has a close target.
+        LaunchedEffect(mediaItem.id, isSharedElementSourceHidden) {
+            androidx.compose.runtime.withFrameNanos { }
+            coordinatesRef.value?.takeIf { it.isAttached }?.boundsInWindow()?.let { bounds ->
+                latestBoundsCallback.value?.invoke(bounds)
+            }
+        }
+    }
     val positionedModifier = if (onClickWithBounds == null) {
         measuredModifier
     } else {
@@ -1198,7 +1209,7 @@ private suspend fun loadCachedBitmap(
             }
             ImageLoadQuality.HighQuality -> loadHighQualityBitmap(context, imageUri, thumbnailSize)
                 ?: loadSampledBitmap(context, imageUri, thumbnailSize)
-                ?: loadThumbnail(context, imageUri, thumbnailSize, isVideo = isVideo)
+                ?: if (isVideo) loadThumbnail(context, imageUri, thumbnailSize, isVideo = true) else null
         }
         if (diskCacheEligible) {
             loaded?.let { ThumbnailDiskCache.put(context, cacheKey, it) }
@@ -1251,30 +1262,18 @@ private suspend fun loadPersistedThumbnail(
 }
 
 private fun loadHighQualityBitmap(context: Context, imageUri: Uri, maxSide: Int): Bitmap? {
-    return try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val source = ImageDecoder.createSource(context.contentResolver, imageUri)
-            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-                // Viewer images are immutable and only drawn by the hardware renderer.
-                // Keep them GPU-backed instead of uploading large software bitmaps on entry.
-                decoder.allocator = ImageDecoder.ALLOCATOR_HARDWARE
-                val width = info.size.width
-                val height = info.size.height
-                val largestSide = max(width, height)
-                if (largestSide > maxSide) {
-                    val scale = maxSide.toFloat() / largestSide.toFloat()
-                    decoder.setTargetSize(
-                        (width * scale).roundToInt().coerceAtLeast(1),
-                        (height * scale).roundToInt().coerceAtLeast(1)
-                    )
-                }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return loadSampledBitmap(context, imageUri, maxSide)
+    for (allocator in intArrayOf(ImageDecoder.ALLOCATOR_HARDWARE, ImageDecoder.ALLOCATOR_SOFTWARE)) {
+        val decoded = runCatching {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, imageUri)) { decoder, info, _ ->
+                decoder.allocator = allocator
+                val (width, height) = photoDecodeDimensions(info.size.width, info.size.height, maxSide, photoDecodePixelBudget())
+                if (width != info.size.width || height != info.size.height) decoder.setTargetSize(width, height)
             }
-        } else {
-            loadSampledBitmap(context, imageUri, maxSide)
-        }
-    } catch (_: Exception) {
-        null
+        }.getOrNull()
+        if (decoded != null) return decoded
     }
+    return null
 }
 
 private fun loadSampledBitmap(context: Context, imageUri: Uri, maxSide: Int): Bitmap? {
@@ -1289,6 +1288,10 @@ private fun loadSampledBitmap(context: Context, imageUri: Uri, maxSide: Int): Bi
     val decodeOptions = BitmapFactory.Options().apply {
         inPreferredConfig = Bitmap.Config.ARGB_8888
         inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, maxSide)
+        val pixelBudget = photoDecodePixelBudget()
+        while ((bounds.outWidth.toLong() / inSampleSize) * (bounds.outHeight / inSampleSize) > pixelBudget) {
+            inSampleSize *= 2
+        }
     }
     return context.contentResolver.openInputStream(imageUri)?.use { stream ->
         BitmapFactory.decodeStream(stream, null, decodeOptions)
@@ -1298,7 +1301,7 @@ private fun loadSampledBitmap(context: Context, imageUri: Uri, maxSide: Int): Bi
 
 private fun sampleSizeFor(width: Int, height: Int, maxSide: Int): Int {
     var sampleSize = 1
-    while (max(width / sampleSize, height / sampleSize) > maxSide) {
+    while (max(width / (sampleSize * 2), height / (sampleSize * 2)) >= maxSide) {
         sampleSize *= 2
     }
     return sampleSize

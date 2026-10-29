@@ -1812,7 +1812,13 @@ fun GalleryApp(
             val closeDestination = destination
             val closeTab = selectedTab
             prefetchScope.launch {
-                mediaTileBounds.remove(currentItem.id)
+                if (viewerRevealMediaId == currentItem.id) {
+                    viewerRevealMediaId = null
+                    withFrameNanos { }
+                }
+                if (mediaTileBounds[currentItem.id]?.isVisibleGridReturnTarget(gridViewport) != true) {
+                    mediaTileBounds.remove(currentItem.id)
+                }
                 viewerRevealMediaId = currentItem.id
                 val revealListState = when {
                     destination == GalleryDestination.Main && selectedTab == GalleryTab.Photos -> photosListState
@@ -3220,7 +3226,12 @@ fun GalleryApp(
                     onEdit = ::editPhoto,
                     onMove = { mediaItem -> pendingMoveMediaItems = listOf(mediaItem) },
                     onCurrentMediaChanged = { currentItem ->
-                        if (viewerMediaItem?.id != currentItem.id) mediaTileBounds.clear()
+                        if (viewerMediaItem?.id != currentItem.id) {
+                            mediaTileBounds.clear()
+                            if ((destination == GalleryDestination.Main && selectedTab == GalleryTab.Photos) ||
+                                destination == GalleryDestination.AlbumDetail
+                            ) viewerRevealMediaId = currentItem.id
+                        }
                         viewerMediaItem = currentItem
                         viewerSharedElementKey = viewerSharedElementKeyPrefix?.let { "$it-media-${currentItem.id}" }
                         mediaTileBounds[currentItem.id]?.takeIf { it != Rect.Zero }?.let { bounds ->
@@ -3384,7 +3395,7 @@ fun GalleryApp(
             }
 
             if (showSettingsDialog) {
-                GallerySettingsDialog(
+                GallerySettingsSheet(
                     settings = settings,
                     mediaManagementAccessStatus = mediaManagementAccessStatus,
                     onRequestMediaManagementAccess = { showMediaManagementExplanation = true },
@@ -3590,205 +3601,119 @@ private fun MoveToAlbumDialog(
     )
 }
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun GallerySettingsDialog(
+internal fun GallerySettingsSheet(
     settings: GallerySettings,
     mediaManagementAccessStatus: MediaManagementAccessStatus,
     onRequestMediaManagementAccess: () -> Unit,
     onSettingsChange: (GallerySettings) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val dialogScope = rememberCoroutineScope()
-    val density = LocalDensity.current
-    val scaleAnim = remember { Animatable(0.85f) }
-    val offsetYAnim = remember { Animatable(48f) }
-    val alphaAnim = remember { Animatable(0f) }
-
-    LaunchedEffect(Unit) {
-        launch {
-            scaleAnim.animateTo(
-                targetValue = 1f,
-                animationSpec = MotionSpecs.AppleSpringModal
-            )
-        }
-        launch {
-            offsetYAnim.animateTo(
-                targetValue = 0f,
-                animationSpec = MotionSpecs.AppleSpringModal
-            )
-        }
-        launch {
-            alphaAnim.animateTo(
-                targetValue = 1f,
-                animationSpec = MotionSpecs.AppleSpringSheet
-            )
-        }
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sheetScope = rememberCoroutineScope()
+    var closing by remember { mutableStateOf(false) }
+    fun closeSettings() {
+        if (closing) return
+        closing = true
+        sheetScope.launch { sheetState.hide(); onDismiss() }
     }
-
-    fun dismissWithAnimation() {
-        dialogScope.launch {
-            val scaleJob = launch {
-                scaleAnim.animateTo(0.88f, spring(dampingRatio = 0.85f, stiffness = 500f))
-            }
-            val offsetJob = launch {
-                offsetYAnim.animateTo(32f, spring(dampingRatio = 0.85f, stiffness = 500f))
-            }
-            val alphaJob = launch {
-                alphaAnim.animateTo(0f, tween(140))
-            }
-            scaleJob.join()
-            offsetJob.join()
-            alphaJob.join()
-            onDismiss()
-        }
-    }
-
-    Dialog(
-        onDismissRequest = ::dismissWithAnimation,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("gallery-settings-sheet"),
+        sheetState = sheetState,
+        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+        containerColor = MaterialTheme.colorScheme.surface
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.48f * alphaAnim.value))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = ::dismissWithAnimation
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Surface(
-                modifier = Modifier
-                    .padding(horizontal = 24.dp)
-                    .widthIn(max = 480.dp)
-                    .fillMaxWidth()
-                    .graphicsLayer {
-                        scaleX = scaleAnim.value
-                        scaleY = scaleAnim.value
-                        translationY = offsetYAnim.value
-                        alpha = alphaAnim.value
-                        cameraDistance = 16f * density.density
-                    }
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {}
-                    ),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(28.dp),
-                shadowElevation = 24.dp,
-                tonalElevation = 6.dp
+        Column(Modifier.fillMaxWidth().heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.86f).dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, bottom = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Text(
-                        text = "Settings",
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Column(
-                        modifier = Modifier
-                            .heightIn(max = 520.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        SettingsSectionTitle("Theme")
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            GalleryThemeMode.entries.forEach { mode ->
-                                SettingsChoiceChip(
-                                    label = mode.label(),
-                                    selected = settings.themeMode == mode,
-                                    onClick = { onSettingsChange(settings.copy(themeMode = mode)) },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                        }
-
-                        SettingsSectionTitle("Grid")
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            GalleryGridDensity.entries.forEach { density ->
-                                SettingsChoiceRow(
-                                    label = density.label(),
-                                    description = String.format(Locale.getDefault(), "%1\$d columns across Photos & Albums", density.photoColumns),
-                                    selected = settings.gridDensity == density,
-                                    onClick = { onSettingsChange(settings.copy(gridDensity = density)) }
-                                )
-                            }
-                        }
-
-                        SettingsSectionTitle("Folder animation")
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FolderTransitionStyle.entries.forEach { style ->
-                                SettingsChoiceRow(
-                                    label = style.label(),
-                                    description = style.description(),
-                                    selected = settings.folderTransitionStyle == style,
-                                    onClick = { onSettingsChange(settings.copy(folderTransitionStyle = style)) }
-                                )
-                            }
-                        }
-
-                        SettingsSectionTitle("Photo animation")
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            ViewerTransitionStyle.entries.forEach { style ->
-                                SettingsChoiceRow(
-                                    label = style.label,
-                                    description = style.description,
-                                    selected = settings.viewerTransitionStyle == style,
-                                    onClick = { onSettingsChange(settings.copy(viewerTransitionStyle = style)) }
-                                )
-                            }
-                        }
-
-                        if (
-                            mediaManagementAccessStatus.state == MediaManagementAccessState.Granted ||
-                            mediaManagementAccessStatus.state == MediaManagementAccessState.Requestable
-                        ) {
-                            SettingsSectionTitle("Media changes")
-                            MediaManagementSettingsRow(
-                                status = mediaManagementAccessStatus,
-                                onRequestAccess = onRequestMediaManagementAccess
-                            )
-                        }
-                        SettingsSectionTitle("Video")
-                        SettingsSwitchRow(
-                            label = "Autoplay videos",
-                            description = "Start the active video when it opens",
-                            checked = settings.autoplayVideos,
-                            onCheckedChange = { checked -> onSettingsChange(settings.copy(autoplayVideos = checked)) }
-                        )
-                        SettingsSwitchRow(
-                            label = "Start muted",
-                            description = "Open videos with volume at zero",
-                            checked = settings.startVideosMuted,
-                            onCheckedChange = { checked -> onSettingsChange(settings.copy(startVideosMuted = checked)) }
-                        )
-
-                        SettingsSectionTitle("Performance")
-                        SettingsSwitchRow(
-                            label = "Smooth mode",
-                            description = "Ask Android for the highest available refresh rate",
-                            checked = settings.performanceMode,
-                            onCheckedChange = { checked -> onSettingsChange(settings.copy(performanceMode = checked)) }
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        TextButton(
-                            onClick = ::dismissWithAnimation,
-                            modifier = Modifier.solarTactile(scaleDown = 0.90f, onClick = ::dismissWithAnimation)
-                        ) {
-                            Text("Done", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                    Icon(Icons.Filled.Settings, contentDescription = null,
+                        modifier = Modifier.padding(13.dp).size(25.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Appearance, playback and controls", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                TextButton(onClick = ::closeSettings, enabled = !closing) { Text("Done", fontWeight = FontWeight.SemiBold) }
+            }
+            Column(
+                Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
+                    .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                GallerySettingsGroup("Appearance") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        GalleryThemeMode.entries.forEach { mode ->
+                            SettingsChoiceChip(mode.label(), settings.themeMode == mode,
+                                { onSettingsChange(settings.copy(themeMode = mode)) }, Modifier.weight(1f))
                         }
                     }
                 }
+                GallerySettingsGroup("Grid layout") {
+                    Text("Columns in Photos and albums", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    GalleryGridDensity.entries.chunked(2).forEach { choices ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            choices.forEach { density ->
+                                SettingsChoiceChip("${density.photoColumns} · ${density.label()}", settings.gridDensity == density,
+                                    { onSettingsChange(settings.copy(gridDensity = density)) }, Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+                GallerySettingsGroup("Motion") {
+                    SettingsSectionTitle("Folders")
+                    FolderTransitionStyle.entries.forEach { style ->
+                        SettingsChoiceRow(style.label(), style.description(), settings.folderTransitionStyle == style,
+                            { onSettingsChange(settings.copy(folderTransitionStyle = style)) })
+                    }
+                    SettingsSectionTitle("Photos")
+                    ViewerTransitionStyle.entries.forEach { style ->
+                        SettingsChoiceRow(style.label, style.description, settings.viewerTransitionStyle == style,
+                            { onSettingsChange(settings.copy(viewerTransitionStyle = style)) })
+                    }
+                }
+                GallerySettingsGroup("Video playback") {
+                    SettingsSwitchRow("Autoplay videos", "Start the active video when it opens", settings.autoplayVideos,
+                        { onSettingsChange(settings.copy(autoplayVideos = it)) })
+                    SettingsSwitchRow("Start muted", "Open videos with volume at zero", settings.startVideosMuted,
+                        { onSettingsChange(settings.copy(startVideosMuted = it)) })
+                }
+                GallerySettingsGroup("Display") {
+                    SettingsSwitchRow("Smooth mode", "Use the highest available refresh rate", settings.performanceMode,
+                        { onSettingsChange(settings.copy(performanceMode = it)) })
+                }
+                if (mediaManagementAccessStatus.state == MediaManagementAccessState.Granted ||
+                    mediaManagementAccessStatus.state == MediaManagementAccessState.Requestable) {
+                    GallerySettingsGroup("Library access") {
+                        MediaManagementSettingsRow(mediaManagementAccessStatus, onRequestMediaManagementAccess)
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun GallerySettingsGroup(
+    title: String,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary)
+            content()
         }
     }
 }
@@ -3901,7 +3826,12 @@ private fun SettingsChoiceRow(
             .fillMaxWidth()
             .semantics(mergeDescendants = true) { this.selected = selected }
             .bouncyClickable(onClick = onClick)
-            .padding(vertical = 6.dp),
+            .background(
+                if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                else MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.35f),
+                RoundedCornerShape(16.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {

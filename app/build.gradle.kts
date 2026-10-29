@@ -31,8 +31,8 @@ android {
         applicationId = "com.swailumzafar.nativegallery"
         minSdk = 26
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.9.15"
+        versionCode = 19
+        versionName = "0.9.16"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables {

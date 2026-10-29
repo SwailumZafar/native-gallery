@@ -1672,7 +1672,8 @@ fun AlbumDetailScreen(
             sortedMediaItems.firstOrNull()?.sortTimestampMillis?.toString().orEmpty()
         ).joinToString(separator = ":")
     }
-    val revealOffsetPx = with(LocalDensity.current) { 172.dp.roundToPx() }
+    val densityForViewerReturn = LocalDensity.current
+    val revealOffsetPx = with(densityForViewerReturn) { 172.dp.roundToPx() }
     val tileBounds = remember(album.id) { mutableMapOf<String, Rect>() }
     val rootBounds = remember(album.id) { AlbumBoundsRef() }
     val latestSelectedMediaIds by rememberUpdatedState(selectedMediaIds)
@@ -1718,7 +1719,8 @@ fun AlbumDetailScreen(
         val mediaId = revealMediaId ?: return@LaunchedEffect
         val mediaIndex = sortedMediaItems.indexOfFirst { it.id == mediaId }
         if (mediaIndex >= 0) {
-            listState.scrollToItem(mediaIndex / columns, scrollOffset = -revealOffsetPx)
+            listState.prepareViewerReturn(mediaIndex / columns, revealOffsetPx,
+                with(densityForViewerReturn) { contentPadding.calculateBottomPadding().roundToPx() })
         }
     }
     LaunchedEffect(album.id, sortMode, columns, mediaGeneration) {

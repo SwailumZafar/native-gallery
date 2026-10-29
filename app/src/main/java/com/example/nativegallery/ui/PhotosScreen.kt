@@ -238,7 +238,7 @@ fun PhotosScreen(
             mediaId = mediaId,
             columns = gridColumns
         ) ?: return@LaunchedEffect
-        listState.scrollToItem(targetIndex, scrollOffset = -revealOffsetPx)
+        listState.prepareViewerReturn(targetIndex, revealOffsetPx, gridBottomInsetPx.toInt())
     }
 
     fun rootPoint(localPoint: Offset): Offset = Offset(

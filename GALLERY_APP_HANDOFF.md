@@ -1,6 +1,6 @@
 # Native Gallery App Handoff
 
-Last updated: 2026-10-26
+Last updated: 2026-10-29
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -116,8 +116,9 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Previous pushed implementation baseline: edcd34d Optimize Gallery performance and stabilize media transitions
-Current save point: Promote the selected v0.9.15 source as build 18; exclude later sharpness/loading changes
+Previous pushed implementation baseline: ec0cbc0 Promote selected v0.9.15 source as build 18
+Current save point: v0.9.16 / code 19; bounded photo detail, prepared viewer return, grouped settings sheet
+Installed build: v0.9.16 / code 19 on phone 30e49129; APK hash recorded below
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -125,6 +126,7 @@ Repository visibility: private
 Recent saved work:
 
 ```text
+ec0cbc0 Promote selected v0.9.15 source as build 18
 edcd34d Optimize Gallery performance and stabilize media transitions
 2f23627 Refine navigation bar touch physics, burst review back navigation, and video dismissal
 20fcc98 v0.9.7: Photo transition speeds, burst/motion photos, pull-to-refresh, fluid nav bar touch physics, and video dismiss fix
@@ -144,6 +146,73 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-10-29 GitHub Save of Installed v0.9.16
+
+The user requested committing the current installed version to GitHub. Save the v0.9.16 /
+code-19 application source, focused regression tests, and this handoff on `main`, tracking
+`origin/main`. The remote was fetched before saving and matched the local baseline `ec0cbc0`.
+The alternate buggy branch `feature/v0.9.15-sharpness-fixes` / `046d5c9` remains excluded.
+Reuse the completed build, lint, and 169 passing JVM results documented below; no application
+behavior changes, rebuilds, installations, or emulator tests are part of this source save.
+Generated APKs, temporary download helpers, and local firewall scripts remain ignored.
+
+## 2026-10-27 Photo Detail, Viewer Return, and Settings Sheet
+
+The user requested sharper displayed photos, a smooth return to the currently viewed photo's
+grid position, and a better-looking Menu settings popup. This work starts from selected stable
+main commit `ec0cbc0`; the later `046d5c9` sharpness/loading branch is still excluded.
+
+- The active photo promotes to a larger original-image decode after the zoom gesture settles,
+  retaining its current preview during loading. Decode dimensions use the real image header,
+  a heap-aware pixel budget (2–12 MP), and a 6144 px edge limit. Small originals are not upscaled;
+  neighboring pages keep their smaller requests. Original media bytes are never rewritten.
+- Related hardening: retry original decoding with a software allocator if hardware decoding
+  fails; do not cache a platform photo thumbnail under an exact full-quality key. BitmapFactory
+  fallback preserves requested detail while enforcing the same pixel budget.
+- Paging prepares the corresponding Photos/date-section or Album Detail row while the viewer
+  covers the grid. Fully visible rows retain their position. Newly selected visible tiles
+  republish actual coordinates even when changing their hidden-source alpha causes no layout.
+  Dismissal retains fresh target bounds and the existing transition springs.
+- Menu settings now uses a rounded Material bottom sheet with a fixed header and Done action,
+  scrollable grouped appearance/grid/motion/playback/display/library-access controls, and
+  clear selected states. Existing settings and persistence callbacks are preserved.
+- Version is `0.9.16`, code `19`. The selected old code-16 APK is backed up unchanged at
+  `tmp/Native-Gallery-selected-v0.9.15.apk` (SHA-256
+  `17CA44FF337995FD45E2927B8FACE8FF616763B1826DC76F60D729CC8E2D8D5F`).
+- Verification: all 169 JVM tests pass, including four new decode-policy tests. Debug APK,
+  Android-test APK, optimized benchmark APK, and debug lint complete successfully (0 errors;
+  11 existing warnings and 2 informational items). `git diff --check` passes.
+- New Android tests compile for zoom-detail promotion without a blank frame or original-file
+  changes, plus settings actions and light/dark screenshots. Android interaction tests were
+  not executed: the existing emulator data image repeatedly restarted with an ext4 kernel
+  panic before installation. The user explicitly stopped emulator testing and will check the
+  APK personally. The test emulator was already shut down; no replacement image was created.
+  No physical phone was connected or updated during the initial implementation checks.
+- Deliverable: `tmp/Native-Gallery-0.9.16-photo-quality-settings.apk`, 46,459,629 bytes,
+  SHA-256 `B15F6C506D6FBE9C8CD53C7051949E89C882E199A42FD7212A810B06A253FA6E`.
+  Wi-Fi installer: `http://192.168.18.184:18088/`. Complete LAN download matches the APK hash;
+  a resumed 1024-byte HTTP 206 range also matches. The server uses the named APK copy so a
+  future Gradle build cannot silently change this download. Keep PC and phone on the same Wi-Fi.
+- Wi-Fi delivery follow-up: the user reported the link did not open on the phone. The server
+  remains PID 2568 on `0.0.0.0:18088`, and the Wi-Fi address remains `192.168.18.184`.
+  Windows marks this Wi-Fi network Public. Added firewall rule `NativeGallery-Apk-Wifi-18088`
+  for this exact Python program, TCP 18088, Wi-Fi interface, local address `192.168.18.184`,
+  remote subnet `192.168.18.0/24`, Public profile. The elevated helper succeeded; no existing
+  block rules were modified. Initial numeric firewall-action output was misread as Block;
+  the original Python rules are Allow, so a firewall root cause was not established. Page and
+  direct APK HEAD requests return HTTP 200 from the PC; phone-side reachability is unverified.
+- Installation follow-up: the user connected phone `30e49129` (RMX3852) and requested direct
+  installation. Installed the verified named v0.9.16 APK using `adb -s 30e49129 install -r`;
+  ADB returned Success. Package inspection confirms versionName `0.9.16`, versionCode `19`,
+  lastUpdateTime `2026-10-27 20:44:47`. App data was retained. No app launch or device tests
+  were performed. The interrupted Cloudflare-link request did not create a tunnel.
+- Device checks for the user: compare the same original photo at fit/zoom, browse far above
+  and below the opening photo in Photos and albums then drag/back-close, and open settings
+  in both themes to check grouping, switches, and dismissal.
+- The user's testing cutoff remains less than 12% quota remaining. Testing initially paused
+  at 8% short-term remaining; that window naturally reset, and a fresh check confirmed 89%
+  short-term / 26% weekly remaining before resuming. No quota reset credit was consumed.
 
 ## 2026-10-26 Selected v0.9.15 Promoted to Main
 
