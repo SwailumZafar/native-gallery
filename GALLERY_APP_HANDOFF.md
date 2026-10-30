@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.20 / code 23; live media removal, vault access options/recovery/decoy, smart albums, insets and selection scrolling
-Installed build: Aster v0.9.20 / code 23 on RMX3852 (30e49129), installed over wireless ADB; APK hash recorded below
+Current workspace: Aster v0.9.21 / code 24; offline People grouping, clearer optional album filters, and discoverable vault settings
+Installed build: Aster v0.9.21 / code 24 on RMX3852, installed over wireless ADB at 192.168.18.95:34607; APK hash recorded below
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -153,6 +153,18 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-10-30 People and Vault Discoverability (v0.9.21)
+
+- Albums now includes People with round, aligned face crops. Find people enables a local scan; tapping a face opens an ordinary album-detail collection of matching photos. New or changed visible photos are indexed after the initial full library sync.
+- Bundled OpenCV 4.12, YuNet detection and SFace embeddings perform recognition entirely offline. Models, licenses, source URLs and checksums are in `app/src/main/assets/people`. Conservative cosine matching can split a person or make mistakes; naming, manual merge/split and video-face indexing are not implemented.
+- Normal album creation no longer suggests that smart-album creation is required. The optional overflow action is labeled Save album filters.
+- Unlocked real vaults show a large Vault settings card listing PIN/password/pattern, recovery and decoy controls. The locked/setup card explains where to configure these after authentication. Decoy sessions retain their existing restrictions.
+- Related hardening: face data uses app-private backup-excluded storage, atomic index writes, serialized scan/clear operations, and source fingerprints. Face portraits bypass the shared gallery thumbnail cache; album transitions use the original photo. Hidden, locked, deleted and revoked photos are excluded from presented People groups; stale records/crops are pruned. Turn off People and clear face data cancels scanning and removes the face index/crops. Grouping updates incrementally during scanning rather than recomputing all matches for every progress publication.
+- Verification: final v0.9.21 debug assembly, all 198 JVM tests, Android-test compilation and debug lint (0 errors, 11 existing warnings) passed. The portrait loader uses remembered state and LaunchedEffect after Compose lint rejected the produceState form. The Android model smoke test is added but cannot run without a connected device; `adb devices` was empty. No installation or Git commit was performed in this pass.
+- Universal debug APK size increases substantially because it bundles both face models and OpenCV native libraries for all supported ABIs. Release-size optimization and face-quality/device UX checks remain required before release.
+- Final v0.9.21 debug APK: `app/build/outputs/apk/debug/app-debug.apk`, 245,119,667 bytes; SHA-256 `B10635609BD5A197BB322D1D3CC83F4FB4D3C254112079061CBCB85D88F08B03`.
+- Wireless follow-up: the user provided `192.168.95:34607`; the known phone address resolved the omitted segment to `192.168.18.95:34607`. Connected to RMX3852, installed with `adb install -r` (Success), launched Aster, and confirmed versionName 0.9.21/versionCode 24. Ran `PeopleModelsInstrumentedTest` on-device: OK (1 test), verifying native detection and 128-dimensional recognition inference on synthetic inputs. Real-library grouping accuracy and visual UX still need user/device review.
 
 ## 2026-10-30 GitHub Save of Installed Aster v0.9.20
 

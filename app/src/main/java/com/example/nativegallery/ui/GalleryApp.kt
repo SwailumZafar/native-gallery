@@ -832,6 +832,12 @@ fun GalleryApp(
             )
         }
     }
+    val peopleRepository = remember(context) { com.example.nativegallery.data.PeopleRepository(context) }
+    val peopleState = rememberPeopleState(peopleRepository, rawVisibleMedia, !areAlbumsLoading)
+    val allowedPeopleIds = remember(rawVisibleMedia) { rawVisibleMedia.mapTo(hashSetOf()) { it.id } }
+    val peopleGroups = peopleState.groups.filter { group -> group.photos.all { it.id in allowedPeopleIds } }
+    val peopleAlbums = peopleGroups.mapIndexed { index, group -> group.album(index) }
+    val peopleMedia = peopleGroups.associate { it.id to it.photos }
     var smartAlbumMedia by remember { mutableStateOf<Map<String, List<MediaItem>>>(emptyMap()) }
     LaunchedEffect(visibleMedia, smartAlbumRules, favoriteMediaIds) {
         while (true) {
@@ -844,7 +850,7 @@ fun GalleryApp(
             delay(60_000)
         }
     }
-    val visibleMediaByAlbum = remember(visibleMedia, smartAlbumMedia) { visibleMedia.groupBy { it.albumId } + smartAlbumMedia }
+    val visibleMediaByAlbum = remember(visibleMedia, smartAlbumMedia, peopleMedia) { visibleMedia.groupBy { it.albumId } + smartAlbumMedia + peopleMedia }
     val favoriteMedia = remember(visibleMedia, favoriteMediaIds) {
         visibleMedia.filter { favoriteMediaIds.contains(it.id) }
     }
@@ -942,8 +948,8 @@ fun GalleryApp(
         currentSearchResult != null -> currentSearchResult.albums
         else -> emptyList()
     }
-    val selectedAlbum = remember(visibleAlbums, selectedAlbumId) {
-        visibleAlbums.firstOrNull { it.id == selectedAlbumId }
+    val selectedAlbum = remember(visibleAlbums, peopleAlbums, selectedAlbumId) {
+        (visibleAlbums + peopleAlbums).firstOrNull { it.id == selectedAlbumId }
     }
     val rawSelectedAlbumMedia = remember(selectedAlbum?.id, visibleMedia, visibleMediaByAlbum, favoriteMedia) {
         selectedAlbum?.let { album ->
@@ -1487,7 +1493,7 @@ fun GalleryApp(
         navigationViewModel.closeAlbumDetail()
     }
 
-    LaunchedEffect(destination, selectedAlbumId, visibleAlbumIds) {
+    LaunchedEffect(destination, selectedAlbumId, visibleAlbumIds, selectedAlbum?.id) {
         if (destination == GalleryDestination.AlbumDetail && selectedAlbumId != null && selectedAlbum == null) {
             navigationViewModel.clearSelectedAlbum()
             openAlbums()
@@ -2869,6 +2875,7 @@ fun GalleryApp(
                                                 onOpenRecentlyDeleted = ::openRecentlyDeleted,
                                                 onCreateAlbum = ::startAlbumCreator,
                                                 onCreateSmartAlbum = { createSmartAlbumVisible = true },
+                                                peopleContent = { PeopleSection(peopleState, peopleGroups, ::startAlbumOpen) },
                                                 onDeleteAlbum = { album ->
                                                     if (album.isSmart) {
                                                         smartAlbumRules = smartAlbumRules.filterNot { it.id == album.id }

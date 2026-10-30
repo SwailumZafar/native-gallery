@@ -321,7 +321,20 @@ fun LockedMediaScreen(
                             }
                     ) {
                         Column {
-                            if (!isDecoy) TextButton(onClick = onOpenSecurity) { Text("Vault security") }
+                            if (!isDecoy) {
+                                Surface(onClick = onOpenSecurity, modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+                                    Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Filled.Security, contentDescription = null)
+                                        Spacer(Modifier.width(14.dp))
+                                        Column {
+                                            Text("Vault settings", style = MaterialTheme.typography.titleMedium)
+                                            Text("PIN, password, pattern · Recovery · Decoy vault", style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(16.dp))
+                            }
                             LockedMediaSummary(lockedItemCount = lockedMediaItems.size)
                             Spacer(Modifier.height(24.dp))
                             Text(
@@ -487,6 +500,9 @@ private fun LockedMediaAuthCard(
                     } else Button(onClick = onDeviceRecovery, enabled = !authInProgress) { Text("Verify phone owner") }
                 }
             } else {
+                Text(if (hasPin) "After unlocking, open Vault settings to change your PIN, password or pattern and configure a decoy vault."
+                    else "Create a PIN first. Then open Vault settings to choose a password or pattern and set up recovery or a decoy vault.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (hasPin) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     com.example.nativegallery.data.VaultCredentialKind.entries.forEach { kind ->
                         androidx.compose.material3.FilterChip(entryKind == kind, { entryKind = kind; secret = "" }, { Text(kind.name) })

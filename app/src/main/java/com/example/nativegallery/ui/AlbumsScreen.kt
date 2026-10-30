@@ -323,6 +323,7 @@ fun AlbumsScreen(
     onOpenRecentlyDeleted: () -> Unit,
     onCreateAlbum: (String) -> Unit = {},
     onCreateSmartAlbum: () -> Unit = {},
+    peopleContent: (@Composable () -> Unit)? = null,
     onDeleteAlbum: (Album) -> Unit = {},
     canDeleteAlbum: (Album) -> Boolean = { !it.isAllPhotos },
     onOpenSettings: () -> Unit = {},
@@ -723,7 +724,7 @@ fun AlbumsScreen(
                                 onOpenSettings()
                             }
                         )
-                        PremiumDropdownMenuItem(text = { Text("Create smart album") },
+                        PremiumDropdownMenuItem(text = { Text("Save album filters (optional)") },
                             leadingIcon = { Icon(Icons.Filled.Add, null) },
                             onClick = { overflowExpanded = false; onCreateSmartAlbum() })
                     }
@@ -739,6 +740,8 @@ fun AlbumsScreen(
                 Spacer(Modifier.height(18.dp))
                 mediaAccessNotice()
             }
+            Spacer(Modifier.height(18.dp))
+            peopleContent?.invoke()
             Spacer(Modifier.height(18.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -897,7 +900,7 @@ fun AlbumsScreen(
                     singleLine = true,
                     label = { Text("Album name") }
                 )
-                TextButton(onClick = { showCreateDialog = false; onCreateSmartAlbum() }) { Text("Create a smart album instead") }
+                Text("Choose photos for your album after creating it. Your existing folders already appear as albums.", style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = {

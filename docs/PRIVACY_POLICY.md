@@ -15,11 +15,18 @@ Google ML Kit text-recognition model on the device. The selected image inputs,
 recognized text, and OCR results remain on the device and are not sent to
 Google or the developer.
 
+The optional People feature uses bundled OpenCV YuNet and SFace models to
+detect faces and group similar faces locally. Face crops and numerical face
+representations are stored in app-private storage excluded from backups. They
+are not uploaded. Hidden albums and locked media are excluded from People;
+their cached face records are removed when the library index refreshes.
+Use "Turn off People and clear face data" in Albums to delete this local index.
+
 Locked-media files and the information required to manage them are stored in
 the app's private storage and protected using Android Keystore-backed
 encryption. Luma Nook can use Android's biometric prompt to unlock
 protected media. The app does not receive or store your fingerprint, face
-template, or other biometric credentials; Android reports only whether
+authentication template, or other Android biometric credentials; Android reports only whether
 authentication succeeded.
 
 ## Technical data collected by ML Kit

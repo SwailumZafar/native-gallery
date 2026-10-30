@@ -16,9 +16,9 @@ internal fun SmartAlbumDialog(onDismiss: () -> Unit, onCreate: (SmartAlbumRule) 
     var days by remember { mutableIntStateOf(0) }
     var text by remember { mutableStateOf("") }
     var favorites by remember { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Create smart album") }, text = {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Save album filters") }, text = {
         Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Save filters. Matching photos and videos appear here automatically, in their original folders.")
+            Text("Optional: save filters as a smart album. Matching photos appear automatically. Normal albums and your folders work without this.")
             OutlinedTextField(name, { name = it.take(60) }, label = { Text("Album name") }, singleLine = true)
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 listOf("All", "Photos", "Videos").forEach { value -> FilterChip(type == value, { type = value }, { Text(value) }) }

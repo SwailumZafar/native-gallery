@@ -4,7 +4,7 @@ Aster is a privacy-focused Android photo and video gallery built with
 Kotlin and Jetpack Compose. It reads the device library through MediaStore and
 keeps its core organization, search, editing, and vault flows on the device.
 
-> Status: version 0.9.20 pre-release. A candidate Play identity and reproducible
+> Status: version 0.9.21 pre-release. A candidate Play identity and reproducible
 > release configuration are in place. Confirm ownership of the final application
 > ID, then complete physical-device, accessibility, and large-library testing
 > before public launch.
@@ -14,6 +14,7 @@ keeps its core organization, search, editing, and vault flows on the device.
 - Date-grouped photo and video timeline with configurable grid density
 - Albums, favorites, hidden albums, search, selection, sharing, and trash flows
 - Saved smart albums with media-type, date, folder/name, and favorite filters
+- Optional offline People scanning with round face thumbnails and person photo collections
 - Photo viewing, video playback, metadata, and basic photo editing
 - PIN/biometric-gated locked media stored with Android Keystore-backed AES-GCM
 - Vault PIN/password/pattern access, escalating lockouts, recovery, and a curated decoy view
@@ -32,6 +33,7 @@ Use Locked media for sensitive files.
 - Android Gradle Plugin 8.7
 - MediaStore and Media3
 - ML Kit bundled, on-device text recognition
+- OpenCV YuNet face detection and SFace recognition, with bundled offline models
 - Android Keystore
 - JUnit
 

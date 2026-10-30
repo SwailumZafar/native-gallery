@@ -94,7 +94,7 @@ internal fun VaultSecurityDialog(state: LockedMediaSecurityUiState, model: Locke
     var secret by remember(tab, kind) { mutableStateOf("") }
     var confirm by remember(tab, kind) { mutableStateOf("") }
     var prompt by remember { mutableStateOf("My recovery phrase") }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Vault security") }, text = {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Vault settings") }, text = {
         Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("Access", "Recovery", "Decoy").forEachIndexed { i, title -> FilterChip(tab == i, { tab = i; model.clearMessage() }, { Text(title) }) }
