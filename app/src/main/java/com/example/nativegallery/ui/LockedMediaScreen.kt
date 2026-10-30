@@ -515,7 +515,13 @@ private fun LockedMediaAuthCard(
                 Button(onClick = {
                     if (hasPin) onPinUnlock(secret) else onPinCreated(secret, confirm)
                     secret = ""
-                }, enabled = ready && secret.isNotBlank() && (hasPin || secret == confirm)) { Text(if (hasPin) "Unlock" else "Create PIN") }
+                }, enabled = ready && secret.isNotBlank() && (hasPin || secret == confirm)) {
+                    if (authInProgress) {
+                        androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                    }
+                    Text(if (authInProgress) "Verifying…" else if (hasPin) "Unlock" else "Create PIN")
+                }
                 if (hasPin && biometricAvailable) TextButton(onClick = onBiometricUnlock, enabled = ready) { Text("Use biometrics") }
             }
             if (remainingMillis > 0) Text("Try again in ${kotlin.math.ceil(remainingMillis / 1000.0).toInt()}s", color = MaterialTheme.colorScheme.error)

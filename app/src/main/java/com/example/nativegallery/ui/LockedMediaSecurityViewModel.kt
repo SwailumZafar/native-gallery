@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlin.math.ceil
 
 @Immutable
@@ -112,15 +114,22 @@ internal class LockedMediaSecurityViewModel(
         viewModelScope.launch {
             val result = withContext(Dispatchers.Default) {
                 val remaining = repository.pinLockoutUntilMillis() - System.currentTimeMillis()
+                if (remaining > 0L) return@withContext PinUnlockResult.LockedOut(remaining)
+                if (repository.requiresRecovery()) return@withContext PinUnlockResult.RecoveryRequired
+                // Independent salts still use the full KDF cost; don't make decoy entry wait
+                // for a complete, failed real-vault derivation before starting its own.
+                val (real, decoy) = coroutineScope {
+                    val realCheck = async { repository.verifyPin(pin) }
+                    val decoyCheck = async { repository.hasDecoyPin() && repository.verifyDecoyPin(pin) }
+                    realCheck.await() to decoyCheck.await()
+                }
                 when {
-                    remaining > 0L -> PinUnlockResult.LockedOut(remaining)
-                    repository.requiresRecovery() -> PinUnlockResult.RecoveryRequired
-                    repository.verifyPin(pin) -> {
+                    real -> {
                         repository.clearFailedPinAttempts()
                         repository.rememberVaultView(false)
                         PinUnlockResult.Success
                     }
-                    repository.verifyDecoyPin(pin) -> {
+                    decoy -> {
                         repository.rememberVaultView(true)
                         PinUnlockResult.Decoy
                     }

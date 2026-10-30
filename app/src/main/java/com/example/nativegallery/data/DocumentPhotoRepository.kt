@@ -20,12 +20,17 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.suspendCoroutine
+import java.util.concurrent.Executor
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
@@ -48,6 +53,7 @@ data class DocumentPhotoScanProgress(
 )
 
 class DocumentPhotoRepository(context: Context) {
+    private val scanMutex = Mutex()
     private val appContext = context.applicationContext
     private val resolver = appContext.contentResolver
     private val database = DocumentPhotoIndexDatabase(appContext)
@@ -63,7 +69,7 @@ class DocumentPhotoRepository(context: Context) {
     suspend fun scan(
         mediaItems: List<MediaItem>,
         onProgress: (DocumentPhotoScanProgress) -> Unit
-    ) = withContext(Dispatchers.IO) {
+    ) = scanMutex.withLock { withContext(PhotoAnalysisWork.dispatcher) {
         migrateLegacyStorage()
         val photos = mediaItems
             .asSequence()
@@ -126,11 +132,14 @@ class DocumentPhotoRepository(context: Context) {
         }
         val bufferedRecords = mutableListOf<StoredDocumentPhotoRecord>()
         try {
-            pending.chunked(SCAN_PARALLELISM).forEachIndexed { batchIndex, batch ->
-                coroutineContext.ensureActive()
-                val scannedBatch = coroutineScope {
-                    batch.mapIndexed { slot, item ->
-                        async(Dispatchers.IO) {
+            coroutineScope {
+                val inputs = Channel<MediaItem>(SCAN_PARALLELISM)
+                val results = Channel<ScannedDocumentPhoto>(SCAN_PARALLELISM)
+                launch { try { pending.forEach { inputs.send(it) } } finally { inputs.close() } }
+                val workers = List(SCAN_PARALLELISM) { slot ->
+                    launch(PhotoAnalysisWork.dispatcher) {
+                        for (item in inputs) {
+                            PhotoAnalysisWork.awaitIdle()
                             val classification = try {
                                 if (isDocumentPhotoAnalysisCandidate(item)) {
                                     recognizePhoto(item, recognizers[slot])
@@ -142,14 +151,15 @@ class DocumentPhotoRepository(context: Context) {
                             } catch (_: Exception) {
                                 null
                             }
-                            ScannedDocumentPhoto(item, classification)
+                            results.send(ScannedDocumentPhoto(item, classification))
                         }
-                    }.awaitAll()
+                    }
                 }
-                scannedBatch.forEachIndexed { batchItemIndex, scanned ->
+                launch { workers.joinAll(); results.close() }
+                for (scanned in results) {
+                    coroutineContext.ensureActive()
                     val item = scanned.mediaItem
                     val classification = scanned.classification
-                    val pendingIndex = batchIndex * SCAN_PARALLELISM + batchItemIndex
                     bufferedRecords += StoredDocumentPhotoRecord(
                         mediaId = item.id,
                         fingerprint = fingerprint(item),
@@ -157,10 +167,7 @@ class DocumentPhotoRepository(context: Context) {
                         recognizedText = classification?.recognizedText.orEmpty(),
                         lineCount = classification?.lineCount ?: 0
                     )
-                    if (
-                        bufferedRecords.size >= DATABASE_WRITE_BATCH_SIZE ||
-                        pendingIndex == pending.lastIndex
-                    ) {
+                    if (bufferedRecords.size >= DATABASE_WRITE_BATCH_SIZE) {
                         database.upsert(bufferedRecords)
                         bufferedRecords.clear()
                     }
@@ -191,13 +198,16 @@ class DocumentPhotoRepository(context: Context) {
                 }
             }
         } finally {
+            withContext(NonCancellable) { database.upsert(bufferedRecords) }
             recognizers.forEach(TextRecognizer::close)
         }
     }
 
-    suspend fun invalidate(mediaIds: Collection<String>) = withContext(Dispatchers.IO) {
-        database.remove(mediaIds.toSet())
     }
+
+    suspend fun invalidate(mediaIds: Collection<String>) = scanMutex.withLock { withContext(PhotoAnalysisWork.dispatcher) {
+        database.remove(mediaIds.toSet())
+    } }
 
     private suspend fun recognizePhoto(
         item: MediaItem,
@@ -509,14 +519,11 @@ private fun decodeSampledBitmap(
     }
 }
 
-private suspend fun <T> Task<T>.awaitResult(): T = suspendCancellableCoroutine { continuation ->
-    addOnSuccessListener { result ->
-        if (continuation.isActive) continuation.resume(result)
-    }
-    addOnFailureListener { error ->
-        if (continuation.isActive) continuation.resumeWithException(error)
-    }
-    addOnCanceledListener {
-        continuation.cancel()
-    }
+// ML Kit tasks cannot be cancelled. Wait for completion before recycling the input bitmap;
+// deliver callbacks directly rather than queueing every result on the main/UI thread.
+private val documentResultExecutor = Executor { it.run() }
+private suspend fun <T> Task<T>.awaitResult(): T = suspendCoroutine { continuation ->
+    addOnSuccessListener(documentResultExecutor) { continuation.resume(it) }
+    addOnFailureListener(documentResultExecutor) { continuation.resumeWithException(it) }
+    addOnCanceledListener(documentResultExecutor) { continuation.resumeWithException(CancellationException("OCR cancelled")) }
 }

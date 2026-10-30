@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.21 / code 24; offline People grouping, clearer optional album filters, and discoverable vault settings
-Installed build: Aster v0.9.21 / code 24 on RMX3852, installed over wireless ADB at 192.168.18.95:34607; APK hash recorded below
+Current workspace: Aster v0.9.22 / code 25; bounded/pauseable incremental scans, People at bottom, lighter album return shading, pattern touch and vault preview-first loading
+Installed build: intermediate Aster v0.9.22 / code 25 on RMX3852; final APK upload uses resumable parts because wireless ADB repeatedly drops (see v0.9.22 notes)
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -153,6 +153,23 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-10-30 Scan and Vault Performance Follow-up (v0.9.22)
+
+- Saved and pushed installed v0.9.21 to GitHub main as `212818e` before starting this pass, as requested.
+- People moves below all album rows and Recently Deleted. Compared v0.9.20 to v0.9.21: card heights/aspect ratios were not changed; only the People header insertion displaced the list. Preserve existing album card dimensions.
+- Preserve album open/close springs, geometry and durations. Only closing presentation changes: elevation 18 -> 3 dp, scrim peak 0.22 -> 0.07, and bare-cover overlay opacity multiplied by 0.4 to reduce the ghost/shadow over the returning card.
+- People analysis now uses background-priority workers isolated from thumbnail/UI dispatchers, at most two OpenCV threads, and runs only while Albums is resumed and idle. Navigation, scrolling, viewer, vault, Documents and leaving the app pause work between photos. Memoized People album/membership maps avoid rebuilding whole-library indexes on unrelated recompositions.
+- Replace whole-index JSON rewrites every 20 photos with incremental SQLite/WAL transactions in backup-excluded storage. Migrate existing v0.9.21 embeddings/crops; checkpoint completed work on cancellation; prune private/deleted/revoked sources. Normalize embeddings once and use dot products/sets for matching; publish new group lists only when faces change. Use aspect-preserving system thumbnails for content URIs and lazily load SFace on first detected face. Model extraction uses a temporary file and rename.
+- Documents uses two continuous queue-fed workers instead of synchronized pairs, on the background analysis pool. Native result callbacks bypass the UI queue, and input bitmaps remain valid until uncancellable OCR completes. Flush completed records when leaving/cancelling; serialize restarts/invalidations. Recognition resolution and classification policy remain unchanged.
+- Vault entry prefetches encrypted previews, removing eager full-original decryption on entry. Originals still load at full quality on demand. Real/decoy credential derivations run concurrently with the existing salts, 210,000 iterations and lockout/recovery rules. Auth buttons show verification progress.
+- Pattern input consumes touch-down on a dot immediately, preventing parent scrolling from stealing the gesture. Interpolate fast movement across dots; maintain separate accessibility semantic actions. Pattern drag and accessibility tests pass on RMX3852; isolated credential persistence/recovery tests pass.
+- Additional thumbnail hardening: the device missing-file retry regression exposed uncaught IO/permission failures in ThumbnailLoadCoordinator. Treat these as an unavailable image so visible requests can retry after MediaStore/library reconciliation; preserve cancellation and release decoder permits.
+- Verification: final debug APK and Android-test APK build, 199 JVM tests pass, lint 0 errors/11 existing warnings. Focused device tests cover scan cache/migration/privacy, pattern gestures, credential/recovery persistence, thumbnail loading and animation work. Final device results/benchmarks are recorded in the chat.
+- Benchmark baseline on 24 generated invoice images in isolated indexes: v0.9.21 People cold 1427 ms / warm 6 ms; Documents cold 4772 ms / warm 7 ms. Intermediate v0.9.22 Documents cold 2953 ms / warm 5 ms. These are fixtures, not a real-library throughput guarantee.
+- Final debug APK: `app/build/outputs/apk/debug/app-debug.apk`, 245,138,416 bytes, SHA-256 `CDAF57A46AE501FCF856A45187B7DE4AA361AE51758ABABA65962D3CAE63F231`. Wireless ADB is intermittent at `192.168.18.95:34607`; resetting that specific transport restores it. Fast deploy falls back to streamed install despite API 36.
+- Device checkpoint: credential/recovery persistence and both gesture/layer tests pass. Pattern drag/accessibility and index migration/removal/clear pass (2 focused tests). Seven of eight image tests pass; the existing missing-file retry test exposed the IO exception fixed in the final APK. Its final rerun and the lazy-SFace/two-thread benchmark await installation after the wireless drop. Baseline benchmark fixtures use separate contexts, databases and generated files; the user's library/vault are untouched.
+- Resumable installation: local chunks are ignored `tmp/deploy-v22/gallery-CDAF57A4.part000` through `part014`; remote chunks use the same names under `/data/local/tmp`. Parts 000–005 transferred; validate each part SHA-256 before skipping/retrying. Concatenate explicit ordered paths into `/data/local/tmp/gallery-CDAF57A4.apk`, verify the complete APK hash above, then `pm install -r`. Remove only these exact staging files and `gallery-verification.apk` after successful testing; uninstall the temporary `com.swailumzafar.nativegallery.test` package and reopen Aster. Do not clear app data or user credentials.
 
 ## 2026-10-30 People and Vault Discoverability (v0.9.21)
 

@@ -546,18 +546,25 @@ fun GalleryApp(
     val photosListState = rememberLazyListState()
     val albumsListState = rememberLazyListState()
     val albumDetailListState = rememberLazyListState()
-    LaunchedEffect(anyTransitionActive, viewerVisible, mainPagerState, photosListState, albumsListState, albumDetailListState) {
+    val analysisLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val analysisLifecycleState by analysisLifecycle.currentStateFlow.collectAsStateWithLifecycle()
+    LaunchedEffect(anyTransitionActive, viewerVisible, destination, selectedTab, analysisLifecycleState, mainPagerState, photosListState, albumsListState, albumDetailListState) {
         snapshotFlow {
             val moving = anyTransitionActive || mainPagerState.isScrollInProgress
             moving to (viewerVisible || moving || photosListState.isScrollInProgress ||
                 albumsListState.isScrollInProgress || albumDetailListState.isScrollInProgress)
         }.collect { (moving, blockVideoDecoder) ->
+            com.example.nativegallery.data.PhotoAnalysisWork.setInteractionBusy(blockVideoDecoder)
+            com.example.nativegallery.data.PhotoAnalysisWork.setPeopleAllowed(
+                analysisLifecycleState.isAtLeast(Lifecycle.State.RESUMED) &&
+                    destination == GalleryDestination.Main && selectedTab == GalleryTab.Albums && !blockVideoDecoder)
             com.example.nativegallery.ui.components.GalleryImageWorkScheduler.setNavigationMoving(moving)
             com.example.nativegallery.ui.components.VideoThumbnailDecoder.setInteractionBlocked(blockVideoDecoder)
         }
     }
     DisposableEffect(Unit) {
         onDispose {
+            com.example.nativegallery.data.PhotoAnalysisWork.setPeopleAllowed(false)
             com.example.nativegallery.ui.components.GalleryImageWorkScheduler.setNavigationMoving(false)
             com.example.nativegallery.ui.components.VideoThumbnailDecoder.setInteractionBlocked(true)
         }
@@ -835,9 +842,11 @@ fun GalleryApp(
     val peopleRepository = remember(context) { com.example.nativegallery.data.PeopleRepository(context) }
     val peopleState = rememberPeopleState(peopleRepository, rawVisibleMedia, !areAlbumsLoading)
     val allowedPeopleIds = remember(rawVisibleMedia) { rawVisibleMedia.mapTo(hashSetOf()) { it.id } }
-    val peopleGroups = peopleState.groups.filter { group -> group.photos.all { it.id in allowedPeopleIds } }
-    val peopleAlbums = peopleGroups.mapIndexed { index, group -> group.album(index) }
-    val peopleMedia = peopleGroups.associate { it.id to it.photos }
+    val peopleGroups = remember(peopleState.groups, allowedPeopleIds) {
+        peopleState.groups.filter { group -> group.photos.all { it.id in allowedPeopleIds } }
+    }
+    val peopleAlbums = remember(peopleGroups) { peopleGroups.mapIndexed { index, group -> group.album(index) } }
+    val peopleMedia = remember(peopleGroups) { peopleGroups.associate { it.id to it.photos } }
     var smartAlbumMedia by remember { mutableStateOf<Map<String, List<MediaItem>>>(emptyMap()) }
     LaunchedEffect(visibleMedia, smartAlbumRules, favoriteMediaIds) {
         while (true) {
@@ -990,8 +999,8 @@ fun GalleryApp(
     val visibleMediaIds = remember(visibleMedia) { visibleMedia.map { it.id } }
     val visibleMediaIdSet = remember(visibleMediaIds) { visibleMediaIds.toSet() }
 
-    LaunchedEffect(destination, visibleMediaIds, viewerVisible) {
-        if (destination == GalleryDestination.Documents && !viewerVisible) {
+    LaunchedEffect(destination, visibleMediaIds, viewerVisible, analysisLifecycleState) {
+        if (destination == GalleryDestination.Documents && !viewerVisible && analysisLifecycleState.isAtLeast(Lifecycle.State.RESUMED)) {
             documentPhotosViewModel.updateLibrary(visibleMedia)
         } else {
             documentPhotosViewModel.stopScanning()
@@ -1122,31 +1131,14 @@ fun GalleryApp(
             } ?: mediaItem
         }
     }
-    val lockedFullQualityWarmupSize = remember(viewerPhotoDecodeSize) {
-        LockedMediaVaultPolicy.fullQualityWarmupSize(viewerPhotoDecodeSize)
-    }
-    val lockedFullQualityWarmupPhotos = remember(lockedDisplayMedia) {
-        val photos = lockedDisplayMedia.filterNot(MediaItem::isVideo)
-        photos.take(LockedMediaVaultPolicy.fullQualityWarmupLimit(photos.size))
-    }
-    val lockedFullQualityWarmupKey = remember(lockedFullQualityWarmupPhotos) {
-        lockedFullQualityWarmupPhotos.joinToString(separator = "|") { it.id }
-    }
-    LaunchedEffect(
-        destination,
-        hiddenVaultUnlocked,
-        lockedFullQualityWarmupKey,
-        lockedFullQualityWarmupSize
-    ) {
+    LaunchedEffect(destination, hiddenVaultUnlocked, lockedGridMedia) {
         if (destination != GalleryDestination.LockedMedia || !hiddenVaultUnlocked) return@LaunchedEffect
-        withContext(Dispatchers.IO) {
-            lockedFullQualityWarmupPhotos.forEach(lockedVaultRepository::prepareFullQualityRead)
-        }
+        // Paint encrypted previews first. Full originals decrypt on demand when opened.
         prefetchMediaThumbnails(
             context = context.applicationContext,
-            mediaItems = lockedFullQualityWarmupPhotos,
-            thumbnailSizes = listOf(lockedFullQualityWarmupSize),
-            maxItems = lockedFullQualityWarmupPhotos.size,
+            mediaItems = lockedGridMedia.filter { it.previewUri != null },
+            thumbnailSizes = listOf(384),
+            maxItems = 20,
             pinInMemory = true
         )
     }
@@ -4803,7 +4795,8 @@ private fun PositionAwareAlbumTransitionOverlay(
             .drawBehind {
                 val expansion = progress.value.coerceIn(0f, 1f)
                 val scrimAlpha = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
-                    (1f - GalleryMotion.smoothstep(0.65f, 0.95f, expansion)) * 0.22f
+                    (1f - GalleryMotion.smoothstep(0.65f, 0.95f, expansion)) *
+                    (if (transition.mode == AlbumTransitionMode.Closing) 0.07f else 0.22f)
                 if (scrimAlpha > 0.001f) {
                     drawRect(Color.Black.copy(alpha = scrimAlpha))
                 }
@@ -4820,7 +4813,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                     val liftProgress = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                         (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))
                     val detailAlpha = GalleryMotion.smoothstep(0.08f, 0.70f, expansion)
-                    val transitElevationPx = 18.dp.toPx() * liftProgress
+                    val transitElevationPx = (if (transition.mode == AlbumTransitionMode.Closing) 3.dp else 18.dp).toPx() * liftProgress
 
                     transformOrigin = TransformOrigin(0.5f, 0.5f)
                     translationX = heroBounds.center.x - rootWidthPx / 2f
@@ -4872,7 +4865,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                     val liftProgress = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                         (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))
                     val cornerRadius = lerp(transition.sourceCornerRadiusDp, 0f, expansion).dp
-                    val transitElevationPx = 18.dp.toPx() * liftProgress
+                    val transitElevationPx = (if (transition.mode == AlbumTransitionMode.Closing) 3.dp else 18.dp).toPx() * liftProgress
 
                     transformOrigin = TransformOrigin(0f, 0f)
                     translationX = heroBounds.left
@@ -4896,7 +4889,8 @@ private fun PositionAwareAlbumTransitionOverlay(
                         // The real card stays painted underneath, including its labels and gradient.
                         // Blend at the tile endpoints instead of swapping it for a bare cover.
                         alpha = GalleryMotion.smoothstep(0f, 0.08f, expansion) *
-                            (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion))
+                            (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)) *
+                            (if (transition.mode == AlbumTransitionMode.Closing) 0.4f else 1f)
                     },
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Crop,

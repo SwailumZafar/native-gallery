@@ -741,8 +741,6 @@ fun AlbumsScreen(
                 mediaAccessNotice()
             }
             Spacer(Modifier.height(18.dp))
-            peopleContent?.invoke()
-            Spacer(Modifier.height(18.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
@@ -867,6 +865,11 @@ fun AlbumsScreen(
             item(key = "recently-deleted-pill", contentType = "album-list-action") {
                 Spacer(Modifier.height(10.dp))
                 RecentlyDeletedPill(onClick = onOpenRecentlyDeleted)
+            }
+            if (peopleContent != null) item(key = "people", contentType = "people") {
+                Spacer(Modifier.height(24.dp))
+                peopleContent()
+                Spacer(Modifier.height(18.dp))
             }
         }
     }

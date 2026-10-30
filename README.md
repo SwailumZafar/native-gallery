@@ -4,7 +4,7 @@ Aster is a privacy-focused Android photo and video gallery built with
 Kotlin and Jetpack Compose. It reads the device library through MediaStore and
 keeps its core organization, search, editing, and vault flows on the device.
 
-> Status: version 0.9.21 pre-release. A candidate Play identity and reproducible
+> Status: version 0.9.22 pre-release. A candidate Play identity and reproducible
 > release configuration are in place. Confirm ownership of the final application
 > ID, then complete physical-device, accessibility, and large-library testing
 > before public launch.

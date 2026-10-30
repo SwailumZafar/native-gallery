@@ -2,7 +2,8 @@ package com.example.nativegallery.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -14,6 +15,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.foundation.text.KeyboardOptions
@@ -43,24 +46,41 @@ internal fun VaultCredentialField(kind: VaultCredentialKind, value: String, onVa
     if (kind == VaultCredentialKind.Pattern) {
         val color = MaterialTheme.colorScheme.primary
         val muted = MaterialTheme.colorScheme.outlineVariant
-        val current by rememberUpdatedState(value)
         val update by rememberUpdatedState(onValueChange)
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(label, style = MaterialTheme.typography.labelLarge)
-            Box(Modifier.fillMaxWidth().widthIn(max = 280.dp).aspectRatio(1f)
+            Box(Modifier.widthIn(max = 280.dp).fillMaxWidth().aspectRatio(1f).testTag("vault-pattern-$label")
                 .pointerInput(enabled) {
                     if (!enabled) return@pointerInput
                     var gesturePattern = ""
-                    fun visit(at: Offset) {
+                    fun dotAt(at: Offset): Int? {
                         val column = (at.x / (size.width / 3f) - 0.5f).roundToInt().coerceIn(0, 2)
                         val row = (at.y / (size.height / 3f) - 0.5f).roundToInt().coerceIn(0, 2)
                         val center = Offset((column + 0.5f) * size.width / 3, (row + 0.5f) * size.height / 3)
-                        if ((at - center).getDistance() < size.width / 7f) {
-                            gesturePattern = extendVaultPattern(gesturePattern, row * 3 + column + 1)
-                            update(gesturePattern)
-                        }
+                        return if ((at - center).getDistance() < size.width / 7f) row * 3 + column + 1 else null
                     }
-                    detectDragGestures(onDragStart = { gesturePattern = ""; visit(it) }, onDrag = { change, _ -> visit(change.position); change.consume() })
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val firstDot = dotAt(down.position) ?: return@awaitEachGesture
+                        gesturePattern = extendVaultPattern("", firstDot)
+                        update(gesturePattern)
+                        down.consume()
+                        var previous = down.position
+                        do {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            // Interpolate fast swipes so the drawn path cannot skip a crossed dot.
+                            val distance = (change.position - previous).getDistance()
+                            val steps = (distance / (size.width / 24f)).toInt().coerceAtLeast(1)
+                            for (step in 1..steps) {
+                                val at = previous + (change.position - previous) * (step.toFloat() / steps)
+                                dotAt(at)?.let { gesturePattern = extendVaultPattern(gesturePattern, it) }
+                            }
+                            update(gesturePattern)
+                            previous = change.position
+                            change.consume()
+                        } while (event.changes.any { it.id == down.id && it.pressed })
+                    }
                 }) {
                 Canvas(Modifier.fillMaxSize()) {
                     fun center(dot: Char) = Offset(((dot.digitToInt() - 1) % 3 + 0.5f) * size.width / 3,
@@ -72,8 +92,10 @@ internal fun VaultCredentialField(kind: VaultCredentialKind, value: String, onVa
                     repeat(3) { row -> Row(Modifier.weight(1f)) {
                         repeat(3) { col ->
                             val dot = row * 3 + col + 1
-                            Box(Modifier.weight(1f).fillMaxHeight().semantics { contentDescription = "Pattern dot $dot" }
-                                .clickable(enabled = enabled) { onValueChange(extendVaultPattern(value, dot)) })
+                            Box(Modifier.weight(1f).fillMaxHeight().semantics {
+                                contentDescription = "Pattern dot $dot"
+                                if (enabled) onClick { onValueChange(extendVaultPattern(value, dot)); true }
+                            })
                         }
                     } }
                 }

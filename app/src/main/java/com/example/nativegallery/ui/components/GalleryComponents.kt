@@ -159,7 +159,10 @@ internal object ThumbnailLoadCoordinator {
                 validatedCachedBitmap(cacheKey, validator) ?: loadSemaphore.withPermit {
                     withContext(Dispatchers.IO) {
                         currentCoroutineContext().ensureActive()
-                        loader()?.takeIf(validator)?.also { bitmap ->
+                        val decoded = try { loader() }
+                        catch (_: java.io.IOException) { null }
+                        catch (_: SecurityException) { null }
+                        decoded?.takeIf(validator)?.also { bitmap ->
                             bitmap.prepareToDraw()
                             ThumbnailMemoryCache.put(cacheKey, bitmap)
                         }

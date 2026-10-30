@@ -66,7 +66,8 @@ class DocumentPhotosViewModel(
     }
 
     private fun launchScan(invalidateFirst: Boolean) {
-        scanJob?.cancel()
+        val previous = scanJob
+        previous?.cancel()
         scanGeneration += 1
         val generation = scanGeneration
         val media = activeMedia.toList()
@@ -77,6 +78,7 @@ class DocumentPhotosViewModel(
         )
         scanJob = viewModelScope.launch {
             try {
+                previous?.join()
                 if (invalidateFirst) repository.invalidate(media.map { it.id })
                 repository.scan(media) { progress ->
                     if (generation != scanGeneration) return@scan
