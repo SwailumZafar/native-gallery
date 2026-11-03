@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.30 / code 33; v0.9.16 album opening/closing restored after explicit user selection
-Installed build: Aster v0.9.30 / code 33 on RMX3852 at 192.168.18.95:39247; v0.9.16 album animation restored, upgrade/hash verified, MainActivity launched
+Current workspace: Aster v0.9.31 / code 34; accepted v0.9.16 motion retained with continuous album page/card handoffs
+Installed build: Aster v0.9.31 / code 34 on RMX3852 at 192.168.18.95:39247; accepted motion retained with blinking handoff fix, upgrade/hash verified, opening/closing and quick-back checks completed
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -153,6 +153,17 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-11-04 Keep accepted album motion and fix endpoint blinking (v0.9.31)
+
+- User explicitly accepted v0.9.30's v0.9.16 animation and asked to preserve it, save it to GitHub, and fix blinking at the tapped/returned tile and album page. Accepted baseline is already pushed as `7231894`.
+- Replaced the temporary preview/live-page swap with one stable AlbumDetailScreen composition from opening through rest and closing. It uses constant system-bar padding so changing main navigation visibility cannot reflow the page. The opening no longer omits its first frame while committing the hidden source card.
+- Album cover handoff retains the actually displayed bitmap and a GPU-recorded source card (including gradient/labels). Card chrome blends only near the tile endpoint; the existing cover fade, path, clipping, detail scale, spring timing and shadows remain. Basic/List capture only the transitioning image so surrounding labels stay stable.
+- Related hardening: capture ownership follows the composed source tile. Disposal invalidates the capture so the retained bitmap can serve as fallback, and an older layout owner cannot evict its replacement. Three JVM regressions cover capture readiness and disposal/replacement ownership.
+- Validation: page/cover translation, scale, clipping, corner radius, elevation and camera distance were programmatically compared to accepted `7231894` and match after normalizing nullable progress access. MotionSpecs/AlbumTransitionMotion have no diff. Debug build, all 205 JVM tests and lint (0 errors, 11 existing warnings) pass. Initial new tests attempted to mock Android's GraphicsLayer; corrected by testing generic capture ownership independently of the platform layer.
+- Installed in place on RMX3852 at `192.168.18.95:39247`; version 0.9.31/code 34 and installed APK SHA-256 verified. Cold launch Status ok (1098 ms). Camera album opened/closed; quick opening/back reversal settled on Albums, with no app-PID crash entries. Header/title bounds match the before build. Opening, settled and closing keyframes inspected; across 18,340 sampled Camera tile pixels, initial opening mean RGB difference is 0.00456/255 and returned-card difference is 0. This checks endpoint continuity, not a full continuous-video/FPS measurement.
+- No app data cleared, emulator tests run or separate test helper installed. Private local QA captures remain ignored under `tmp/album-flicker`; device temporary captures are cleaned up. Keep the accepted v0.9.16 movement; do not restore the rejected v0.9.27 curves/scale model.
+- Artifact: `app/build/outputs/apk/debug/aster-v0.9.31.apk`, SHA-256 `77FC136DD61B89B9327975874C863F21BA8790F68E96C5BC38D4AD7B7D6FF568`.
 
 ## 2026-11-04 Restore v0.9.16 album animation only (v0.9.30)
 

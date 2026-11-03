@@ -156,6 +156,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
@@ -268,6 +271,8 @@ private data class AlbumTransitionSpec(
     val sortMode: AlbumDetailSortMode = AlbumDetailSortMode.Newest,
     val firstVisibleRow: Int = 0,
     val firstVisibleRowOffset: Int = 0,
+    val source: AlbumTransitionSource<GraphicsLayer>? = null,
+    val previewBitmap: Bitmap? = null,
     val motion: AlbumTransitionMotion = AlbumTransitionMotion(opening = mode == AlbumTransitionMode.Opening)
 )
 
@@ -511,6 +516,7 @@ fun GalleryApp(
     var viewerSourceBounds by remember { mutableStateOf(Rect.Zero) }
     var viewerSourceGridColumns by remember { mutableIntStateOf(4) }
     var albumTransition by remember { mutableStateOf<AlbumTransitionSpec?>(null) }
+    val albumTransitionSources = remember { AlbumTransitionSources<GraphicsLayer>() }
     var albumClosePreparing by remember { mutableStateOf(false) }
     var albumTransitionKey by remember { mutableIntStateOf(0) }
     var albumTransitionCommittedKey by remember { mutableIntStateOf(-1) }
@@ -1421,6 +1427,8 @@ fun GalleryApp(
                     else -> 22f
                 },
                 mode = AlbumTransitionMode.Opening,
+                source = albumTransitionSources.get(album.id),
+                previewBitmap = DisplayedBitmapCache.get(album.coverUri),
                 sortMode = albumDetailSortModes[album.id] ?: AlbumDetailSortMode.Newest
             )
             return
@@ -1483,6 +1491,8 @@ fun GalleryApp(
                     else -> 22f
                 },
                 mode = AlbumTransitionMode.Closing,
+                source = albumTransitionSources.get(closingAlbum.id),
+                previewBitmap = DisplayedBitmapCache.get(closingAlbum.coverUri),
                 sortMode = albumDetailSortModes[closingAlbum.id] ?: AlbumDetailSortMode.Newest,
                 firstVisibleRow = albumDetailListState.firstVisibleItemIndex,
                 firstVisibleRowOffset = albumDetailListState.firstVisibleItemScrollOffset
@@ -2695,7 +2705,10 @@ fun GalleryApp(
             GalleryWindowWidthClass.Expanded -> 220.dp
         }
 
-        androidx.compose.runtime.CompositionLocalProvider(LocalDepartingMediaIds provides (animatedVisibleMedia.departing + animatedAlbumMedia.departing)) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalDepartingMediaIds provides (animatedVisibleMedia.departing + animatedAlbumMedia.departing),
+            LocalAlbumTransitionSources provides albumTransitionSources
+        ) {
         SharedTransitionLayout(
             modifier = Modifier
                 .padding(
@@ -3011,57 +3024,7 @@ fun GalleryApp(
                             ) { animatedDestination ->
                                 when (animatedDestination) {
                             GalleryDestination.Main -> Spacer(Modifier.fillMaxSize())
-                            GalleryDestination.AlbumDetail -> {
-                                if (selectedAlbum != null) {
-                                    AlbumDetailScreen(
-                                        album = selectedAlbum,
-                                        mediaItems = selectedAlbumMedia,
-                                        contentPadding = innerPadding,
-                                        listState = albumDetailListState,
-                                        revealMediaId = viewerRevealMediaId.takeIf { destination == GalleryDestination.AlbumDetail },
-                                        onGridViewportChanged = { mediaGridViewports[GalleryDestination.AlbumDetail] = it },
-                                        columnBoost = adaptivePolicy.albumDetailColumnBoost,
-                                        onBack = ::closeAlbumDetail,
-                                        sharedTransitionScope = sharedTransitionScope,
-                                        animatedVisibilityScope = galleryVisibilityScope,
-                                        sharedBoundsTransform = GalleryMediaBoundsTransform,
-                                        activeSharedElementKey = viewerSharedElementKey ?: mediaOpenTransition?.sharedElementKey,
-                                        albumEnterProgress = 1f,
-                                        gridMode = albumDetailGridModes[selectedAlbum.id] ?: defaultAlbumGridMode,
-                                        onGridModeChange = { gridMode -> albumDetailGridModes[selectedAlbum.id] = gridMode },
-                                        sortMode = albumDetailSortModes[selectedAlbum.id] ?: AlbumDetailSortMode.Newest,
-                                        onSortModeChange = { sortMode -> albumDetailSortModes[selectedAlbum.id] = sortMode },
-                                        selectedMediaIds = selectedMediaIds,
-                                        onMediaLongClick = ::toggleMediaSelection,
-                                        onMediaSelectionToggle = ::toggleMediaSelection,
-                                        onSelectionClear = ::clearMediaSelection,
-                                        onSelectAllVisible = { selectMedia(selectedAlbumMedia) },
-                                        onDeleteSelected = ::deleteSelectedMedia,
-                                        onShareSelected = ::shareSelectedMedia,
-                                        onHideSelected = ::hideSelectedMedia,
-                                        onMoveSelected = ::chooseAlbumForSelectedMedia,
-                                        onHideAlbum = { hideAlbumAndReturn(selectedAlbum) },
-                                        onMediaBoundsChanged = { mediaItem, bounds ->
-                                            if (destination == GalleryDestination.AlbumDetail && bounds.isUsableTransitionBounds()) {
-                                                mediaTileBounds[mediaItem.id] = bounds
-                                            }
-                                        },
-                                        onMediaClick = { mediaItem, bounds, sharedElementKey, sharedElementKeyPrefix ->
-                                            val selectedGridColumns = (
-                                                (albumDetailGridModes[selectedAlbum.id] ?: defaultAlbumGridMode).columns + adaptivePolicy.albumDetailColumnBoost
-                                            ).coerceIn(1, 10)
-                                            startViewerOpen(
-                                                mediaItem = mediaItem,
-                                                mediaItems = selectedAlbumMedia,
-                                                bounds = bounds,
-                                                sharedElementKey = sharedElementKey,
-                                                sharedElementKeyPrefix = sharedElementKeyPrefix,
-                                                sourceGridColumns = selectedGridColumns
-                                            )
-                                        }
-                                    )
-                                }
-                            }
+                            GalleryDestination.AlbumDetail -> Spacer(Modifier.fillMaxSize())
                             GalleryDestination.HiddenItems -> HiddenItemsScreen(
                                 albums = hideableAlbums + allSmartAlbums,
                                 hiddenStates = hiddenStates,
@@ -3241,6 +3204,7 @@ fun GalleryApp(
 
                 PositionAwareAlbumTransitionOverlay(
                     transition = albumTransition,
+                    settledAlbum = selectedAlbum.takeIf { destination == GalleryDestination.AlbumDetail },
                     committed = albumTransition?.let {
                         it.mode != AlbumTransitionMode.Opening ||
                             albumTransitionCommittedKey == it.key
@@ -3281,17 +3245,56 @@ fun GalleryApp(
                             }
                         }
                     }
-                ) { overlayAlbum ->
-                    AlbumDetailTransitionPreview(
-                        album = overlayAlbum,
-                        mediaItems = if (overlayAlbum.id == selectedAlbumId) selectedAlbumMedia else mediaForAlbumFast(overlayAlbum, visibleMedia, visibleMediaByAlbum, favoriteMedia),
-                        contentPadding = ScaffoldDefaults.contentWindowInsets.asPaddingValues(),
-                        gridMode = albumDetailGridModes[overlayAlbum.id] ?: defaultAlbumGridMode,
-                        columnBoost = adaptivePolicy.albumDetailColumnBoost,
-                        sortMode = albumTransition?.sortMode ?: AlbumDetailSortMode.Newest,
-                        initialFirstVisibleRow = albumTransition?.firstVisibleRow ?: 0,
-                        initialFirstVisibleRowOffset = albumTransition?.firstVisibleRowOffset ?: 0
-                    )
+                ) { pageAlbum ->
+                    androidx.compose.runtime.key(pageAlbum.id) {
+                        AlbumDetailScreen(
+                            album = pageAlbum,
+                            mediaItems = if (pageAlbum.id == selectedAlbumId) selectedAlbumMedia else mediaForAlbumFast(pageAlbum, visibleMedia, visibleMediaByAlbum, favoriteMedia),
+                            contentPadding = ScaffoldDefaults.contentWindowInsets.asPaddingValues(),
+                            listState = albumDetailListState,
+                            revealMediaId = viewerRevealMediaId.takeIf { destination == GalleryDestination.AlbumDetail },
+                            onGridViewportChanged = { mediaGridViewports[GalleryDestination.AlbumDetail] = it },
+                            columnBoost = adaptivePolicy.albumDetailColumnBoost,
+                            onBack = ::closeAlbumDetail,
+                            sharedTransitionScope = sharedTransitionScope,
+                            animatedVisibilityScope = galleryVisibilityScope,
+                            sharedBoundsTransform = GalleryMediaBoundsTransform,
+                            activeSharedElementKey = viewerSharedElementKey ?: mediaOpenTransition?.sharedElementKey,
+                            albumEnterProgress = 1f,
+                            gridMode = albumDetailGridModes[pageAlbum.id] ?: defaultAlbumGridMode,
+                            onGridModeChange = { gridMode -> albumDetailGridModes[pageAlbum.id] = gridMode },
+                            sortMode = albumDetailSortModes[pageAlbum.id] ?: AlbumDetailSortMode.Newest,
+                            onSortModeChange = { sortMode -> albumDetailSortModes[pageAlbum.id] = sortMode },
+                            selectedMediaIds = selectedMediaIds,
+                            onMediaLongClick = ::toggleMediaSelection,
+                            onMediaSelectionToggle = ::toggleMediaSelection,
+                            onSelectionClear = ::clearMediaSelection,
+                            onSelectAllVisible = { selectMedia(selectedAlbumMedia) },
+                            onDeleteSelected = ::deleteSelectedMedia,
+                            onShareSelected = ::shareSelectedMedia,
+                            onHideSelected = ::hideSelectedMedia,
+                            onMoveSelected = ::chooseAlbumForSelectedMedia,
+                            onHideAlbum = { hideAlbumAndReturn(pageAlbum) },
+                            onMediaBoundsChanged = { mediaItem, bounds ->
+                                if (destination == GalleryDestination.AlbumDetail && bounds.isUsableTransitionBounds()) {
+                                    mediaTileBounds[mediaItem.id] = bounds
+                                }
+                            },
+                            onMediaClick = { mediaItem, bounds, sharedElementKey, sharedElementKeyPrefix ->
+                                val selectedGridColumns = (
+                                    (albumDetailGridModes[pageAlbum.id] ?: defaultAlbumGridMode).columns + adaptivePolicy.albumDetailColumnBoost
+                                ).coerceIn(1, 10)
+                                startViewerOpen(
+                                    mediaItem = mediaItem,
+                                    mediaItems = selectedAlbumMedia,
+                                    bounds = bounds,
+                                    sharedElementKey = sharedElementKey,
+                                    sharedElementKeyPrefix = sharedElementKeyPrefix,
+                                    sourceGridColumns = selectedGridColumns
+                                )
+                            }
+                        )
+                    }
                 }
                 ReferenceMediaOpenOverlay(
                     transition = mediaOpenTransition,
@@ -4749,6 +4752,7 @@ private fun mediaForAlbum(
 @Composable
 private fun PositionAwareAlbumTransitionOverlay(
     transition: AlbumTransitionSpec?,
+    settledAlbum: Album?,
     committed: Boolean,
     rootWidthPx: Float,
     rootHeightPx: Float,
@@ -4758,29 +4762,30 @@ private fun PositionAwareAlbumTransitionOverlay(
     onFinished: (AlbumTransitionSpec) -> Unit,
     content: @Composable (Album) -> Unit
 ) {
-    if (transition == null || rootWidthPx <= 0f || rootHeightPx <= 0f) return
+    val pageAlbum = transition?.album ?: settledAlbum ?: return
+    if (rootWidthPx <= 0f || rootHeightPx <= 0f) return
 
-    val sourceBounds = transition.tileBounds.relativeToRoot(
+    val sourceBounds = transition?.tileBounds?.relativeToRoot(
         rootBoundsInWindow = rootBoundsInWindow,
         fallbackRootWidth = rootWidthPx,
         fallbackRootHeight = rootHeightPx
-    )
-    if (!sourceBounds.isUsableTransitionBounds()) {
+    ) ?: Rect(0f, 0f, rootWidthPx, rootHeightPx)
+    val moving = transition != null && sourceBounds.isUsableTransitionBounds()
+    if (transition != null && !moving) {
         LaunchedEffect(transition.key) {
             if (!committed) onCommitted(transition)
             onFinished(transition)
         }
-        return
     }
-    if (transition.mode == AlbumTransitionMode.Opening && !committed) {
+    if (transition?.mode == AlbumTransitionMode.Opening && !committed) {
         SideEffect { onCommitted(transition) }
-        return
     }
 
     // Direction changes share the in-flight value instead of jumping to an endpoint.
-    val progress = transition.motion.progress
+    val progress = transition?.takeIf { moving }?.motion?.progress
 
-    LaunchedEffect(transition.key) {
+    LaunchedEffect(transition?.key) {
+        if (transition == null || !moving) return@LaunchedEffect
         transition.motion.animateTo(
             opening = transition.mode == AlbumTransitionMode.Opening,
             fast = transitionStyle == FolderTransitionStyle.Fast
@@ -4799,29 +4804,29 @@ private fun PositionAwareAlbumTransitionOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(transition.key) {
-                awaitPointerEventScope {
+            .pointerInput(transition?.key) {
+                if (moving) awaitPointerEventScope {
                     while (true) {
                         awaitPointerEvent().changes.forEach { it.consume() }
                     }
                 }
             }
             .drawBehind {
-                val expansion = progress.value.coerceIn(0f, 1f)
+                val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                 val scrimAlpha = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                     (1f - GalleryMotion.smoothstep(0.65f, 0.95f, expansion)) * 0.22f
                 if (scrimAlpha > 0.001f) {
                     drawRect(Color.Black.copy(alpha = scrimAlpha))
                 }
             }
-            .testTag("AlbumTransitionOverlay")
+            .then(if (moving) Modifier.testTag("AlbumTransitionOverlay") else Modifier)
     ) {
         Box(
             modifier = Modifier
                 .requiredWidth(rootWidthDp)
                 .requiredHeight(rootHeightDp)
                 .graphicsLayer {
-                    val expansion = progress.value.coerceIn(0f, 1f)
+                    val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                     val heroBounds = lerpRect(sourceBounds, rootBounds, expansion)
                     val liftProgress = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                         (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))
@@ -4839,11 +4844,11 @@ private fun PositionAwareAlbumTransitionOverlay(
                     cameraDistance = 16f * density.density
                 }
                 .drawWithContent {
-                    val expansion = progress.value.coerceIn(0f, 1f)
+                    val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                     val heroBounds = lerpRect(sourceBounds, rootBounds, expansion)
                     val heroWidth = heroBounds.width.coerceAtLeast(1f)
                     val heroHeight = heroBounds.height.coerceAtLeast(1f)
-                    val cornerRadius = lerp(transition.sourceCornerRadiusDp, 0f, expansion).dp
+                    val cornerRadius = lerp(transition?.sourceCornerRadiusDp ?: 0f, 0f, expansion).dp
                     val cornerRadiusPx = cornerRadius.toPx()
                     val clipLeft = (rootWidthPx - heroWidth) / 2f
                     val clipTop = (rootHeightPx - heroHeight) / 2f
@@ -4861,17 +4866,16 @@ private fun PositionAwareAlbumTransitionOverlay(
                 }
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            content(transition.album)
+            content(pageAlbum)
         }
-        // Keep the cover as a lightweight layer over the full-screen preview. The preview itself
-        // is laid out once and transformed by the GPU instead of remeasuring a LazyColumn on
-        // every frame of both the open and close animations.
-        Box(
+        // Keep the cover over the same live page used at rest. Transform its layer without
+        // remeasuring the LazyColumn or replacing its thumbnail/header composition.
+        if (transition != null && moving) Box(
             modifier = Modifier
                 .requiredWidth(sourceWidthDp)
                 .requiredHeight(sourceHeightDp)
                 .graphicsLayer {
-                    val expansion = progress.value.coerceIn(0f, 1f)
+                    val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                     val heroBounds = lerpRect(sourceBounds, rootBounds, expansion)
                     val heroWidth = heroBounds.width.coerceAtLeast(1f)
                     val heroHeight = heroBounds.height.coerceAtLeast(1f)
@@ -4893,12 +4897,12 @@ private fun PositionAwareAlbumTransitionOverlay(
         ) {
             GalleryImage(
                 imageRes = transition.album.coverRes,
-                imageUri = transition.album.coverUri,
+                imageUri = transition.album.coverUri.takeUnless { transition.previewBitmap != null },
                 contentDescription = transition.album.name,
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
-                        val expansion = progress.value.coerceIn(0f, 1f)
+                        val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                         alpha = 1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)
                     },
                 cornerRadius = 0.dp,
@@ -4908,9 +4912,28 @@ private fun PositionAwareAlbumTransitionOverlay(
                 backgroundColor = MaterialTheme.colorScheme.surfaceVariant,
                 cachedOnly = true,
                 animatedPlaceholder = false,
+                initialBitmap = transition.previewBitmap,
                 isVideo = transition.album.hasVideoBadge,
                 cacheRevision = transition.album.coverMediaItem?.let { com.example.nativegallery.ui.components.mediaThumbnailCacheRevision(it) }
             )
+            // Match the actual card at the two endpoints, including labels and its gradient.
+            // Its chrome fades before the cover begins the existing image/page crossfade.
+            val source = transition.source
+            if (source != null && source.available) {
+                Box(Modifier.fillMaxSize()
+                    .graphicsLayer {
+                        val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
+                        alpha = (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)) *
+                            (1f - GalleryMotion.smoothstep(0f, 0.12f, expansion))
+                    }
+                    .drawBehind {
+                        if (source.available && source.size.width > 0 && source.size.height > 0) {
+                            withTransform({
+                                scale(size.width / source.size.width, size.height / source.size.height, Offset.Zero)
+                            }) { drawLayer(source.layer) }
+                        }
+                    })
+            }
         }
     }
 }

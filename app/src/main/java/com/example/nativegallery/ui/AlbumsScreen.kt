@@ -1496,7 +1496,6 @@ private fun BasicAlbumRow(
                             .albumReorderMotion(album, cardInteraction)
                             .albumReorderGesture(album, cardInteraction)
                             .bouncyClickable { onAlbumClick(album, albumBounds.value) }
-                            .hideForAlbumTransition(album.id, activeTransitionAlbumId)
                     ) {
                         Box {
                             GalleryImage(
@@ -1510,7 +1509,8 @@ private fun BasicAlbumRow(
                                         val bounds = coordinates.boundsInWindow()
                                         albumBounds.value = bounds
                                         onAlbumBoundsChanged(album, bounds)
-                                    },
+                                    }
+                                    .albumTransitionSource(album.id, activeTransitionAlbumId),
                                 cornerRadius = if (columns >= 4) 14.dp else 18.dp,
                                 thumbnailSize = 384,
                                 animatedPlaceholder = false,
@@ -1573,8 +1573,7 @@ private fun AlbumListRow(
             .fillMaxWidth()
             .albumReorderMotion(album, cardInteraction)
             .albumReorderGesture(album, cardInteraction)
-            .bouncyClickable { onAlbumClick(album, albumBounds.value) }
-            .hideForAlbumTransition(album.id, activeTransitionAlbumId),
+            .bouncyClickable { onAlbumClick(album, albumBounds.value) },
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -1596,7 +1595,8 @@ private fun AlbumListRow(
                         val bounds = coordinates.boundsInWindow()
                         albumBounds.value = bounds
                         onAlbumBoundsChanged(album, bounds)
-                    },
+                    }
+                    .albumTransitionSource(album.id, activeTransitionAlbumId),
                 cornerRadius = 12.dp,
                 thumbnailSize = 256,
                 animatedPlaceholder = false,
@@ -2600,7 +2600,7 @@ private fun AlbumImageCard(
             .clip(RoundedCornerShape(cornerRadius))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .bouncyClickable { onAlbumClick(album, albumBounds.value) }
-            .hideForAlbumTransition(album.id, activeTransitionAlbumId)
+            .albumTransitionSource(album.id, activeTransitionAlbumId)
     ) {
         GalleryImage(
             sharpenThumbnail = true,
@@ -2783,16 +2783,6 @@ private fun albumReorderRowZIndex(albums: List<Album>, interaction: AlbumCardInt
     else -> 0f
 }
 
-
-private fun Modifier.hideForAlbumTransition(
-    albumId: String,
-    activeAlbumIdState: State<String?>?
-): Modifier {
-    if (activeAlbumIdState == null) return this
-    return graphicsLayer {
-        alpha = if (activeAlbumIdState.value == albumId) 0f else 1f
-    }
-}
 
 @Composable
 private fun AlbumContextMenu(
