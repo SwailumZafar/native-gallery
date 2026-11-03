@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.25 / code 28; reference-video album close plus stationary navigation bar revealed underneath
-Installed build: Aster v0.9.25 / code 28 on RMX3852 at 192.168.18.95:39247; upgrade installed, hash verified, closing keyframe shows page scale and navigation bar underneath
+Current workspace: Aster v0.9.26 / code 29; v0.9.22 album open/close restored, conservative closing shading refinement, continuous reversal position
+Installed build: Aster v0.9.26 / code 29 on RMX3852 at 192.168.18.95:39247; historical v0.9.22 album motion restored, install/hash verified, app launched
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -153,6 +153,16 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-11-03 Restore the preferred v0.9.22 album motion (v0.9.26)
+
+- User rejected v0.9.24/25 as unlike the video and explicitly requested the opening/closing animation from three releases back. Interpreted as v0.9.22 (v0.9.25 minus three version increments), verified available at commit `5dbaec5` on GitHub.
+- Re-inspected reference and physical v0.9.25 keyframes. Earlier claims of matching were too strong: static keyframes did not establish the full motion's equivalence. Do not claim exact reference matching from those captures.
+- Restored only the v0.9.22 album transition rendering and navigation-bar behavior. Removed the separate v0.9.24 closing implementation and its tests. Scan scheduling/pipeline, document retry, vault fixes and other later work remain.
+- Restored the original opening/closing Normal/Fast springs, return path, clip, detail scale/fade and cover blend. The rendering block was programmatically compared with `5dbaec5` and matched exactly after normalizing only two intentional closing refinements: elevation 3 dp to 1.5 dp, cover ghost opacity 0.4 to 0.28. Opening visuals and all spring constants are identical to v0.9.22.
+- Related hardening: AlbumTransitionSpec now shares an AlbumTransitionMotion across `.copy` direction changes. A close during opening (or reopening during close) keeps the current progress instead of recreating an Animatable at 0/1. Three frame-clock JVM tests exercise both directions and independent initial endpoints.
+- Validation: debug APK build, all 202 JVM tests and lint (0 errors, 11 existing warnings) pass. Installed in place on RMX3852 at `192.168.18.95:39247`; version 0.9.26/code 29 and installed APK SHA-256 verified. MainActivity launched; app data retained. No emulator tests run. No claim of exact native-gallery equivalence; this is the requested historical baseline with modest refinement.
+- Artifact: `app/build/outputs/apk/debug/aster-v0.9.26.apk`, SHA-256 `268F2EDFE158947813CE7116A41044795F86CD2F565D89B4242D7FF0A58F6516`.
 
 ## 2026-11-03 Physical comparison follow-up (v0.9.25)
 

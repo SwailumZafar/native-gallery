@@ -269,7 +269,7 @@ private data class AlbumTransitionSpec(
     val firstVisibleRow: Int = 0,
     val firstVisibleRowOffset: Int = 0,
     val previewBitmap: Bitmap? = null,
-    val initialProgress: Float = if (mode == AlbumTransitionMode.Closing) 1f else 0f
+    val motion: AlbumTransitionMotion = AlbumTransitionMotion(opening = mode == AlbumTransitionMode.Opening)
 )
 
 private const val FavoritesAlbumId = "favorites"
@@ -2712,16 +2712,14 @@ fun GalleryApp(
                     containerColor = MaterialTheme.colorScheme.background,
                     bottomBar = {
                         if (!adaptivePolicy.useNavigationRail) {
-                            val albumMorph = albumTransition != null
-                            val shouldShowBottomBar = (destination == GalleryDestination.Main || albumMorph) &&
-                                (mainNavigationChromeReady || albumMorph) &&
+                            val shouldShowBottomBar = destination == GalleryDestination.Main &&
+                                mainNavigationChromeReady &&
                                 selectedMediaIds.isEmpty() &&
                                 !viewerVisible &&
-                                (navigationTransitionIdle || albumMorph || mediaCloseTransition?.mediaItem?.isVideo == true)
+                                (navigationTransitionIdle || mediaCloseTransition?.mediaItem?.isVideo == true)
                             GalleryBottomBar(
                                 selectedTab = selectedTab,
-                                visible = shouldShowBottomBar && (bottomNavigationVisible || albumMorph),
-                                revealBehindAlbum = albumMorph,
+                                visible = shouldShowBottomBar && bottomNavigationVisible,
                                 onTabSelected = ::selectMainTab
                             )
                         }
@@ -4768,44 +4766,18 @@ private fun PositionAwareAlbumTransitionOverlay(
         SideEffect { onCommitted(transition) }
     }
 
-    val progress = remember(transition.key) {
-        Animatable(if (transition.mode == AlbumTransitionMode.Closing) 1f else 0f)
-    }
+    // Direction changes share the in-flight value instead of jumping to an endpoint.
+    val progress = transition.motion.progress
 
     LaunchedEffect(transition.key) {
-        val targetValue = if (transition.mode == AlbumTransitionMode.Closing) 0f else 1f
-        val isOpening = transition.mode == AlbumTransitionMode.Opening
-        val folderSpring = when (transitionStyle) {
-            FolderTransitionStyle.Normal -> if (isOpening) MotionSpecs.AppleSpringFolder else MotionSpecs.AppleSpringFolderClose
-            FolderTransitionStyle.Fast -> if (isOpening) MotionSpecs.AppleSpringFolderFast else MotionSpecs.AppleSpringFolderCloseFast
-        }
-        progress.animateTo(
-            targetValue = targetValue,
-            animationSpec = if (isOpening) folderSpring else tween(
-                durationMillis = if (transitionStyle == FolderTransitionStyle.Fast) 250 else 340,
-                easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
-            )
+        transition.motion.animateTo(
+            opening = transition.mode == AlbumTransitionMode.Opening,
+            fast = transitionStyle == FolderTransitionStyle.Fast
         )
         onFinished(transition)
     }
 
     val density = LocalDensity.current
-    if (transition.mode == AlbumTransitionMode.Closing) {
-        Box(Modifier.fillMaxSize().pointerInput(transition.key) {
-            awaitPointerEventScope {
-                while (true) awaitPointerEvent().changes.forEach { it.consume() }
-            }
-        }.testTag("AlbumTransitionOverlay")) {
-            AlbumClosingPage(
-                rootWidthPx = rootWidthPx,
-                rootHeightPx = rootHeightPx,
-                coverBounds = sourceBounds,
-                coverCornerRadiusDp = transition.sourceCornerRadiusDp,
-                expansion = { progress.value }
-            ) { content(transition.album) }
-        }
-        return
-    }
     val rootBounds = Rect(0f, 0f, rootWidthPx, rootHeightPx)
     val rootWidthDp = with(density) { rootWidthPx.toDp() }
     val rootHeightDp = with(density) { rootHeightPx.toDp() }
@@ -4827,7 +4799,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                 val expansion = progress.value.coerceIn(0f, 1f)
                 val scrimAlpha = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                     (1f - GalleryMotion.smoothstep(0.65f, 0.95f, expansion)) *
-                    (if (transition.mode == AlbumTransitionMode.Closing) 0f else 0.22f)
+                    (if (transition.mode == AlbumTransitionMode.Closing) 0.07f else 0.22f)
                 if (scrimAlpha > 0.001f) {
                     drawRect(Color.Black.copy(alpha = scrimAlpha))
                 }
@@ -4843,10 +4815,8 @@ private fun PositionAwareAlbumTransitionOverlay(
                     val heroBounds = lerpRect(sourceBounds, rootBounds, expansion)
                     val liftProgress = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                         (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))
-                    val detailAlpha = if (transition.mode == AlbumTransitionMode.Closing)
-                        GalleryMotion.smoothstep(0.22f, 0.85f, expansion)
-                    else GalleryMotion.smoothstep(0.08f, 0.70f, expansion)
-                    val transitElevationPx = (if (transition.mode == AlbumTransitionMode.Closing) 0.dp else 18.dp).toPx() * liftProgress
+                    val detailAlpha = GalleryMotion.smoothstep(0.08f, 0.70f, expansion)
+                    val transitElevationPx = (if (transition.mode == AlbumTransitionMode.Closing) 1.5.dp else 18.dp).toPx() * liftProgress
 
                     transformOrigin = TransformOrigin(0.5f, 0.5f)
                     translationX = heroBounds.center.x - rootWidthPx / 2f
@@ -4883,11 +4853,10 @@ private fun PositionAwareAlbumTransitionOverlay(
         ) {
             content(transition.album)
         }
-        // Opening uses a cover layer; closing hands off directly to the real card underneath
-        // so an enlarged duplicate cannot flash over it. The preview itself
+        // Keep the cover as a lightweight layer over the full-screen preview. The preview itself
         // is laid out once and transformed by the GPU instead of remeasuring a LazyColumn on
         // every frame of both the open and close animations.
-        if (transition.mode == AlbumTransitionMode.Opening) Box(
+        Box(
             modifier = Modifier
                 .requiredWidth(sourceWidthDp)
                 .requiredHeight(sourceHeightDp)
@@ -4899,7 +4868,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                     val liftProgress = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                         (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))
                     val cornerRadius = lerp(transition.sourceCornerRadiusDp, 0f, expansion).dp
-                    val transitElevationPx = 18.dp.toPx() * liftProgress
+                    val transitElevationPx = (if (transition.mode == AlbumTransitionMode.Closing) 1.5.dp else 18.dp).toPx() * liftProgress
 
                     transformOrigin = TransformOrigin(0f, 0f)
                     translationX = heroBounds.left
@@ -4923,7 +4892,8 @@ private fun PositionAwareAlbumTransitionOverlay(
                         // The real card stays painted underneath, including its labels and gradient.
                         // Blend at the tile endpoints instead of swapping it for a bare cover.
                         alpha = GalleryMotion.smoothstep(0f, 0.08f, expansion) *
-                            (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion))
+                            (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)) *
+                            (if (transition.mode == AlbumTransitionMode.Closing) 0.28f else 1f)
                     },
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Crop,
@@ -5313,7 +5283,6 @@ private fun scaledRectAroundCenter(rect: Rect, scale: Float, offset: Offset): Re
 private fun GalleryBottomBar(
     selectedTab: GalleryTab,
     visible: Boolean,
-    revealBehindAlbum: Boolean = false,
     onTabSelected: (GalleryTab) -> Unit
 ) {
     val containerShape = RoundedCornerShape(50.dp)
@@ -5386,14 +5355,11 @@ private fun GalleryBottomBar(
             .navigationBarsPadding()
             .padding(bottom = 4.dp)
             .graphicsLayer {
-                // The full-screen album initially covers this bar. As the album shrinks,
-                // reveal the stationary bar underneath rather than starting another entrance.
-                val revealed = if (revealBehindAlbum) 1f else visibilityProgress.coerceIn(0f, 1f)
-                alpha = revealed
-                val scale = 0.88f + 0.12f * revealed
+                alpha = visibilityProgress.coerceIn(0f, 1f)
+                val scale = 0.88f + 0.12f * visibilityProgress
                 scaleX = scale
                 scaleY = scale
-                translationY = hideDistancePx * (1f - revealed)
+                translationY = hideDistancePx * (1f - visibilityProgress)
             },
         contentAlignment = Alignment.Center
     ) {
