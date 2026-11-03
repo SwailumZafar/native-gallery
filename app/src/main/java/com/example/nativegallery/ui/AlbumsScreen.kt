@@ -335,6 +335,7 @@ fun AlbumsScreen(
     onAlbumBoundsChanged: (Album, Rect) -> Unit,
     contentPadding: PaddingValues,
     listState: LazyListState,
+    activeTransitionAlbumId: State<String?>? = null,
     mediaAccessNotice: (@Composable () -> Unit)? = null,
     isLoading: Boolean = false,
     searchQuery: String = "",
@@ -781,6 +782,7 @@ fun AlbumsScreen(
                     heroAlbumRows(
                         albums = sortedAlbums,
                         height = 200.dp,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
                         cardInteraction = cardInteraction,
                         deferThumbnailLoads = deferAlbumCoverLoads,
                         onAlbumClick = onAlbumClick,
@@ -801,6 +803,7 @@ fun AlbumsScreen(
                                     AlbumHeroCard(
                                         album = leadingAlbum,
                                         height = heroHeight,
+                                        activeTransitionAlbumId = activeTransitionAlbumId,
                                         cardInteraction = cardInteraction,
                                         deferThumbnailLoads = deferAlbumCoverLoads,
                                         onAlbumClick = onAlbumClick,
@@ -814,6 +817,7 @@ fun AlbumsScreen(
                     bigAlbumRows(
                         albums = remainingAlbums,
                         columns = bigTileColumns,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
                         cardInteraction = cardInteraction,
                         deferThumbnailLoads = deferAlbumCoverLoads,
                         onAlbumClick = onAlbumClick,
@@ -824,6 +828,7 @@ fun AlbumsScreen(
                     bigAlbumRows(
                         albums = sortedAlbums,
                         columns = 2,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
                         cardInteraction = cardInteraction,
                         deferThumbnailLoads = deferAlbumCoverLoads,
                         onAlbumClick = onAlbumClick,
@@ -834,6 +839,7 @@ fun AlbumsScreen(
                     basicAlbumRows(
                         albums = sortedAlbums,
                         columns = basicTileColumns,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
                         cardInteraction = cardInteraction,
                         deferThumbnailLoads = deferAlbumCoverLoads,
                         onAlbumClick = onAlbumClick,
@@ -844,6 +850,7 @@ fun AlbumsScreen(
                     basicAlbumRows(
                         albums = sortedAlbums,
                         columns = 4,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
                         cardInteraction = cardInteraction,
                         deferThumbnailLoads = deferAlbumCoverLoads,
                         onAlbumClick = onAlbumClick,
@@ -853,6 +860,7 @@ fun AlbumsScreen(
                 AlbumLayoutMode.List -> {
                     listAlbumRows(
                         albums = sortedAlbums,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
                         cardInteraction = cardInteraction,
                         deferThumbnailLoads = deferAlbumCoverLoads,
                         onAlbumClick = onAlbumClick,
@@ -1232,6 +1240,7 @@ private fun LayoutSelector(
 private fun LazyListScope.heroAlbumRows(
     albums: List<Album>,
     height: androidx.compose.ui.unit.Dp,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1253,6 +1262,7 @@ private fun LazyListScope.heroAlbumRows(
             AlbumHeroCard(
                 album = album,
                 height = height,
+                activeTransitionAlbumId = activeTransitionAlbumId,
                 cardInteraction = cardInteraction,
                 deferThumbnailLoads = deferThumbnailLoads,
                 onAlbumClick = onAlbumClick,
@@ -1266,6 +1276,7 @@ private fun LazyListScope.heroAlbumRows(
 private fun LazyListScope.bigAlbumRows(
     albums: List<Album>,
     columns: Int,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1292,6 +1303,7 @@ private fun LazyListScope.bigAlbumRows(
             BigAlbumRow(
                 albums = rowAlbums,
                 columns = safeColumns,
+                activeTransitionAlbumId = activeTransitionAlbumId,
                 cardInteraction = cardInteraction,
                 deferThumbnailLoads = deferThumbnailLoads,
                 onAlbumClick = onAlbumClick,
@@ -1305,6 +1317,7 @@ private fun LazyListScope.bigAlbumRows(
 private fun LazyListScope.basicAlbumRows(
     albums: List<Album>,
     columns: Int,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1331,6 +1344,7 @@ private fun LazyListScope.basicAlbumRows(
             BasicAlbumRow(
                 albums = rowAlbums,
                 columns = safeColumns,
+                activeTransitionAlbumId = activeTransitionAlbumId,
                 cardInteraction = cardInteraction,
                 deferThumbnailLoads = deferThumbnailLoads,
                 onAlbumClick = onAlbumClick,
@@ -1343,6 +1357,7 @@ private fun LazyListScope.basicAlbumRows(
 
 private fun LazyListScope.listAlbumRows(
     albums: List<Album>,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1363,6 +1378,7 @@ private fun LazyListScope.listAlbumRows(
         ) {
             AlbumListRow(
                 album = album,
+                activeTransitionAlbumId = activeTransitionAlbumId,
                 cardInteraction = cardInteraction,
                 deferThumbnailLoads = deferThumbnailLoads,
                 onAlbumClick = onAlbumClick,
@@ -1377,6 +1393,7 @@ private fun LazyListScope.listAlbumRows(
 private fun AlbumHeroCard(
     album: Album,
     height: androidx.compose.ui.unit.Dp,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1393,6 +1410,7 @@ private fun AlbumHeroCard(
             .fillMaxWidth()
             .height(animatedHeight),
         cornerRadius = 24.dp,
+        activeTransitionAlbumId = activeTransitionAlbumId,
         cardInteraction = cardInteraction,
         deferThumbnailLoads = deferThumbnailLoads,
         onAlbumClick = onAlbumClick,
@@ -1404,6 +1422,7 @@ private fun AlbumHeroCard(
 private fun BigAlbumRow(
     albums: List<Album>,
     columns: Int,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1431,6 +1450,7 @@ private fun BigAlbumRow(
                             .width(cellWidth)
                             .height(cellHeight),
                         cornerRadius = 22.dp,
+                        activeTransitionAlbumId = activeTransitionAlbumId,
                         cardInteraction = cardInteraction,
                         deferThumbnailLoads = deferThumbnailLoads,
                         onAlbumClick = onAlbumClick,
@@ -1449,6 +1469,7 @@ private fun BigAlbumRow(
 private fun BasicAlbumRow(
     albums: List<Album>,
     columns: Int,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1475,7 +1496,7 @@ private fun BasicAlbumRow(
                             .albumReorderMotion(album, cardInteraction)
                             .albumReorderGesture(album, cardInteraction)
                             .bouncyClickable { onAlbumClick(album, albumBounds.value) }
-
+                            .hideForAlbumTransition(album.id, activeTransitionAlbumId)
                     ) {
                         Box {
                             GalleryImage(
@@ -1540,6 +1561,7 @@ private fun BasicAlbumRow(
 @Composable
 private fun AlbumListRow(
     album: Album,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -1551,7 +1573,8 @@ private fun AlbumListRow(
             .fillMaxWidth()
             .albumReorderMotion(album, cardInteraction)
             .albumReorderGesture(album, cardInteraction)
-            .bouncyClickable { onAlbumClick(album, albumBounds.value) },
+            .bouncyClickable { onAlbumClick(album, albumBounds.value) }
+            .hideForAlbumTransition(album.id, activeTransitionAlbumId),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -2558,6 +2581,7 @@ private fun AlbumImageCard(
     album: Album,
     modifier: Modifier,
     cornerRadius: androidx.compose.ui.unit.Dp,
+    activeTransitionAlbumId: State<String?>?,
     cardInteraction: AlbumCardInteraction,
     deferThumbnailLoads: State<Boolean>,
     onAlbumClick: (Album, Rect) -> Unit,
@@ -2576,7 +2600,7 @@ private fun AlbumImageCard(
             .clip(RoundedCornerShape(cornerRadius))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .bouncyClickable { onAlbumClick(album, albumBounds.value) }
-
+            .hideForAlbumTransition(album.id, activeTransitionAlbumId)
     ) {
         GalleryImage(
             sharpenThumbnail = true,
@@ -2759,6 +2783,16 @@ private fun albumReorderRowZIndex(albums: List<Album>, interaction: AlbumCardInt
     else -> 0f
 }
 
+
+private fun Modifier.hideForAlbumTransition(
+    albumId: String,
+    activeAlbumIdState: State<String?>?
+): Modifier {
+    if (activeAlbumIdState == null) return this
+    return graphicsLayer {
+        alpha = if (activeAlbumIdState.value == albumId) 0f else 1f
+    }
+}
 
 @Composable
 private fun AlbumContextMenu(

@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.29 / code 32; original v0.9.21 album opening/closing restored, one historical version earlier
-Installed build: Aster v0.9.29 / code 32 on RMX3852 at 192.168.18.95:39247; original v0.9.21 album animation restored, upgrade/hash verified, MainActivity launched
+Current workspace: Aster v0.9.30 / code 33; v0.9.16 album opening/closing restored after explicit user selection
+Installed build: Aster v0.9.30 / code 33 on RMX3852 at 192.168.18.95:39247; v0.9.16 album animation restored, upgrade/hash verified, MainActivity launched
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -153,6 +153,15 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-11-04 Restore v0.9.16 album animation only (v0.9.30)
+
+- User requested another historical step back. Inspection found v0.9.20 and v0.9.21 use the same album animation. User explicitly selected the next earlier different saved animation, v0.9.16 (`c7a0424`).
+- Restored the hidden source-card behavior across Hero/Big/Medium/Basic/Compact/List layouts, original cover opacity, opening commit handoff and viewport-clamped return bounds. Removed the later album transition preview-bitmap override. Original springs, full-page detail transform, clipping and shading remain historical.
+- Current thumbnail revision keys and transition reversal continuity remain. Newer performance, scan, People, vault, theme, adaptive layout and other non-animation behavior are preserved. No additional refinement/hardening changes are included in this narrowly requested rollback.
+- Validation: rendering compared programmatically with `c7a0424` and matches after excluding only the preserved thumbnail cache-revision argument. MotionSpecs and source-card visibility state match that revision. Debug build, all 202 existing JVM tests and lint (0 errors, 11 existing warnings) pass.
+- Installed in place on RMX3852 at `192.168.18.95:39247`; version 0.9.30/code 33 and installed APK SHA-256 verified. MainActivity launch returned Status ok. No app data cleared, emulator tests run or separate test helper installed. No claim of a full physical-motion/reference-video comparison.
+- Artifact: `app/build/outputs/apk/debug/aster-v0.9.30.apk`, SHA-256 `53CB9FCA08DE9B926126A97EBB6AA7ED6E769F7C81170648E3C119298749E5CE`.
 
 ## 2026-11-04 One more version back for album motion only (v0.9.29)
 

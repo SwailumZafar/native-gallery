@@ -268,7 +268,6 @@ private data class AlbumTransitionSpec(
     val sortMode: AlbumDetailSortMode = AlbumDetailSortMode.Newest,
     val firstVisibleRow: Int = 0,
     val firstVisibleRowOffset: Int = 0,
-    val previewBitmap: Bitmap? = null,
     val motion: AlbumTransitionMotion = AlbumTransitionMotion(opening = mode == AlbumTransitionMode.Opening)
 )
 
@@ -516,6 +515,19 @@ fun GalleryApp(
     var albumTransitionKey by remember { mutableIntStateOf(0) }
     var albumTransitionCommittedKey by remember { mutableIntStateOf(-1) }
     var albumTransitionAwaitingDestinationKey by remember { mutableIntStateOf(-1) }
+    val activeTransitionAlbumIdState = remember {
+        derivedStateOf {
+            albumTransition
+                ?.takeIf {
+                    it.mode == AlbumTransitionMode.Closing ||
+                        (
+                            it.mode == AlbumTransitionMode.Opening &&
+                                albumTransitionCommittedKey == it.key
+                        )
+                }
+                ?.album?.id
+        }
+    }
     var mediaOpenTransition by remember { mutableStateOf<MediaOpenTransitionSpec?>(null) }
     var pendingMediaOpenKey by remember { mutableStateOf<Int?>(null) }
     var viewerOpeningPreview by remember { mutableStateOf<Bitmap?>(null) }
@@ -1409,7 +1421,6 @@ fun GalleryApp(
                     else -> 22f
                 },
                 mode = AlbumTransitionMode.Opening,
-                previewBitmap = DisplayedBitmapCache.get(album.coverUri),
                 sortMode = albumDetailSortModes[album.id] ?: AlbumDetailSortMode.Newest
             )
             return
@@ -1472,7 +1483,6 @@ fun GalleryApp(
                     else -> 22f
                 },
                 mode = AlbumTransitionMode.Closing,
-                previewBitmap = DisplayedBitmapCache.get(closingAlbum.coverUri),
                 sortMode = albumDetailSortModes[closingAlbum.id] ?: AlbumDetailSortMode.Newest,
                 firstVisibleRow = albumDetailListState.firstVisibleItemIndex,
                 firstVisibleRowOffset = albumDetailListState.firstVisibleItemScrollOffset
@@ -2915,6 +2925,7 @@ fun GalleryApp(
                                                 },
                                                 contentPadding = innerPadding,
                                                 listState = albumsListState,
+                                                activeTransitionAlbumId = activeTransitionAlbumIdState,
                                                 mediaAccessNotice = mediaAccessNotice,
                                                 isLoading = areAlbumsLoading,
                                                 searchQuery = gallerySearchQuery,
@@ -4752,8 +4763,7 @@ private fun PositionAwareAlbumTransitionOverlay(
     val sourceBounds = transition.tileBounds.relativeToRoot(
         rootBoundsInWindow = rootBoundsInWindow,
         fallbackRootWidth = rootWidthPx,
-        fallbackRootHeight = rootHeightPx,
-        clampToViewport = transition.mode != AlbumTransitionMode.Closing || rootWidthPx <= rootHeightPx
+        fallbackRootHeight = rootHeightPx
     )
     if (!sourceBounds.isUsableTransitionBounds()) {
         LaunchedEffect(transition.key) {
@@ -4764,6 +4774,7 @@ private fun PositionAwareAlbumTransitionOverlay(
     }
     if (transition.mode == AlbumTransitionMode.Opening && !committed) {
         SideEffect { onCommitted(transition) }
+        return
     }
 
     // Direction changes share the in-flight value instead of jumping to an endpoint.
@@ -4888,10 +4899,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                     .fillMaxSize()
                     .graphicsLayer {
                         val expansion = progress.value.coerceIn(0f, 1f)
-                        // The real card stays painted underneath, including its labels and gradient.
-                        // Blend at the tile endpoints instead of swapping it for a bare cover.
-                        alpha = GalleryMotion.smoothstep(0f, 0.08f, expansion) *
-                            (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion))
+                        alpha = 1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)
                     },
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Crop,
@@ -4900,7 +4908,6 @@ private fun PositionAwareAlbumTransitionOverlay(
                 backgroundColor = MaterialTheme.colorScheme.surfaceVariant,
                 cachedOnly = true,
                 animatedPlaceholder = false,
-                initialBitmap = transition.previewBitmap,
                 isVideo = transition.album.hasVideoBadge,
                 cacheRevision = transition.album.coverMediaItem?.let { com.example.nativegallery.ui.components.mediaThumbnailCacheRevision(it) }
             )
