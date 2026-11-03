@@ -123,7 +123,7 @@ Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes an
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
 Current workspace: Aster v0.9.27 / code 30; retained live album page, measured reference timing/geometry, no preview-page swap
-Installed build: Aster v0.9.27 / code 30 on RMX3852 at 192.168.18.95:39247; app install/hash verified; final device check pending unlock
+Installed build: Aster v0.9.27 / code 30 on RMX3852 at 192.168.18.95:39247; install/hash verified, retained-page device test passed, actual album open/close keyframes checked; test helper removed
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -162,8 +162,15 @@ temporary video frames, and Codex working data must remain uncommitted.
 - The actual AlbumDetailScreen now stays at one stable composition location from opening through browsing and closing. Destination AnimatedContent holds a spacer for this page. The transition surface transforms/clips this live page instead of creating AlbumDetailTransitionPreview and then swapping to another header/grid. Sort/selection/media callbacks and external list state are retained. The page uses consistent system-bar padding at rest and in motion.
 - Geometry scales the entire live page uniformly while its panel interpolates to the real cover, with front-loaded corner rounding, a late crossfade, no outside scrim/shadow and no enlarged cover image. Navigation is revealed stationary underneath. Big tiles covers are larger than the reference's small square covers, so actual target size/path depend on the user's layout.
 - Related hardening: preserved shared motion state for reversals, added measured-landmark/curve/portrait-landscape regressions, and an isolated AlbumLivePageTest verifies the page is not disposed/remounted or resized across entry/rest/return.
-- Validation: debug APK/test APK build, all 205 JVM tests and lint (0 errors, 11 existing warnings) pass. v0.9.27/code 30 installed in place on RMX3852 at `192.168.18.95:39247`; installed SHA-256 matches the artifact; MainActivity launched behind the lock screen. Device regression not run: separate test APK installation was rejected with Failure [-99] while phone was locked. Unlock requested for final check; do not report the device test or visual match as passed. No emulator tests run. Existing app data retained.
+- Validation: debug APK/test APK build, all 205 JVM tests and lint (0 errors, 11 existing warnings) pass. v0.9.27/code 30 installed in place on RMX3852 at `192.168.18.95:39247`; installed SHA-256 matches the artifact; MainActivity launched behind the lock screen. Initial test APK install was rejected with Failure [-99] while locked. After unlock, test APK installation succeeded and AlbumLivePageTest passed on RMX3852 (1 test, 1.333 seconds). Actual Camera album opened and returned to Albums; opening and late-closing keyframes were captured and inspected. This confirms live-page behavior and keyframes, not exact full-motion equivalence or frame-rate performance. No emulator tests run. Existing app data retained.
 - Artifact: `app/build/outputs/apk/debug/aster-v0.9.27.apk`, SHA-256 `857B7C132F1CDA500DD48EBAA5262A0F38F23994452A82347BD89FF2817074C0`.
+
+
+### Device warning follow-up
+
+- User reported Android's "damaged APK" warning, then clarified it was probably for the separate test helper rather than Aster. The exact warning was not captured, so its cause is not conclusively diagnosed.
+- Aster cold-launched successfully through am start -W (Status ok, 1072 ms); package exit history showed test-run force-stops/package updates, with no new app-crash entry. Aster's Photos and Camera album screens were usable. The test helper `com.swailumzafar.nativegallery.test` was uninstalled successfully after its passing check; no test package remained.
+- Temporary on-device screenshots/XML removed. Private local keyframes remain ignored in tmp/album-reference. No app/media/vault data cleared. Normal folder transition preference verified; no settings changed.
 
 ## 2026-11-03 Restore the preferred v0.9.22 album motion (v0.9.26)
 
