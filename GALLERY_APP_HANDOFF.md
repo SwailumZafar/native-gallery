@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.27 / code 30; retained live album page, measured reference timing/geometry, no preview-page swap
-Installed build: Aster v0.9.27 / code 30 on RMX3852 at 192.168.18.95:39247; install/hash verified, retained-page device test passed, actual album open/close keyframes checked; test helper removed
+Current workspace: Aster v0.9.28 / code 31; original v0.9.22 album opening/closing restored without visual refinements
+Installed build: Aster v0.9.28 / code 31 on RMX3852 at 192.168.18.95:39247; original v0.9.22 album animation restored, upgrade/hash verified, MainActivity launched
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -153,6 +153,16 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-11-03 Original album motion rollback only (v0.9.28)
+
+- User explicitly requested the old opening/closing animation again, without another attempt at matching/refining the video. The known preferred historical baseline is v0.9.22 (`5dbaec5`), previously restored in v0.9.26.
+- Reverted the v0.9.27 retained-page rendering, sampled curves and related navigation-bar behavior only. Restored the original detail/transition-preview lifecycle. Removed AlbumPageSurface, the sampled-reference geometry tests and the now-obsolete live-page device test.
+- Opening/closing rendering was programmatically compared directly against `5dbaec5` and is identical, including original closing shadow 3 dp and cover opacity 0.4. MotionSpecs has no diff from that commit; Normal/Fast spring settings are unchanged. No additional visual refinements applied.
+- Kept the existing tested interruption/reversal progress safeguard from v0.9.26. This preserves the current position if a transition changes direction; ordinary opening/closing rendering and timing remain historical.
+- Newer scan scheduling/pipeline, document retries, People/vault and other non-animation changes remain. No new test-helper installation or emulator test is part of this update.
+- Validation: debug APK build, all 202 existing JVM tests and lint (0 errors, 11 existing warnings) pass. Installed in place on RMX3852 at `192.168.18.95:39247`; version 0.9.28/code 31 and installed APK SHA-256 verified. MainActivity launched. No app data cleared and no separate test helper installed.
+- Artifact: `app/build/outputs/apk/debug/aster-v0.9.28.apk`, SHA-256 `C193B1BA4113B0832F6ECBEEEC51640A44777767AD7B189CB6F90A3EDA1DF3B3`.
 
 ## 2026-11-03 Retained live album page and measured reference curves (v0.9.27)
 
