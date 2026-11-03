@@ -587,7 +587,7 @@ private fun PicturesHeader(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    SearchCircle(
+                    SearchAction(
                         onClick = {
                             if (isSearchVisible) {
                                 onCloseSearch()
@@ -758,22 +758,20 @@ internal fun PhotoFilterBar(
 }
 
 @Composable
-private fun SearchCircle(
+private fun SearchAction(
     onClick: () -> Unit = {}
 ) {
-    Surface(
+    Box(
         modifier = Modifier
             .size(50.dp)
             .solarTactile(scaleDown = 0.90f, onClick = onClick),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = CircleShape,
-        shadowElevation = 0.dp
+        contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = Icons.Filled.Search,
             contentDescription = "Search",
             tint = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(13.dp)
+            modifier = Modifier.size(24.dp)
         )
     }
 }

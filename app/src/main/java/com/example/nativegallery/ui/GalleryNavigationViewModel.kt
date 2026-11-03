@@ -2,10 +2,10 @@ package com.example.nativegallery.ui
 
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.SavedStateHandle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 
 internal enum class GalleryTab {
     Photos,
@@ -59,49 +59,62 @@ internal data class GalleryNavigationUiState(
     )
 }
 
-internal class GalleryNavigationViewModel : ViewModel() {
-    private val _uiState = MutableStateFlow(GalleryNavigationUiState())
+internal class GalleryNavigationViewModel(
+    private val savedState: SavedStateHandle = SavedStateHandle()
+) : ViewModel() {
+    private var overlayReturnLocation = restoreLocation("overlay")
+    private var editorReturnLocation = restoreLocation("editor")
+    private val _uiState = MutableStateFlow(
+        (restoreLocation("current") ?: GalleryNavigationUiState().location()).let { location ->
+            // The editor's working bitmap is intentionally memory-only. Recover its source page.
+            if (location.destination == GalleryDestination.PhotoEditor) {
+                editorReturnLocation ?: GalleryNavigationUiState().location()
+            } else location
+        }.toUiState()
+    )
     val uiState: StateFlow<GalleryNavigationUiState> = _uiState.asStateFlow()
 
-    private var overlayReturnLocation: GalleryLocation? = null
-    private var editorReturnLocation: GalleryLocation? = null
+    private fun updateState(transform: (GalleryNavigationUiState) -> GalleryNavigationUiState) {
+        _uiState.value = transform(_uiState.value)
+        saveLocation("current", _uiState.value.location())
+    }
 
     fun openTab(tab: GalleryTab) {
-        _uiState.update {
+        updateState {
             it.copy(destination = GalleryDestination.Main, selectedTab = tab)
         }
     }
 
     fun syncPagerTab(tab: GalleryTab) {
-        _uiState.update { it.copy(selectedTab = tab) }
+        updateState { it.copy(selectedTab = tab) }
     }
 
     fun selectAlbumForOpening(albumId: String) {
-        _uiState.update {
+        updateState {
             it.copy(selectedTab = GalleryTab.Albums, selectedAlbumId = albumId)
         }
     }
 
     fun showAlbumDetail() {
-        _uiState.update { it.copy(destination = GalleryDestination.AlbumDetail) }
+        updateState { it.copy(destination = GalleryDestination.AlbumDetail) }
     }
 
     fun closeAlbumDetail() {
-        _uiState.update {
+        updateState {
             it.copy(destination = GalleryDestination.Main, selectedTab = GalleryTab.Albums)
         }
     }
 
     fun clearSelectedAlbum() {
-        _uiState.update { it.copy(selectedAlbumId = null) }
+        updateState { it.copy(selectedAlbumId = null) }
     }
 
     fun cancelAlbumOpen() {
-        _uiState.value = GalleryNavigationUiState(
+        updateState { GalleryNavigationUiState(
             destination = GalleryDestination.Main,
             selectedTab = GalleryTab.Albums,
             selectedAlbumId = null
-        )
+        ) }
     }
 
     fun openOverlay(
@@ -109,7 +122,8 @@ internal class GalleryNavigationViewModel : ViewModel() {
         destinationTab: GalleryTab? = null
     ) {
         overlayReturnLocation = _uiState.value.location()
-        _uiState.update {
+        saveLocation("overlay", overlayReturnLocation)
+        updateState {
             it.copy(
                 destination = destination,
                 selectedTab = destinationTab ?: it.selectedTab
@@ -120,21 +134,39 @@ internal class GalleryNavigationViewModel : ViewModel() {
     fun returnFromOverlay(fallbackTab: GalleryTab) {
         val returnLocation = overlayReturnLocation
         overlayReturnLocation = null
-        _uiState.value = returnLocation?.toUiState() ?: GalleryNavigationUiState(
+        saveLocation("overlay", null)
+        updateState { returnLocation?.toUiState() ?: GalleryNavigationUiState(
             destination = GalleryDestination.Main,
             selectedTab = fallbackTab
-        )
+        ) }
     }
 
     fun openEditor() {
         editorReturnLocation = _uiState.value.location()
-        _uiState.update { it.copy(destination = GalleryDestination.PhotoEditor) }
+        saveLocation("editor", editorReturnLocation)
+        updateState { it.copy(destination = GalleryDestination.PhotoEditor) }
     }
 
     fun closeEditor() {
         val returnLocation = editorReturnLocation
         editorReturnLocation = null
-        _uiState.value = returnLocation?.toUiState() ?: GalleryNavigationUiState()
+        saveLocation("editor", null)
+        updateState { returnLocation?.toUiState() ?: GalleryNavigationUiState() }
+    }
+
+    private fun saveLocation(key: String, location: GalleryLocation?) {
+        savedState["$key.destination"] = location?.destination?.name
+        savedState["$key.tab"] = location?.selectedTab?.name
+        savedState["$key.album"] = location?.selectedAlbumId
+    }
+
+    private fun restoreLocation(key: String): GalleryLocation? {
+        val destination = savedState.get<String>("$key.destination") ?: return null
+        return GalleryLocation(
+            GalleryDestination.entries.firstOrNull { it.name == destination } ?: GalleryDestination.Main,
+            GalleryTab.entries.firstOrNull { it.name == savedState.get<String>("$key.tab") } ?: GalleryTab.Photos,
+            savedState["$key.album"]
+        )
     }
 
     private fun GalleryLocation.toUiState() = GalleryNavigationUiState(

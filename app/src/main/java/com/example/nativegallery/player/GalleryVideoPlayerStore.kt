@@ -29,7 +29,8 @@ internal class GalleryVideoPlayerStore : ViewModel() {
             .setMediaSourceFactory(galleryVideoMediaSourceFactory(context.applicationContext))
             .setLoadControl(DefaultLoadControl.Builder()
                 .setBufferDurationsMs(15_000, 30_000, 1_500, 2_000)
-                .setBackBuffer(0, false).setPrioritizeTimeOverSizeThresholds(true).build())
+                // Keep the recent keyframe so reopening a clip can seek back without refilling.
+                .setBackBuffer(5_000, true).setPrioritizeTimeOverSizeThresholds(true).build())
             .build().also { player = it }
         return Lease(current, generation)
     }
@@ -43,7 +44,7 @@ internal class GalleryVideoPlayerStore : ViewModel() {
         cleanup = viewModelScope.launch {
             // Codec release can block. Never schedule it in the middle of the closing spring.
             GalleryImageWorkScheduler.awaitIdle()
-            delay(2_000L)
+            delay(15_000L)
             GalleryImageWorkScheduler.awaitIdle()
             if (lease.generation == generation && player === lease.player) {
                 player = null

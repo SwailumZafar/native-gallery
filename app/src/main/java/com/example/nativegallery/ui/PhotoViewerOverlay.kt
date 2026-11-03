@@ -213,6 +213,8 @@ import com.example.nativegallery.ui.components.solarScale
 import com.example.nativegallery.ui.components.solarTactile
 import com.example.nativegallery.ui.components.cacheVideoFrameThumbnail
 import com.example.nativegallery.ui.components.mediaThumbnailCacheRevision
+import com.example.nativegallery.ui.components.thumbnailCacheIdentityUri
+import com.example.nativegallery.ui.components.ThumbnailMemoryCache
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import com.example.nativegallery.ui.components.DisplayedBitmapCache
 import java.util.Locale
@@ -2358,7 +2360,10 @@ private fun ViewerVideoPlayer(
     var presentationReady by remember(uri) { mutableStateOf(false) }
     var hasRuntimeVideoSize by remember(uri) { mutableStateOf(false) }
     var playerView by remember(uri) { mutableStateOf<PlayerView?>(null) }
-    var cachedPlayerFrame by remember(uri) { mutableStateOf(false) }
+    var cachedPlayerFrame by remember(uri) {
+        val cacheUri = thumbnailCacheIdentityUri(uri, isVideo = true, mediaThumbnailCacheRevision(mediaItem))
+        mutableStateOf(ThumbnailMemoryCache.getNearest(cacheUri, 512)?.isRecycled == false)
+    }
     val durationCacheIdentity = remember(
         uri,
         mediaItem.id,
@@ -2410,28 +2415,7 @@ private fun ViewerVideoPlayer(
     }
     val playerStore: GalleryVideoPlayerStore = viewModel()
     val playerLease = remember(uri) { playerStore.acquire(context) }
-    val player = remember(playerLease, uri, isMatroskaVideo) {
-        playerLease.player.apply {
-                setSeekParameters(if (isMatroskaVideo) SeekParameters.CLOSEST_SYNC else SeekParameters.DEFAULT)
-                val playerMediaItem = androidx.media3.common.MediaItem.Builder()
-                    .setUri(uri)
-                    .apply {
-                        mediaItem.mimeType?.takeIf { it.isNotBlank() }?.let(::setMimeType)
-                    }
-                    .build()
-                val reusePreparedMedia = currentMediaItem == playerMediaItem && playbackState != Player.STATE_IDLE && playerError == null
-                if (!reusePreparedMedia) setMediaItem(playerMediaItem)
-                seekTo(positionMs.toLong())
-                setAudioAttributes(AudioAttributes.DEFAULT, true)
-                setHandleAudioBecomingNoisy(true)
-                volume = localPlayerGain(playbackVolume, systemVolumeApplied = true)
-                playWhenReady =
-                    isActive &&
-                        playbackRequested &&
-                        lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-                if (!reusePreparedMedia) prepare()
-        }
-    }
+    val player = playerLease.player
 
     LaunchedEffect(uri, durationCacheIdentity, mediaItem.title, mediaItem.mimeType) {
         val resolvedDuration = withContext(Dispatchers.IO) {
@@ -2453,8 +2437,10 @@ private fun ViewerVideoPlayer(
                 }
         }
         if (resolvedDuration > 0L) {
-            durationMs = preferredVideoDurationMillis(player.duration, resolvedDuration, durationMs.toLong())
-                .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            withContext(Dispatchers.Main.immediate) {
+                durationMs = preferredVideoDurationMillis(player.duration, resolvedDuration, durationMs.toLong())
+                    .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            }
         }
     }
 
@@ -2603,6 +2589,27 @@ private fun ViewerVideoPlayer(
             }
         }
         player.addListener(listener)
+        // Configure after the AndroidView has attached its surface, and keep it paused until
+        // the opening motion settles. Rapid reopens retain the existing source and buffers.
+        player.apply {
+            pause()
+            setSeekParameters(if (isMatroskaVideo) SeekParameters.CLOSEST_SYNC else SeekParameters.DEFAULT)
+            val playerMediaItem = androidx.media3.common.MediaItem.Builder()
+                .setUri(uri)
+                .apply { mediaItem.mimeType?.takeIf { it.isNotBlank() }?.let(::setMimeType) }
+                .build()
+            val reusePreparedMedia = currentMediaItem == playerMediaItem &&
+                playbackState != Player.STATE_IDLE && playerError == null
+            if (!reusePreparedMedia) {
+                setMediaItem(playerMediaItem, positionMs.toLong())
+            } else if (currentPosition != positionMs.toLong()) {
+                seekTo(positionMs.toLong())
+            }
+            setAudioAttributes(AudioAttributes.DEFAULT, true)
+            setHandleAudioBecomingNoisy(true)
+            volume = localPlayerGain(playbackVolume, systemVolumeApplied = true)
+            if (!reusePreparedMedia) prepare()
+        }
         // A rapid reopen may reuse an already prepared player without a new READY event.
         isPrepared = videoPreparedStateAfterPlaybackState(false, player.playbackState)
         onDispose {
@@ -2633,7 +2640,8 @@ private fun ViewerVideoPlayer(
     LaunchedEffect(presentationReady, playerView, uri, cachedPlayerFrame) {
         if (!presentationReady || cachedPlayerFrame) return@LaunchedEffect
         val textureView = playerView?.videoSurfaceView as? TextureView ?: return@LaunchedEffect
-        delay(16)
+        com.example.nativegallery.ui.components.GalleryImageWorkScheduler.awaitIdle()
+        delay(350)
         repeat(4) {
             val frame = captureVideoTransitionFrame(textureView)
             if (frame != null) {
@@ -2728,6 +2736,7 @@ private fun ViewerVideoPlayer(
             lifecycleResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         )
         if (shouldPlay && !player.isPlaying) {
+            com.example.nativegallery.ui.components.GalleryImageWorkScheduler.awaitIdle()
             player.play()
         } else if (!shouldPlay && player.isPlaying) {
             player.pause()

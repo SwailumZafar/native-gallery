@@ -35,8 +35,10 @@ internal class PeopleState(val repository: PeopleRepository) {
     var total by mutableIntStateOf(0)
     var revision by mutableIntStateOf(0)
     var error by mutableStateOf<String?>(null)
+    var loaded by mutableStateOf(false)
     fun scan() { repository.enabled = true; enabled = true; revision++ }
-    fun disable() { repository.enabled = false; enabled = false; groups = emptyList(); error = null }
+    fun disable() { repository.enabled = false; enabled = false; groups = emptyList(); error = null; loaded = false }
+    fun changeEnabled(value: Boolean) { if (value) scan() else disable() }
 }
 
 @Composable
@@ -55,21 +57,27 @@ internal fun rememberPeopleState(repository: PeopleRepository, media: List<Media
         try {
             repository.scan(media) { groups, scanned, total ->
                 androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
-                    if (state.enabled) { state.groups = groups; state.scanned = scanned; state.total = total }
+                    if (state.enabled) { state.groups = groups; state.scanned = scanned; state.total = total; state.loaded = true }
                 }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { state.error = "Some photos could not be scanned. Tap Scan to retry." }
+        catch (_: Exception) { state.loaded = true; state.error = "Some photos could not be scanned. Tap Scan to retry." }
         finally { state.scanning = false }
     }
     return state
 }
 
 internal fun PersonGroup.album(index: Int): Album = Album(id, "Person ${index + 1}", photos.size,
-    photos.take(4).map { it.id }, coverUri = photos.firstOrNull()?.contentUri, coverMediaItem = photos.firstOrNull(), isSmart = true)
+    photos.take(4).map { it.id }, coverUri = thumbnail, isSmart = true)
 
 @Composable
-internal fun PeopleSection(state: PeopleState, groups: List<PersonGroup>, onOpen: (Album, Rect) -> Unit) {
+internal fun PeopleSection(
+    state: PeopleState,
+    groups: List<PersonGroup>,
+    onOpen: (Album, Rect) -> Unit,
+    activeTransitionAlbumId: State<String?>? = null,
+    onBoundsChanged: (Album, Rect) -> Unit = { _, _ -> }
+) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("People", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
@@ -85,6 +93,7 @@ internal fun PeopleSection(state: PeopleState, groups: List<PersonGroup>, onOpen
         if (state.scanning) LinearProgressIndicator(Modifier.fillMaxWidth())
         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             itemsIndexed(groups, key = { _, person -> person.id }) { index, person ->
+                val album = remember(person, index) { person.album(index) }
                 var bounds by remember(person.id) { mutableStateOf(Rect.Zero) }
                 // Face crops deliberately bypass the shared gallery memory/disk thumbnail cache.
                 var thumbnail by remember(person.thumbnail) { mutableStateOf<ImageBitmap?>(null) }
@@ -93,9 +102,15 @@ internal fun PeopleSection(state: PeopleState, groups: List<PersonGroup>, onOpen
                         BitmapFactory.decodeFile(person.thumbnail.path)?.asImageBitmap()
                     }
                 }
-                Column(Modifier.width(84.dp).onGloballyPositioned { bounds = it.boundsInWindow() }
-                    .clickable { onOpen(person.album(index), bounds) }, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.size(76.dp).clip(CircleShape)) {
+                Column(Modifier.width(84.dp)
+                    .clickable { onOpen(album, bounds) }, horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.size(76.dp)
+                        .onGloballyPositioned {
+                            bounds = it.boundsInWindow()
+                            onBoundsChanged(album, bounds)
+                        }
+                        .albumTransitionSource(person.id, activeTransitionAlbumId)
+                        .clip(CircleShape)) {
                         thumbnail?.let { Image(it, "Person ${index + 1}", Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
                     }
                     Text("Person ${index + 1}", style = MaterialTheme.typography.labelMedium)
@@ -103,6 +118,5 @@ internal fun PeopleSection(state: PeopleState, groups: List<PersonGroup>, onOpen
                 }
             }
         }
-        if (state.enabled) TextButton(onClick = state::disable) { Text("Turn off People and clear face data") }
     }
 }

@@ -3,8 +3,50 @@ package com.example.nativegallery.ui
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import androidx.lifecycle.SavedStateHandle
 
 class GalleryNavigationViewModelTest {
+    @Test
+    fun processRecreationRestoresAlbumAndOverlayReturnLocation() {
+        val savedState = SavedStateHandle()
+        val original = GalleryNavigationViewModel(savedState)
+        original.openTab(GalleryTab.Albums)
+        original.selectAlbumForOpening("camera")
+        original.showAlbumDetail()
+        original.openOverlay(GalleryDestination.RecentlyDeleted)
+
+        val recreated = GalleryNavigationViewModel(copySavedState(savedState))
+        assertEquals(GalleryDestination.RecentlyDeleted, recreated.uiState.value.destination)
+        assertEquals(GalleryTab.Albums, recreated.uiState.value.selectedTab)
+        recreated.returnFromOverlay(GalleryTab.Albums)
+        assertEquals(GalleryDestination.AlbumDetail, recreated.uiState.value.destination)
+        assertEquals("camera", recreated.uiState.value.selectedAlbumId)
+    }
+
+    @Test
+    fun processRecreationKeepsMenuInsteadOfResettingToPhotos() {
+        val savedState = SavedStateHandle()
+        GalleryNavigationViewModel(savedState).openTab(GalleryTab.Menu)
+        val recreated = GalleryNavigationViewModel(copySavedState(savedState))
+        assertEquals(GalleryTab.Menu, recreated.uiState.value.selectedTab)
+    }
+
+    @Test
+    fun processRecreationOfEditorReturnsToSourceAlbum() {
+        val savedState = SavedStateHandle()
+        val original = GalleryNavigationViewModel(savedState)
+        original.selectAlbumForOpening("camera")
+        original.showAlbumDetail()
+        original.openEditor()
+        val recreated = GalleryNavigationViewModel(copySavedState(savedState))
+        assertEquals(GalleryDestination.AlbumDetail, recreated.uiState.value.destination)
+        assertEquals("camera", recreated.uiState.value.selectedAlbumId)
+    }
+
+    private fun copySavedState(handle: SavedStateHandle) = SavedStateHandle(
+        handle.keys().associateWith { handle.get<Any?>(it) }
+    )
+
     @Test
     fun albumNavigationKeepsAlbumIdentityThroughClose() {
         val viewModel = GalleryNavigationViewModel()

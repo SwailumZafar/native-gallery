@@ -1,6 +1,6 @@
-# Aster
+# Photo Lane
 
-Aster is a privacy-focused Android photo and video gallery built with
+Photo Lane is a privacy-focused Android photo and video gallery built with
 Kotlin and Jetpack Compose. It reads the device library through MediaStore and
 keeps its core organization, search, editing, and vault flows on the device.
 

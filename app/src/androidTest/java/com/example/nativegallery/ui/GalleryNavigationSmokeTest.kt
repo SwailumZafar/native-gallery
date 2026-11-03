@@ -13,9 +13,11 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onParent
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.Lifecycle
 import com.example.nativegallery.MainActivity
 import org.junit.Rule
 import org.junit.Test
@@ -34,6 +36,19 @@ class GalleryNavigationSmokeTest {
     val rules: TestRule = RuleChain
         .outerRule(InitialPermissionPromptBypassRule())
         .around(composeRule)
+
+    @Test
+    fun selectedTabSurvivesBackgroundAndActivityRecreation() {
+        waitForPhotoHeader()
+        composeRule.onNodeWithContentDescription("Menu").performClick()
+        composeRule.waitForText("Gallery settings and tools")
+        composeRule.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+        composeRule.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        composeRule.activityRule.scenario.recreate()
+        composeRule.waitForText("Gallery settings and tools")
+        composeRule.onNodeWithContentDescription("Menu").onParent().assertIsSelected()
+        composeRule.onNodeWithText("Gallery settings and tools").assertIsDisplayed()
+    }
 
     @Test
     fun primaryTabsRenderAndNavigate() {

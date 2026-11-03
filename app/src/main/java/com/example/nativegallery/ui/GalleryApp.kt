@@ -1421,6 +1421,7 @@ fun GalleryApp(
                 album = album,
                 tileBounds = tileBounds,
                 sourceCornerRadiusDp = when {
+                    album.id.startsWith("person:") -> 38f
                     albumLayoutMode == AlbumLayoutMode.Basic || albumLayoutMode == AlbumLayoutMode.Compact -> 18f
                     albumLayoutMode == AlbumLayoutMode.List -> 14f
                     tileBounds.width > tileBounds.height * 1.35f -> 24f
@@ -1485,6 +1486,7 @@ fun GalleryApp(
                 album = closingAlbum,
                 tileBounds = closingBounds,
                 sourceCornerRadiusDp = when {
+                    closingAlbum.id.startsWith("person:") -> 38f
                     albumLayoutMode == AlbumLayoutMode.Basic || albumLayoutMode == AlbumLayoutMode.Compact -> 18f
                     albumLayoutMode == AlbumLayoutMode.List -> 14f
                     closingBounds.width > closingBounds.height * 1.35f -> 24f
@@ -1505,8 +1507,10 @@ fun GalleryApp(
         navigationViewModel.closeAlbumDetail()
     }
 
-    LaunchedEffect(destination, selectedAlbumId, visibleAlbumIds, selectedAlbum?.id) {
-        if (destination == GalleryDestination.AlbumDetail && selectedAlbumId != null && selectedAlbum == null) {
+    LaunchedEffect(destination, selectedAlbumId, visibleAlbumIds, selectedAlbum?.id, areAlbumsLoading, peopleState.loaded, peopleState.enabled) {
+        val awaitingPeople = selectedAlbumId?.startsWith("person:") == true && peopleState.enabled && !peopleState.loaded
+        if (destination == GalleryDestination.AlbumDetail && selectedAlbumId != null && selectedAlbum == null &&
+            !areAlbumsLoading && !awaitingPeople) {
             navigationViewModel.clearSelectedAlbum()
             openAlbums()
         }
@@ -1549,8 +1553,13 @@ fun GalleryApp(
     }
 
     LaunchedEffect(mainPagerState) {
+        // Saved navigation is authoritative on recreation; a pager's initial emission must
+        // not overwrite it with its default/restored page while an overlay is active.
+        mainPagerState.scrollToPage(navigationViewModel.uiState.value.selectedTab.pageIndex())
         snapshotFlow { mainPagerState.settledPage }.collect { page ->
-            navigationViewModel.syncPagerTab(pageToGalleryTab(page))
+            if (navigationViewModel.uiState.value.destination == GalleryDestination.Main) {
+                navigationViewModel.syncPagerTab(pageToGalleryTab(page))
+            }
         }
     }
 
@@ -2900,7 +2909,15 @@ fun GalleryApp(
                                                 onOpenRecentlyDeleted = ::openRecentlyDeleted,
                                                 onCreateAlbum = ::startAlbumCreator,
                                                 onCreateSmartAlbum = { createSmartAlbumVisible = true },
-                                                peopleContent = { PeopleSection(peopleState, peopleGroups, ::startAlbumOpen) },
+                                                peopleContent = if (peopleState.enabled) {
+                                                    {
+                                                        PeopleSection(peopleState, peopleGroups, ::startAlbumOpen,
+                                                            activeTransitionAlbumId = activeTransitionAlbumIdState,
+                                                            onBoundsChanged = { album, bounds ->
+                                                                if (bounds.isUsableTransitionBounds()) albumTileBounds[album.id] = bounds
+                                                            })
+                                                    }
+                                                } else null,
                                                 onDeleteAlbum = { album ->
                                                     if (album.isSmart) {
                                                         smartAlbumRules = smartAlbumRules.filterNot { it.id == album.id }
@@ -3526,7 +3543,9 @@ fun GalleryApp(
                     mediaManagementAccessStatus = mediaManagementAccessStatus,
                     onRequestMediaManagementAccess = { showMediaManagementExplanation = true },
                     onSettingsChange = onSettingsChange,
-                    onDismiss = { showSettingsDialog = false }
+                    onDismiss = { showSettingsDialog = false },
+                    peopleEnabled = peopleState.enabled,
+                    onPeopleEnabledChange = peopleState::changeEnabled
                 )
             }
 
@@ -3744,7 +3763,9 @@ internal fun GallerySettingsSheet(
     mediaManagementAccessStatus: MediaManagementAccessStatus,
     onRequestMediaManagementAccess: () -> Unit,
     onSettingsChange: (GallerySettings) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    peopleEnabled: Boolean = false,
+    onPeopleEnabledChange: (Boolean) -> Unit = {}
 ) {
     val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val sheetScope = rememberCoroutineScope()
@@ -3826,6 +3847,11 @@ internal fun GallerySettingsSheet(
                         { onSettingsChange(settings.copy(autoplayVideos = it)) })
                     SettingsSwitchRow("Start muted", "Open videos with volume at zero", settings.startVideosMuted,
                         { onSettingsChange(settings.copy(startVideosMuted = it)) })
+                }
+                GallerySettingsGroup("People") {
+                    SettingsSwitchRow("Group photos by face",
+                        "Show People above Recently deleted in Albums. Faces are processed on this device. Turning this off clears face data.",
+                        peopleEnabled, onPeopleEnabledChange)
                 }
                 GallerySettingsGroup("Display") {
                     SettingsSwitchRow("Smooth mode", "Use the highest available refresh rate", settings.performanceMode,
@@ -4895,7 +4921,9 @@ private fun PositionAwareAlbumTransitionOverlay(
                     shape = RoundedCornerShape(cornerRadius)
                 }
         ) {
-            GalleryImage(
+            val source = transition.source
+            val faceSource = transition.album.id.startsWith("person:") && source?.available == true
+            if (!faceSource) GalleryImage(
                 imageRes = transition.album.coverRes,
                 imageUri = transition.album.coverUri.takeUnless { transition.previewBitmap != null },
                 contentDescription = transition.album.name,
@@ -4918,13 +4946,12 @@ private fun PositionAwareAlbumTransitionOverlay(
             )
             // Match the actual card at the two endpoints, including labels and its gradient.
             // Its chrome fades before the cover begins the existing image/page crossfade.
-            val source = transition.source
             if (source != null && source.available) {
                 Box(Modifier.fillMaxSize()
                     .graphicsLayer {
                         val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                         alpha = (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)) *
-                            (1f - GalleryMotion.smoothstep(0f, 0.12f, expansion))
+                            (if (faceSource) 1f else 1f - GalleryMotion.smoothstep(0f, 0.12f, expansion))
                     }
                     .drawBehind {
                         if (source.available && source.size.width > 0 && source.size.height > 0) {

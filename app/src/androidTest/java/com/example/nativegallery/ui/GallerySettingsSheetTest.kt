@@ -25,6 +25,7 @@ import com.example.nativegallery.data.MediaManagementAccessStatus
 import com.example.nativegallery.ui.theme.GalleryTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,6 +33,21 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class GallerySettingsSheetTest {
     @get:Rule val composeRule = createComposeRule()
+
+    @Test fun peopleCanBeEnabledAndDisabledFromSettings() {
+        var enabled by mutableStateOf(false)
+        composeRule.setContent {
+            GalleryTheme(darkTheme = false) {
+                GallerySettingsSheet(GallerySettings(),
+                    MediaManagementAccessStatus(MediaManagementAccessState.UnsupportedAndroidVersion),
+                    {}, {}, {}, peopleEnabled = enabled, onPeopleEnabledChange = { enabled = it })
+            }
+        }
+        composeRule.onNodeWithText("Group photos by face").performScrollTo().performClick()
+        composeRule.runOnIdle { assertTrue(enabled) }
+        composeRule.onNodeWithText("Group photos by face").performClick()
+        composeRule.runOnIdle { assertFalse(enabled) }
+    }
 
     @Test fun groupedSettingsKeepThemePlaybackAndDismissalWorking() {
         var settings by mutableStateOf(GallerySettings())

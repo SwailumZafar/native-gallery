@@ -39,9 +39,7 @@ import kotlin.coroutines.coroutineContext
 import kotlin.math.sqrt
 
 data class PersonGroup(val id: String, val thumbnail: Uri, val photos: List<MediaItem>)
-private data class IndexedFace(val key: String, val vector: FloatArray) {
-    val normalized = normalizeFaceVector(vector)
-}
+private data class IndexedFace(val key: String, val vector: FloatArray)
 private data class IndexedPhoto(val fingerprint: String, val faces: List<IndexedFace>)
 
 internal fun faceSimilarity(a: FloatArray, b: FloatArray): Float {
@@ -83,7 +81,6 @@ class PeopleRepository(context: Context) {
     } }
 
     suspend fun scan(media: List<MediaItem>, progress: (List<PersonGroup>, Int, Int) -> Unit) = mutex.withLock { withContext(PhotoAnalysisWork.dispatcher) {
-        PhotoAnalysisWork.awaitPeopleAllowed()
         val photos = media.filter { !it.isVideo && it.contentUri != null }.distinctBy { it.id }
             .sortedByDescending { it.sortTimestampMillis }
         val records = load().toMutableMap()
@@ -95,6 +92,7 @@ class PeopleRepository(context: Context) {
         val groupIndex = Groups(photos, records)
         progress(groupIndex.snapshot(), records.size, photos.size)
         if (records.size == photos.size) return@withContext
+        PhotoAnalysisWork.awaitPeopleAllowed()
         check(OpenCVLoader.initLocal()) { "Face recognition could not start." }
         Core.setNumThreads(2)
         fun model(name: String): String {
@@ -178,6 +176,7 @@ class PeopleRepository(context: Context) {
                         }
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastPublished >= 1500L || (lastGroups.isEmpty() && groupsChanged)) {
+                            PhotoAnalysisWork.awaitPeopleAllowed()
                             if (groupsChanged) { lastGroups = groupIndex.snapshot(); groupsChanged = false }
                             progress(lastGroups, records.size + failed, photos.size)
                             lastPublished = now
@@ -190,6 +189,7 @@ class PeopleRepository(context: Context) {
             withContext(NonCancellable) { database.upsert(changed) }
         }
         prune(records)
+        PhotoAnalysisWork.awaitPeopleAllowed()
         progress(groupIndex.snapshot(), photos.size, photos.size)
         if (failed > 0) error("$failed photos could not be scanned. Tap Scan to retry.")
     } }
@@ -224,34 +224,28 @@ class PeopleRepository(context: Context) {
         return result
     }
 
-    private data class Cluster(val face: IndexedFace, val photos: MutableList<MediaItem>) {
-        val photoIds = photos.mapTo(hashSetOf()) { it.id }
-        var cachedGroup: PersonGroup? = null
-    }
-
     private inner class Groups(photos: List<MediaItem>, records: Map<String, IndexedPhoto>) {
-        private val clusters = mutableListOf<Cluster>()
+        private val index = FaceClusterIndex()
+        private val byId = photos.associateBy { it.id }
+        private val cachedGroups = mutableMapOf<String, PersonGroup>()
         init {
-            val byId = photos.associateBy { it.id }
             records.forEach { (id, record) -> byId[id]?.let { add(it, record.faces) } }
         }
 
         fun add(photo: MediaItem, faces: List<IndexedFace>) {
             faces.forEach { face ->
-                var best: Cluster? = null
-                var score = 0.5f
-                for (cluster in clusters) {
-                    if (photo.id in cluster.photoIds) continue
-                    val similarity = normalizedFaceSimilarity(cluster.face.normalized, face.normalized)
-                    if (similarity >= score) { best = cluster; score = similarity }
-                }
-                if (best != null) { best.photos += photo; best.photoIds += photo.id; best.cachedGroup = null }
-                else clusters += Cluster(face, mutableListOf(photo))
+                index.add(photo.id, face.key, face.vector)
             }
         }
-        fun snapshot(): List<PersonGroup> = clusters.sortedByDescending { it.photos.size }.map {
-            it.cachedGroup ?: PersonGroup("person:${it.face.key}", Uri.fromFile(File(directory, "${it.face.key}.jpg")),
-                it.photos.sortedByDescending { photo -> photo.sortTimestampMillis }).also { group -> it.cachedGroup = group }
+        fun snapshot(): List<PersonGroup> {
+            val clusters = index.clusters.sortedByDescending { it.photoIds.size }
+            cachedGroups.keys.retainAll(clusters.map { it.key }.toSet())
+            return clusters.map { cluster ->
+                cachedGroups[cluster.key]?.takeIf { it.photos.size == cluster.photoIds.size }
+                    ?: PersonGroup("person:${cluster.key}", Uri.fromFile(File(directory, "${cluster.key}.jpg")),
+                        cluster.photoIds.mapNotNull(byId::get).sortedByDescending { it.sortTimestampMillis })
+                        .also { cachedGroups[cluster.key] = it }
+            }
         }
     }
 

@@ -870,14 +870,14 @@ fun AlbumsScreen(
             }
         }
         if (!isLoading) {
-            item(key = "recently-deleted-pill", contentType = "album-list-action") {
-                Spacer(Modifier.height(10.dp))
-                RecentlyDeletedPill(onClick = onOpenRecentlyDeleted)
-            }
             if (peopleContent != null) item(key = "people", contentType = "people") {
                 Spacer(Modifier.height(24.dp))
                 peopleContent()
                 Spacer(Modifier.height(18.dp))
+            }
+            item(key = "recently-deleted-pill", contentType = "album-list-action") {
+                Spacer(Modifier.height(10.dp))
+                RecentlyDeletedPill(onClick = onOpenRecentlyDeleted)
             }
         }
     }
