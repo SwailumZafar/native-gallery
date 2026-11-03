@@ -2712,14 +2712,16 @@ fun GalleryApp(
                     containerColor = MaterialTheme.colorScheme.background,
                     bottomBar = {
                         if (!adaptivePolicy.useNavigationRail) {
-                            val shouldShowBottomBar = destination == GalleryDestination.Main &&
-                                mainNavigationChromeReady &&
+                            val albumMorph = albumTransition != null
+                            val shouldShowBottomBar = (destination == GalleryDestination.Main || albumMorph) &&
+                                (mainNavigationChromeReady || albumMorph) &&
                                 selectedMediaIds.isEmpty() &&
                                 !viewerVisible &&
-                                (navigationTransitionIdle || mediaCloseTransition?.mediaItem?.isVideo == true)
+                                (navigationTransitionIdle || albumMorph || mediaCloseTransition?.mediaItem?.isVideo == true)
                             GalleryBottomBar(
                                 selectedTab = selectedTab,
-                                visible = shouldShowBottomBar && bottomNavigationVisible,
+                                visible = shouldShowBottomBar && (bottomNavigationVisible || albumMorph),
+                                revealBehindAlbum = albumMorph,
                                 onTabSelected = ::selectMainTab
                             )
                         }
@@ -5311,6 +5313,7 @@ private fun scaledRectAroundCenter(rect: Rect, scale: Float, offset: Offset): Re
 private fun GalleryBottomBar(
     selectedTab: GalleryTab,
     visible: Boolean,
+    revealBehindAlbum: Boolean = false,
     onTabSelected: (GalleryTab) -> Unit
 ) {
     val containerShape = RoundedCornerShape(50.dp)
@@ -5383,11 +5386,14 @@ private fun GalleryBottomBar(
             .navigationBarsPadding()
             .padding(bottom = 4.dp)
             .graphicsLayer {
-                alpha = visibilityProgress.coerceIn(0f, 1f)
-                val scale = 0.88f + 0.12f * visibilityProgress
+                // The full-screen album initially covers this bar. As the album shrinks,
+                // reveal the stationary bar underneath rather than starting another entrance.
+                val revealed = if (revealBehindAlbum) 1f else visibilityProgress.coerceIn(0f, 1f)
+                alpha = revealed
+                val scale = 0.88f + 0.12f * revealed
                 scaleX = scale
                 scaleY = scale
-                translationY = hideDistancePx * (1f - visibilityProgress)
+                translationY = hideDistancePx * (1f - revealed)
             },
         contentAlignment = Alignment.Center
     ) {

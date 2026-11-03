@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.24 / code 27; reference-video album close: uniformly scaled page, rounded panel, late cover handoff
-Installed build: Aster v0.9.24 / code 27 on RMX3852 at 192.168.18.95:46687; upgrade installed and SHA-256 verified; visual close recording pending phone unlock
+Current workspace: Aster v0.9.25 / code 28; reference-video album close plus stationary navigation bar revealed underneath
+Installed build: Aster v0.9.25 / code 28 on RMX3852 at 192.168.18.95:39247; upgrade installed, hash verified, closing keyframe shows page scale and navigation bar underneath
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -154,13 +154,21 @@ project workflows. Machine-local/generated files such as local.properties,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
 
+## 2026-11-03 Physical comparison follow-up (v0.9.25)
+
+- On RMX3852 at `192.168.18.95:39247`, captured v0.9.24 close keyframes using the in-app Back button. The page/grid scale, rounding and late cover handoff were visible; no enlarged cover or outside shadow was rendered.
+- Found one remaining reference mismatch: bottom navigation remained hidden during the collapse and entered afterward. The retained navigation bar is now already visible behind the album morph, so the shrinking page reveals it in place. Existing visibility animation remains for ordinary scrolling/other destinations.
+- Validation: debug APK build, all 202 JVM tests, and lint (0 errors, 11 existing warnings) pass. Installed v0.9.25/code 28 on RMX3852 at `192.168.18.95:39247`; base.apk SHA-256 verified. Final system-Back close keyframe shows the scaled page/grid with rounded panel and fully visible stationary navigation bar behind it. Earlier v0.9.24 keyframes show the late cover crossfade. This is keyframe verification, not an exact timing/FPS or pixel-for-pixel equivalence claim. No emulator tests run. Temporary screenshots/XML removed from the phone; local captures remain ignored in `tmp/album-reference`.
+- Artifact: `app/build/outputs/apk/debug/aster-v0.9.25.apk`, SHA-256 `F6CD8323DEF2D22F0D3702F2D0B8279A9625F9FB1B363F85AEBB9A52ED235144`.
+- Capture limitation: native screenrecord output-file attempts returned Permission denied. A stdout H.264 attempt produced no bytes and stalled (shell PID 23953); terminating the host client and reconnecting did not remove that native helper, and the phone denied SIGINT/SIGKILL. Do not repeat the codec capture attempt or claim a full recording/FPS check; use bounded screencap keyframes. No device settings or security controls were changed.
+
 ## 2026-11-03 Reference-video album closing correction (v0.9.24)
 
 - Reference inspected frame by frame: `C:\Users\Amazon\Downloads\WhatsApp Video 2026-11-03 at 8.25.17 PM.mp4` (33.319 s). The close around 5.1-5.4 s shows the entire page/grid scaling toward its album cover, with rounding and a late crossfade. v0.9.23's stationary-size clipped/fading page was the wrong effect.
 - Closing now uses one full-resolution, once-measured page with equal X/Y scale. The interpolated panel bounds clip that scaled page, keeping the header at the top and progressively rounding the panel. It stays opaque through most of the movement and crossfades over the final 20% of geometric expansion. No enlarged cover layer, outside scrim or page shadow is rendered on close.
 - Close uses a 340 ms cubic ease (0.2, 0, 0, 1), 250 ms for the existing Fast preference. Opening behavior remains as before. The reference's visual style is the target; the app's album cover coordinates and device dimensions determine the actual return location.
 - Related hardening: extracted `AlbumCloseMotion.kt` and added focused geometry regressions for full-screen/cover endpoints, aspect-preserving scaling, late fade, portrait/landscape and offscreen cover positions. Page layout is fixed for the animation; only its layer transform and clip update each frame.
-- Validation: debug APK build, all 202 JVM tests and lint (0 errors, 11 existing warnings) pass. v0.9.24/code 27 installed with `adb install -r` on RMX3852 at `192.168.18.95:46687`; installed APK SHA-256 matches the artifact. Phone was locked after installation; visual recording is pending unlock. No emulator tests requested or run for this update.
+- Validation: debug APK build, all 202 JVM tests and lint (0 errors, 11 existing warnings) pass. v0.9.24/code 27 installed with `adb install -r` on RMX3852 at `192.168.18.95:46687`; installed APK SHA-256 matches the artifact. Phone was initially locked; later keyframes at the middle and late cover handoff were captured on RMX3852 and inspected against the reference. Native screenrecord was denied output files and its stream stalled, so this was a keyframe comparison rather than a full recording/FPS measurement. No emulator tests requested or run for this update.
 - Artifact: `app/build/outputs/apk/debug/aster-v0.9.24.apk`, SHA-256 `D8128208886D557CB72DF0B69CA4F04230C84F786F843F38DDC73E98F5FED6F5`.
 
 ## 2026-11-03 Large-library responsiveness and album close (v0.9.23)
