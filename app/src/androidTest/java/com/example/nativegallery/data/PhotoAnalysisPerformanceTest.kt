@@ -124,6 +124,18 @@ class PhotoAnalysisPerformanceTest {
             InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
                 putString("stream", "\nAnalysisBenchmark: peopleColdMs=$peopleCold peopleWarmMs=$peopleWarm docsColdMs=$docsCold docsWarmMs=$docsWarm photos=24\n")
             })
+            // Transient provider/decode failures must not become permanent negative matches.
+            val first = photos.first()
+            documents.invalidate(listOf(first.id))
+            val original = File(requireNotNull(first.contentUri?.path))
+            val held = File(root, "held.jpg")
+            assertTrue(original.renameTo(held))
+            try {
+                assertTrue(runCatching { documents.scan(photos) {} }.isFailure)
+            } finally { assertTrue(held.renameTo(original)) }
+            documents.scan(photos) { progress ->
+                if (!progress.scanning) assertEquals(documentMatches, progress.matches.size)
+            }
         } finally {
             bitmap.recycle()
             // All paths are isolated beneath this exact fixture directory.

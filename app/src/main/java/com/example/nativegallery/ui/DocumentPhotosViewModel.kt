@@ -46,7 +46,7 @@ class DocumentPhotosViewModel(
         val current = mutableUiState.value
         if (
             nextKey == libraryKey &&
-            (scanIsActive || current.scannedCount >= current.totalCount)
+            (scanIsActive || (current.errorMessage == null && current.scannedCount >= current.totalCount))
         ) {
             return
         }
@@ -62,7 +62,7 @@ class DocumentPhotosViewModel(
     }
 
     fun rescan() {
-        launchScan(invalidateFirst = true)
+        launchScan(invalidateFirst = mutableUiState.value.errorMessage == null)
     }
 
     private fun launchScan(invalidateFirst: Boolean) {

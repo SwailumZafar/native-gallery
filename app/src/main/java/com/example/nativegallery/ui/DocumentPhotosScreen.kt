@@ -21,6 +21,11 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.snapshotFlow
+import com.example.nativegallery.data.PhotoAnalysisWork
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -78,6 +83,13 @@ fun DocumentPhotosScreen(
     maxContentWidth: Dp = Dp.Unspecified,
     contentPadding: PaddingValues = PaddingValues()
 ) {
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(gridState) {
+        snapshotFlow { gridState.isScrollInProgress }.collect { PhotoAnalysisWork.setDocumentsScrolling(it) }
+    }
+    DisposableEffect(Unit) {
+        onDispose { PhotoAnalysisWork.setDocumentsScrolling(false) }
+    }
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(DocumentPhotoFilter.All) }
     val visibleMatches = remember(matches, query, filter) {
@@ -109,6 +121,7 @@ fun DocumentPhotosScreen(
         contentAlignment = Alignment.TopCenter
     ) {
         LazyVerticalGrid(
+            state = gridState,
             columns = GridCells.Fixed(gridColumns.coerceAtLeast(2)),
             modifier = Modifier
                 .fillMaxHeight()

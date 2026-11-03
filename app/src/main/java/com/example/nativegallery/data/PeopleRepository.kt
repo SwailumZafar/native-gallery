@@ -17,6 +17,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import android.os.SystemClock
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
@@ -81,6 +85,7 @@ class PeopleRepository(context: Context) {
     suspend fun scan(media: List<MediaItem>, progress: (List<PersonGroup>, Int, Int) -> Unit) = mutex.withLock { withContext(PhotoAnalysisWork.dispatcher) {
         PhotoAnalysisWork.awaitPeopleAllowed()
         val photos = media.filter { !it.isVideo && it.contentUri != null }.distinctBy { it.id }
+            .sortedByDescending { it.sortTimestampMillis }
         val records = load().toMutableMap()
         val byId = photos.associateBy { it.id }
         val obsolete = records.filter { (id, record) -> byId[id]?.let { fingerprint(it) != record.fingerprint } ?: true }.keys
@@ -109,53 +114,77 @@ class PeopleRepository(context: Context) {
         val changed = linkedMapOf<String, IndexedPhoto>()
         var lastGroups = groupIndex.snapshot()
         var groupsChanged = false
+        var lastPublished = SystemClock.elapsedRealtime()
         try {
-        for (photo in photos) {
-            coroutineContext.ensureActive()
-            if (photo.id in records) continue
-            PhotoAnalysisWork.awaitPeopleAllowed()
-            try {
-                val bitmap = decode(photo)
-                val rgba = Mat(); val image = Mat(); val faces = Mat()
+            coroutineScope {
+                // Decode the next photo while native inference handles this one. Capacity one bounds
+                // memory and prevents disk work from running far ahead of an interaction pause.
+                val decoded = Channel<Pair<MediaItem, Result<Bitmap>>>(1,
+                    onUndeliveredElement = { it.second.getOrNull()?.recycle() })
+                val pending = photos.filterNot { it.id in records }
+                val producer = launch {
+                    try {
+                        for (photo in pending) {
+                            PhotoAnalysisWork.awaitPeopleAllowed()
+                            val result = try { Result.success(decode(photo)) }
+                            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                            catch (error: Exception) { Result.failure(error) }
+                            decoded.send(photo to result)
+                        }
+                    } finally { decoded.close() }
+                }
                 try {
-                    Utils.bitmapToMat(bitmap, rgba)
-                    Imgproc.cvtColor(rgba, image, Imgproc.COLOR_RGBA2BGR)
-                    detector.setInputSize(image.size())
-                    detector.detect(image, faces)
-                    val found = mutableListOf<IndexedFace>()
-                    for (row in 0 until faces.rows()) {
-                        coroutineContext.ensureActive()
-                        val aligned = Mat(); val feature = Mat(); val box = faces.row(row)
+                    for ((photo, decodedBitmap) in decoded) {
                         try {
-                            recognizer.alignCrop(image, box, aligned)
-                            recognizer.feature(aligned, feature)
-                            val vector = FloatArray(feature.total().toInt())
-                            feature.get(0, 0, vector)
-                            val key = UUID.randomUUID().toString()
-                            val crop = Bitmap.createBitmap(aligned.cols(), aligned.rows(), Bitmap.Config.ARGB_8888)
-                            val rgb = Mat()
+                            val bitmap = decodedBitmap.getOrThrow()
+                            val rgba = Mat(); val image = Mat(); val faces = Mat()
                             try {
-                                Imgproc.cvtColor(aligned, rgb, Imgproc.COLOR_BGR2RGBA)
-                                Utils.matToBitmap(rgb, crop)
-                                File(directory, "$key.jpg").outputStream().use { crop.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-                            } finally { crop.recycle(); rgb.release() }
-                            found += IndexedFace(key, vector)
-                        } finally { box.release(); aligned.release(); feature.release() }
+                                PhotoAnalysisWork.awaitPeopleAllowed()
+                                Utils.bitmapToMat(bitmap, rgba)
+                                Imgproc.cvtColor(rgba, image, Imgproc.COLOR_RGBA2BGR)
+                                detector.setInputSize(image.size())
+                                detector.detect(image, faces)
+                                val found = mutableListOf<IndexedFace>()
+                                for (row in 0 until faces.rows()) {
+                                    coroutineContext.ensureActive()
+                                    PhotoAnalysisWork.awaitPeopleAllowed()
+                                    val aligned = Mat(); val feature = Mat(); val box = faces.row(row)
+                                    try {
+                                        recognizer.alignCrop(image, box, aligned)
+                                        recognizer.feature(aligned, feature)
+                                        val vector = FloatArray(feature.total().toInt())
+                                        feature.get(0, 0, vector)
+                                        val key = UUID.randomUUID().toString()
+                                        val crop = Bitmap.createBitmap(aligned.cols(), aligned.rows(), Bitmap.Config.ARGB_8888)
+                                        val rgb = Mat()
+                                        try {
+                                            Imgproc.cvtColor(aligned, rgb, Imgproc.COLOR_BGR2RGBA)
+                                            Utils.matToBitmap(rgb, crop)
+                                            File(directory, "$key.jpg").outputStream().use { crop.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                                        } finally { crop.recycle(); rgb.release() }
+                                        found += IndexedFace(key, vector)
+                                    } finally { box.release(); aligned.release(); feature.release() }
+                                }
+                                records[photo.id] = IndexedPhoto(fingerprint(photo), found)
+                                changed[photo.id] = records.getValue(photo.id)
+                                groupIndex.add(photo, found)
+                                groupsChanged = groupsChanged || found.isNotEmpty()
+                            } finally { bitmap.recycle(); rgba.release(); image.release(); faces.release() }
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (_: Exception) { failed++ }
+                        if ((records.size + failed) % 20 == 0) {
+                            database.upsert(changed)
+                            changed.clear()
+                        }
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastPublished >= 1500L || (lastGroups.isEmpty() && groupsChanged)) {
+                            if (groupsChanged) { lastGroups = groupIndex.snapshot(); groupsChanged = false }
+                            progress(lastGroups, records.size + failed, photos.size)
+                            lastPublished = now
+                        }
                     }
-                    records[photo.id] = IndexedPhoto(fingerprint(photo), found)
-                    changed[photo.id] = records.getValue(photo.id)
-                    groupIndex.add(photo, found)
-                    groupsChanged = groupsChanged || found.isNotEmpty()
-                } finally { bitmap.recycle(); rgba.release(); image.release(); faces.release() }
-            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (_: Exception) { failed++ }
-            if ((records.size + failed) % 20 == 0) {
-                database.upsert(changed)
-                changed.clear()
-                if (groupsChanged) { lastGroups = groupIndex.snapshot(); groupsChanged = false }
-                progress(lastGroups, records.size + failed, photos.size)
+                } finally { producer.cancel(); decoded.cancel() }
             }
-        }
         } finally {
             // Preserve completed work even when a library refresh cancels the remaining scan.
             withContext(NonCancellable) { database.upsert(changed) }
@@ -197,6 +226,7 @@ class PeopleRepository(context: Context) {
 
     private data class Cluster(val face: IndexedFace, val photos: MutableList<MediaItem>) {
         val photoIds = photos.mapTo(hashSetOf()) { it.id }
+        var cachedGroup: PersonGroup? = null
     }
 
     private inner class Groups(photos: List<MediaItem>, records: Map<String, IndexedPhoto>) {
@@ -215,13 +245,13 @@ class PeopleRepository(context: Context) {
                     val similarity = normalizedFaceSimilarity(cluster.face.normalized, face.normalized)
                     if (similarity >= score) { best = cluster; score = similarity }
                 }
-                if (best != null) { best.photos += photo; best.photoIds += photo.id }
+                if (best != null) { best.photos += photo; best.photoIds += photo.id; best.cachedGroup = null }
                 else clusters += Cluster(face, mutableListOf(photo))
             }
         }
         fun snapshot(): List<PersonGroup> = clusters.sortedByDescending { it.photos.size }.map {
-            PersonGroup("person:${it.face.key}", Uri.fromFile(File(directory, "${it.face.key}.jpg")),
-                it.photos.sortedByDescending { photo -> photo.sortTimestampMillis })
+            it.cachedGroup ?: PersonGroup("person:${it.face.key}", Uri.fromFile(File(directory, "${it.face.key}.jpg")),
+                it.photos.sortedByDescending { photo -> photo.sortTimestampMillis }).also { group -> it.cachedGroup = group }
         }
     }
 

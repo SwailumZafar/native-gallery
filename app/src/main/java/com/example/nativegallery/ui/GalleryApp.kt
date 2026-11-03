@@ -2640,6 +2640,16 @@ fun GalleryApp(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .pointerInput(Unit) {
+                try {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                            com.example.nativegallery.data.PhotoAnalysisWork.setTouching(event.changes.any { it.pressed })
+                        }
+                    }
+                } finally { com.example.nativegallery.data.PhotoAnalysisWork.setTouching(false) }
+            }
             .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {
         val density = LocalDensity.current
@@ -4796,7 +4806,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                 val expansion = progress.value.coerceIn(0f, 1f)
                 val scrimAlpha = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                     (1f - GalleryMotion.smoothstep(0.65f, 0.95f, expansion)) *
-                    (if (transition.mode == AlbumTransitionMode.Closing) 0.07f else 0.22f)
+                    (if (transition.mode == AlbumTransitionMode.Closing) 0f else 0.22f)
                 if (scrimAlpha > 0.001f) {
                     drawRect(Color.Black.copy(alpha = scrimAlpha))
                 }
@@ -4812,8 +4822,10 @@ private fun PositionAwareAlbumTransitionOverlay(
                     val heroBounds = lerpRect(sourceBounds, rootBounds, expansion)
                     val liftProgress = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                         (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))
-                    val detailAlpha = GalleryMotion.smoothstep(0.08f, 0.70f, expansion)
-                    val transitElevationPx = (if (transition.mode == AlbumTransitionMode.Closing) 3.dp else 18.dp).toPx() * liftProgress
+                    val detailAlpha = if (transition.mode == AlbumTransitionMode.Closing)
+                        GalleryMotion.smoothstep(0.22f, 0.85f, expansion)
+                    else GalleryMotion.smoothstep(0.08f, 0.70f, expansion)
+                    val transitElevationPx = (if (transition.mode == AlbumTransitionMode.Closing) 0.dp else 18.dp).toPx() * liftProgress
 
                     transformOrigin = TransformOrigin(0.5f, 0.5f)
                     translationX = heroBounds.center.x - rootWidthPx / 2f
@@ -4850,10 +4862,11 @@ private fun PositionAwareAlbumTransitionOverlay(
         ) {
             content(transition.album)
         }
-        // Keep the cover as a lightweight layer over the full-screen preview. The preview itself
+        // Opening uses a cover layer; closing hands off directly to the real card underneath
+        // so an enlarged duplicate cannot flash over it. The preview itself
         // is laid out once and transformed by the GPU instead of remeasuring a LazyColumn on
         // every frame of both the open and close animations.
-        Box(
+        if (transition.mode == AlbumTransitionMode.Opening) Box(
             modifier = Modifier
                 .requiredWidth(sourceWidthDp)
                 .requiredHeight(sourceHeightDp)
@@ -4865,7 +4878,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                     val liftProgress = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                         (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))
                     val cornerRadius = lerp(transition.sourceCornerRadiusDp, 0f, expansion).dp
-                    val transitElevationPx = (if (transition.mode == AlbumTransitionMode.Closing) 3.dp else 18.dp).toPx() * liftProgress
+                    val transitElevationPx = 18.dp.toPx() * liftProgress
 
                     transformOrigin = TransformOrigin(0f, 0f)
                     translationX = heroBounds.left
@@ -4889,8 +4902,7 @@ private fun PositionAwareAlbumTransitionOverlay(
                         // The real card stays painted underneath, including its labels and gradient.
                         // Blend at the tile endpoints instead of swapping it for a bare cover.
                         alpha = GalleryMotion.smoothstep(0f, 0.08f, expansion) *
-                            (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)) *
-                            (if (transition.mode == AlbumTransitionMode.Closing) 0.4f else 1f)
+                            (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion))
                     },
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Crop,

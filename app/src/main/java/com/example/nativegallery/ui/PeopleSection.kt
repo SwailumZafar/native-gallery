@@ -76,7 +76,7 @@ internal fun PeopleSection(state: PeopleState, groups: List<PersonGroup>, onOpen
             TextButton(onClick = state::scan, enabled = !state.scanning) { Text(if (state.enabled) "Scan" else "Find people") }
         }
         Text(when {
-            state.scanning -> "Finding faces · ${state.scanned} of ${state.total} photos"
+            state.scanning -> "${state.scanned} of ${state.total} checked · Browse results now. Scanning pauses while you use the gallery."
             state.error != null -> state.error!!
             !state.enabled -> "Group photos by face, privately on this device. Tap Find people to start."
             groups.isEmpty() -> "No faces found yet. Try scanning after adding more photos."

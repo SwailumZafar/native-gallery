@@ -1,6 +1,6 @@
 # Aster App Handoff
 
-Last updated: 2026-10-30
+Last updated: 2026-11-03
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.22 / code 25; bounded/pauseable incremental scans, People at bottom, lighter album return shading, pattern touch and vault preview-first loading
-Installed build: final Aster v0.9.22 / code 25 on RMX3852, installed through verified resumable transfer at 192.168.18.95:40253; final device regression batch passed
+Current workspace: Aster v0.9.23 / code 26; pipelined People decoding, touch/fling-aware scan scheduling, bounded result publication, direct album close handoff
+Installed build: Aster v0.9.23 / code 26 on RMX3852 at 192.168.18.95:46687; upgrade installed, SHA-256 verified against final APK, and app opened; user requested stopping remaining emulator tests
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -153,6 +153,18 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-11-03 Large-library responsiveness and album close (v0.9.23)
+
+- People now decodes one photo ahead while the current photo runs inference, on the existing two low-priority workers. The channel is bounded; cancelled/undelivered bitmaps are recycled. Newest photos are checked first. Detection resolution, embedding model and match threshold remain unchanged.
+- People reuses immutable snapshots of unchanged groups and publishes at most every 1.5 seconds (plus the first found group and completion), instead of repeatedly sorting/copying all groups every 20 photos. Document result publication uses the same interval/first-match policy; incremental database checkpoints remain every 20 photos.
+- A root pointer observer pauses new analysis at touch-down without consuming gestures. Both scans wait for 350 ms of continuous quiet after interaction. Document grid fling state is now explicitly wired into scheduling; previously this grid was absent from the pause logic. People also yields between faces in a group picture. Already-running native inference/OCR cannot be interrupted safely.
+- Album closing keeps its spring timing and return geometry, removes the duplicate expanding cover and both shadow/scrim effects, and fades detail earlier into the retained real album card. Opening retains its original cover effect.
+- Related hardening: transient document decode/OCR failures are not persisted as negative classifications. Retry retains successful records, and re-entry retries failed records. File URIs skip unsupported system-thumbnail calls.
+- Validation: final debug APK/test APK build, 199 JVM tests, and lint (0 errors, 11 existing warnings) pass. Final scheduling and 18,000-entry cache emulator tests pass. Intermediate OCR retry, cache/migration, album geometry and thumbnail tests passed (14/15 overall); the failed steady-state gate overhead test was corrected with a cancellation-aware fast path and passed in the final two-test run. The user explicitly stopped the remaining final emulator run and requested phone installation at 192.168.18.95:46687. No phone throughput/FPS benchmark is claimed.
+- Phone installation: `adb install -r` succeeded on RMX3852 at `192.168.18.95:46687`; version 0.9.23/code 26 and installed base.apk SHA-256 verified. Launched MainActivity. Existing data retained; no phone tests or data resets were performed.
+- Artifact: `app/build/outputs/apk/debug/aster-v0.9.23.apk`, SHA-256 `F61E4D17041BD95F23CBD4D2219856245E4F7BA8D781D2D33842655C9D16FB3A`. The debug build is signed with the existing upgrade-compatible key.
+- Limits: first-time face recognition/OCR over 18,000 photos is not instantaneous. These changes reduce avoidable decoding/publication overhead and prioritize interaction; no real-library completion-time or phone-frame-rate claim has been measured. The 18,000-entry regression is a cached no-face index, not 18,000 new face embeddings.
 
 ## 2026-10-30 Scan and Vault Performance Follow-up (v0.9.22)
 

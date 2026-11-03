@@ -9,6 +9,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.os.SystemClock
 import android.util.Size
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.Immutable
@@ -131,6 +132,8 @@ class DocumentPhotoRepository(context: Context) {
             emptyList()
         }
         val bufferedRecords = mutableListOf<StoredDocumentPhotoRecord>()
+        var lastPublished = SystemClock.elapsedRealtime()
+        var failedCount = 0
         try {
             coroutineScope {
                 val inputs = Channel<MediaItem>(SCAN_PARALLELISM)
@@ -140,6 +143,7 @@ class DocumentPhotoRepository(context: Context) {
                     launch(PhotoAnalysisWork.dispatcher) {
                         for (item in inputs) {
                             PhotoAnalysisWork.awaitIdle()
+                            var failed = false
                             val classification = try {
                                 if (isDocumentPhotoAnalysisCandidate(item)) {
                                     recognizePhoto(item, recognizers[slot])
@@ -149,9 +153,10 @@ class DocumentPhotoRepository(context: Context) {
                             } catch (cancellation: CancellationException) {
                                 throw cancellation
                             } catch (_: Exception) {
+                                failed = true
                                 null
                             }
-                            results.send(ScannedDocumentPhoto(item, classification))
+                            results.send(ScannedDocumentPhoto(item, classification, failed))
                         }
                     }
                 }
@@ -160,7 +165,8 @@ class DocumentPhotoRepository(context: Context) {
                     coroutineContext.ensureActive()
                     val item = scanned.mediaItem
                     val classification = scanned.classification
-                    bufferedRecords += StoredDocumentPhotoRecord(
+                    if (scanned.failed) failedCount++
+                    else bufferedRecords += StoredDocumentPhotoRecord(
                         mediaId = item.id,
                         fingerprint = fingerprint(item),
                         category = classification?.category,
@@ -183,8 +189,10 @@ class DocumentPhotoRepository(context: Context) {
                     scannedCount += 1
                     val shouldPublishProgress =
                         scannedCount == photos.size ||
-                            scannedCount % PROGRESS_BATCH_SIZE == 0
+                            SystemClock.elapsedRealtime() - lastPublished >= 1500L ||
+                            (classification != null && matches.size == 1)
                     if (shouldPublishProgress) {
+                        lastPublished = SystemClock.elapsedRealtime()
                         matches.sortByDescending { it.mediaItem.sortTimestampMillis }
                         onProgress(
                             DocumentPhotoScanProgress(
@@ -201,6 +209,7 @@ class DocumentPhotoRepository(context: Context) {
             withContext(NonCancellable) { database.upsert(bufferedRecords) }
             recognizers.forEach(TextRecognizer::close)
         }
+        check(failedCount == 0) { "$failedCount photos were unavailable; retry to check them." }
     }
 
     }
@@ -213,7 +222,7 @@ class DocumentPhotoRepository(context: Context) {
         item: MediaItem,
         recognizer: TextRecognizer
     ): DocumentPhotoClassification? {
-        val bitmap = loadAnalysisBitmap(item) ?: return null
+        val bitmap = loadAnalysisBitmap(item) ?: error("Photo unavailable")
         return try {
             val result = recognizer.process(InputImage.fromBitmap(bitmap, 0)).awaitResult()
             classifyDocumentPhoto(
@@ -231,7 +240,7 @@ class DocumentPhotoRepository(context: Context) {
             return BitmapFactory.decodeResource(appContext.resources, resourceId)
         }
         val uri = item.contentUri ?: return null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && uri.scheme == "content") {
             loadSystemThumbnail(uri)?.let { return it }
         }
         return decodeSampledBitmap(resolver, uri, MAX_ANALYSIS_EDGE)
@@ -309,14 +318,14 @@ class DocumentPhotoRepository(context: Context) {
         const val CLASSIFIER_VERSION = 4
         const val MAX_ANALYSIS_EDGE = 1024
         const val SCAN_PARALLELISM = 2
-        const val PROGRESS_BATCH_SIZE = 20
         const val DATABASE_WRITE_BATCH_SIZE = 20
     }
 }
 
 private data class ScannedDocumentPhoto(
     val mediaItem: MediaItem,
-    val classification: DocumentPhotoClassification?
+    val classification: DocumentPhotoClassification?,
+    val failed: Boolean = false
 )
 
 private data class StoredDocumentPhotoRecord(
