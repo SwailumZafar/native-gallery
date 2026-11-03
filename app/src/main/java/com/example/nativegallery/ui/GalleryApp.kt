@@ -4779,12 +4779,31 @@ private fun PositionAwareAlbumTransitionOverlay(
         }
         progress.animateTo(
             targetValue = targetValue,
-            animationSpec = folderSpring
+            animationSpec = if (isOpening) folderSpring else tween(
+                durationMillis = if (transitionStyle == FolderTransitionStyle.Fast) 250 else 340,
+                easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+            )
         )
         onFinished(transition)
     }
 
     val density = LocalDensity.current
+    if (transition.mode == AlbumTransitionMode.Closing) {
+        Box(Modifier.fillMaxSize().pointerInput(transition.key) {
+            awaitPointerEventScope {
+                while (true) awaitPointerEvent().changes.forEach { it.consume() }
+            }
+        }.testTag("AlbumTransitionOverlay")) {
+            AlbumClosingPage(
+                rootWidthPx = rootWidthPx,
+                rootHeightPx = rootHeightPx,
+                coverBounds = sourceBounds,
+                coverCornerRadiusDp = transition.sourceCornerRadiusDp,
+                expansion = { progress.value }
+            ) { content(transition.album) }
+        }
+        return
+    }
     val rootBounds = Rect(0f, 0f, rootWidthPx, rootHeightPx)
     val rootWidthDp = with(density) { rootWidthPx.toDp() }
     val rootHeightDp = with(density) { rootHeightPx.toDp() }
