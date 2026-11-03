@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.26 / code 29; v0.9.22 album open/close restored, conservative closing shading refinement, continuous reversal position
-Installed build: Aster v0.9.26 / code 29 on RMX3852 at 192.168.18.95:39247; historical v0.9.22 album motion restored, install/hash verified, app launched
+Current workspace: Aster v0.9.27 / code 30; retained live album page, measured reference timing/geometry, no preview-page swap
+Installed build: Aster v0.9.27 / code 30 on RMX3852 at 192.168.18.95:39247; app install/hash verified; final device check pending unlock
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -153,6 +153,17 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-11-03 Retained live album page and measured reference curves (v0.9.27)
+
+- User accepted restoration of the old animation but still wants the reference motion; earlier "matches" claims remain unproven. This pass changes the actual rendering lifecycle rather than only shadow strength or generic easing.
+- Quantitative analysis: source video is 478x850 with black side bars; actual screen viewport is x=46..434 (388x850). Tracked the first screenshot tile (initial x46/y115, 77x77) across close frames using sampled RGB template matching. Example measured scale/y: .8475/164.5, .6675/221.5, .5800/246, .4900/277, .3900/300.5. First 14 frames are useful before crossfade affects template confidence. Analysis files remain ignored under `tmp/album-reference`.
+- Opening/closing use smoothed monotone sampled curves, approximately 400/300 ms (existing Fast preference scales duration to 75%). These approximate the measured sequence; they do not prove exact video equivalence. The previous generic fast-out curve collapsed too much during the first half.
+- The actual AlbumDetailScreen now stays at one stable composition location from opening through browsing and closing. Destination AnimatedContent holds a spacer for this page. The transition surface transforms/clips this live page instead of creating AlbumDetailTransitionPreview and then swapping to another header/grid. Sort/selection/media callbacks and external list state are retained. The page uses consistent system-bar padding at rest and in motion.
+- Geometry scales the entire live page uniformly while its panel interpolates to the real cover, with front-loaded corner rounding, a late crossfade, no outside scrim/shadow and no enlarged cover image. Navigation is revealed stationary underneath. Big tiles covers are larger than the reference's small square covers, so actual target size/path depend on the user's layout.
+- Related hardening: preserved shared motion state for reversals, added measured-landmark/curve/portrait-landscape regressions, and an isolated AlbumLivePageTest verifies the page is not disposed/remounted or resized across entry/rest/return.
+- Validation: debug APK/test APK build, all 205 JVM tests and lint (0 errors, 11 existing warnings) pass. v0.9.27/code 30 installed in place on RMX3852 at `192.168.18.95:39247`; installed SHA-256 matches the artifact; MainActivity launched behind the lock screen. Device regression not run: separate test APK installation was rejected with Failure [-99] while phone was locked. Unlock requested for final check; do not report the device test or visual match as passed. No emulator tests run. Existing app data retained.
+- Artifact: `app/build/outputs/apk/debug/aster-v0.9.27.apk`, SHA-256 `857B7C132F1CDA500DD48EBAA5262A0F38F23994452A82347BD89FF2817074C0`.
 
 ## 2026-11-03 Restore the preferred v0.9.22 album motion (v0.9.26)
 
