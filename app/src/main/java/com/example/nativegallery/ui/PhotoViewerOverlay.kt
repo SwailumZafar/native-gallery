@@ -283,8 +283,6 @@ fun PhotoViewerOverlay(
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sharedBoundsTransform: BoundsTransform? = null,
     sharedElementKeyPrefix: String? = null,
-    predictiveBackProgressProvider: () -> Float = { 0f },
-    predictiveBackDirectionProvider: () -> Float = { 1f },
     initialPreview: Bitmap? = null
 ) {
     if (!visible || mediaItem == null) {
@@ -525,7 +523,8 @@ fun PhotoViewerOverlay(
         }
     }
 
-    LaunchedEffect(currentPageForState, viewerItemIds, activePhotoDecodeSize) {
+    LaunchedEffect(currentPageForState, viewerItemIds, activePhotoDecodeSize, detailsVisible) {
+        if (detailsVisible) return@LaunchedEffect
         val activeItem = viewerItems.getOrNull(currentPageForState)
         prefetchMediaThumbnails(
             context = context.applicationContext,
@@ -627,18 +626,6 @@ fun PhotoViewerOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .graphicsLayer {
-                val predictiveProgress = predictiveBackProgressProvider().coerceIn(0f, 1f)
-                val direction = predictiveBackDirectionProvider().coerceIn(-1f, 1f)
-                val predictiveScale = 1f - 0.04f * predictiveProgress
-                scaleX = predictiveScale
-                scaleY = predictiveScale
-                translationX = direction * 24.dp.toPx() * predictiveProgress
-                transformOrigin = TransformOrigin(if (direction < 0f) 1f else 0f, 0.5f)
-                shadowElevation = 20.dp.toPx() * predictiveProgress
-                shape = RoundedCornerShape((28f * predictiveProgress).dp)
-                clip = predictiveProgress > 0f
-            }
             .pointerInput(currentItem.id) {
                 val touchSlop = viewConfiguration.touchSlop
                 val maxDragX = size.width.toFloat() * 0.92f
@@ -757,7 +744,7 @@ fun PhotoViewerOverlay(
                                 dragOffset = Offset.Zero
                                 detailsDragOffset = (detailsDragOffset + delta.y)
                                     .coerceIn(-detailsThresholdPx * 1.8f, 0f)
-                                if (currentItem.isVideo && detailsDragOffset < -with(density) { 36.dp.toPx() }) {
+                                if (detailsDragOffset < -with(density) { 36.dp.toPx() }) {
                                     detailsVisible = true
                                     controlsVisible = false
                                     detailsGestureCommitted = true
@@ -1049,13 +1036,13 @@ fun PhotoViewerOverlay(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(4f),
-            enter = fadeIn(animationSpec = tween(120)) + slideInVertically(
-                initialOffsetY = { it / 2 },
-                animationSpec = tween(if (currentItem.isVideo) 160 else GalleryMotion.ViewerDetailsEnterMillis, easing = ViewerEnterEasing)
+            enter = fadeIn(animationSpec = tween(240)) + slideInVertically(
+                initialOffsetY = { it / 3 },
+                animationSpec = tween(420, easing = CubicBezierEasing(0.22f, 0.72f, 0.18f, 1f))
             ),
-            exit = fadeOut(animationSpec = tween(100)) + slideOutVertically(
-                targetOffsetY = { it / 3 },
-                animationSpec = tween(if (currentItem.isVideo) 120 else GalleryMotion.ViewerDetailsExitMillis, easing = ViewerExitEasing)
+            exit = fadeOut(animationSpec = tween(180)) + slideOutVertically(
+                targetOffsetY = { it / 4 },
+                animationSpec = tween(300, easing = ViewerExitEasing)
             )
         ) {
             MediaDetailsPanel(
@@ -1551,7 +1538,7 @@ private fun MediaDetailsPanel(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp, bottomStart = 28.dp, bottomEnd = 28.dp),
         tonalElevation = 0.dp,
-        shadowElevation = 24.dp
+        shadowElevation = 0.dp
     ) {
         Column(
             modifier = Modifier

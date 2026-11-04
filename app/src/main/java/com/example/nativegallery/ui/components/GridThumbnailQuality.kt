@@ -12,11 +12,26 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.State
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import java.util.concurrent.Executors
 import kotlin.math.ceil
 import kotlin.math.max
+
+internal val LocalGridScrolling = staticCompositionLocalOf<State<Boolean>> { mutableStateOf(false) }
+private val gridDetailPermit = Semaphore(1)
+private val gridDetailDispatcher = Executors.newSingleThreadExecutor { task ->
+    Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "GridPhotoDetail")
+}.asCoroutineDispatcher()
 
 internal fun gridThumbnailDimensionBucket(pixels: Int): Int =
     ((pixels.coerceIn(1, 1536) + 127) / 128 * 128).coerceAtMost(1536)
@@ -43,29 +58,36 @@ internal fun gridThumbnailDecodeDimensions(
 internal fun rememberGridThumbnailDetail(
     uri: Uri?, revision: String?, width: Int, height: Int, enabled: Boolean
 ): Bitmap? {
-    if (!enabled || uri == null || width <= 0 || height <= 0) return null
+    if (!enabled || !com.example.nativegallery.ui.LocalGridPrefetchEnabled.current || uri == null || width <= 0 || height <= 0) return null
     val context = LocalContext.current.applicationContext
     val targetWidth = gridThumbnailDimensionBucket(width)
     val targetHeight = gridThumbnailDimensionBucket(height)
     val key = gridThumbnailDetailKey(uri.toString(), revision, targetWidth, targetHeight)
     var bitmap by remember(key) { mutableStateOf(ThumbnailMemoryCache.get(key)) }
-    LaunchedEffect(key) {
+    val scrolling = LocalGridScrolling.current
+    LaunchedEffect(key, scrolling) {
         if (bitmap != null) return@LaunchedEffect
-        GalleryImageWorkScheduler.awaitIdle()
-        val loaded = ThumbnailLoadCoordinator.load(key, validator = { !it.isRecycled }) {
-            ThumbnailDiskCache.get(context, key)?.takeUnless { it.isRecycled }
-                ?: decodeGridThumbnail(context, uri, targetWidth, targetHeight)?.also {
-                    ThumbnailDiskCache.put(context, key, it)
+        snapshotFlow { scrolling.value }.collectLatest { moving ->
+            if (moving || bitmap != null) return@collectLatest
+            delay(180)
+            GalleryImageWorkScheduler.awaitIdle()
+            val loaded = gridDetailPermit.withPermit {
+                ThumbnailLoadCoordinator.load(key, validator = { !it.isRecycled }) {
+                ThumbnailDiskCache.get(context, key)?.takeUnless { it.isRecycled }
+                    ?: decodeGridThumbnail(context, uri, targetWidth, targetHeight)?.also {
+                        ThumbnailDiskCache.put(context, key, it)
+                    }
                 }
+            }
+            GalleryImageWorkScheduler.awaitIdle()
+            bitmap = loaded
         }
-        GalleryImageWorkScheduler.awaitIdle()
-        bitmap = loaded
     }
     return bitmap
 }
 
 private suspend fun decodeGridThumbnail(context: Context, uri: Uri, width: Int, height: Int): Bitmap? =
-    withContext(Dispatchers.IO) {
+    withContext(gridDetailDispatcher) {
         val budget = (Runtime.getRuntime().maxMemory() / 128L).coerceIn(750_000L, 2_000_000L)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             for (allocator in intArrayOf(ImageDecoder.ALLOCATOR_SOFTWARE, ImageDecoder.ALLOCATOR_HARDWARE)) {

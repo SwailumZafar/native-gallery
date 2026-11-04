@@ -153,7 +153,6 @@ internal fun resolveGalleryBackAction(
             GalleryBackAction.BlockTransition
         }
         hasSelection -> GalleryBackAction.ClearSelection
-        destination == GalleryDestination.Main && selectedTab != GalleryTab.Photos -> GalleryBackAction.OpenPhotos
         destination == GalleryDestination.AlbumDetail -> GalleryBackAction.CloseAlbumDetail
         destination == GalleryDestination.HiddenItems ||
             destination == GalleryDestination.LockedMedia ||

@@ -34,11 +34,17 @@ internal class PeopleState(val repository: PeopleRepository) {
     var scanned by mutableIntStateOf(0)
     var total by mutableIntStateOf(0)
     var revision by mutableIntStateOf(0)
+    var completedRevision = 0
     var error by mutableStateOf<String?>(null)
     var loaded by mutableStateOf(false)
     fun scan() { repository.enabled = true; enabled = true; revision++ }
     fun disable() { repository.enabled = false; enabled = false; groups = emptyList(); error = null; loaded = false }
     fun changeEnabled(value: Boolean) { if (value) scan() else disable() }
+    fun publish(results: List<PersonGroup>, checked: Int, count: Int) {
+        if (!enabled) return
+        groups = results; scanned = checked; total = count
+        scanning = checked < count; loaded = true
+    }
 }
 
 @Composable
@@ -53,13 +59,17 @@ internal fun rememberPeopleState(repository: PeopleRepository, media: List<Media
         }
         if (!state.enabled) { repository.clear(); return@LaunchedEffect }
         if (!libraryReady) return@LaunchedEffect
-        state.scanning = true; state.error = null
+        state.groups = repository.cachedGroups(media)
+        state.loaded = true
+        if (state.revision <= state.completedRevision) return@LaunchedEffect
+        state.scanned = 0; state.total = media.count { !it.isVideo }; state.scanning = true; state.error = null
         try {
             repository.scan(media) { groups, scanned, total ->
                 androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
-                    if (state.enabled) { state.groups = groups; state.scanned = scanned; state.total = total; state.loaded = true }
+                    state.publish(groups, scanned, total)
                 }
             }
+            state.completedRevision = state.revision
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { state.loaded = true; state.error = "Some photos could not be scanned. Tap Scan to retry." }
         finally { state.scanning = false }
@@ -87,10 +97,11 @@ internal fun PeopleSection(
             state.scanning -> "${state.scanned} of ${state.total} checked · Browse results now. Scanning pauses while you use the gallery."
             state.error != null -> state.error!!
             !state.enabled -> "Group photos by face, privately on this device. Tap Find people to start."
-            groups.isEmpty() -> "No faces found yet. Try scanning after adding more photos."
-            else -> "Tap a face to see their photos. Matches may need checking."
+            groups.isEmpty() -> "Tap Scan to find people in your photos, privately on this device."
+            else -> "Tap a face to see their photos. Scan checks for new photos."
         }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (state.scanning) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (state.scanning && state.scanned < state.total) LinearProgressIndicator(
+            progress = { state.scanned.toFloat() / state.total.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth())
         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             itemsIndexed(groups, key = { _, person -> person.id }) { index, person ->
                 val album = remember(person, index) { person.album(index) }

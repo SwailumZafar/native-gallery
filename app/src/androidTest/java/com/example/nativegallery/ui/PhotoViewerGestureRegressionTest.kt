@@ -29,9 +29,22 @@ import org.junit.runner.RunWith
 @OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @RunWith(AndroidJUnit4::class)
 class PhotoViewerGestureRegressionTest {
+    @org.junit.Before fun keepTestWindowAwake() = TestScreenAwake.enable()
 
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun photoInformationAppearsDuringTheUpwardDrag() {
+        showViewer(onClose = {})
+        composeRule.onNodeWithTag(ViewerZoomableMediaTestTag).performTouchInput {
+            down(Offset(width * 0.5f, height * 0.7f))
+            moveBy(Offset(0f, -height * 0.03f), 40L)
+            moveBy(Offset(0f, -height * 0.15f), 100L)
+        }
+        composeRule.onNodeWithContentDescription("Close details").assertIsDisplayed()
+        composeRule.onNodeWithTag(ViewerZoomableMediaTestTag).performTouchInput { up() }
+    }
 
     @Test
     fun downwardDragDismissesPhotoEvenThoughTapDetectorConsumedDown() {

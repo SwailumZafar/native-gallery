@@ -4,11 +4,14 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+
+internal val LocalGridPrefetchEnabled = staticCompositionLocalOf { true }
 
 /** Include date headings and spacers so a deep timeline jump warms the actual nearby media. */
 internal fun photoGridRowStarts(sectionSizes: List<Int>, columns: Int): List<Int> = buildList {
@@ -41,7 +44,9 @@ internal fun PrefetchMediaGrid(
     rowStarts: List<Int>? = null
 ) {
     val context = LocalContext.current.applicationContext
-    LaunchedEffect(mediaItems, listState, columns, rowStarts) {
+    val enabled = LocalGridPrefetchEnabled.current
+    LaunchedEffect(mediaItems, listState, columns, rowStarts, enabled) {
+        if (!enabled) return@LaunchedEffect
         snapshotFlow {
             val row = listState.firstVisibleItemIndex
             val mediaIndex = rowStarts?.getOrNull(row) ?: (row * columns)

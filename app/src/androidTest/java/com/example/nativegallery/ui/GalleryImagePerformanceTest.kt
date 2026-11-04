@@ -40,6 +40,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,6 +48,7 @@ import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class GalleryImagePerformanceTest {
+    @org.junit.Before fun keepTestWindowAwake() = TestScreenAwake.enable()
     @get:Rule
     val composeRule = createComposeRule()
 
@@ -102,6 +104,40 @@ class GalleryImagePerformanceTest {
             val detailKey = gridThumbnailDetailKey(uri.toString(), null, bucket, bucket)
             ThumbnailMemoryCache.remove(detailKey)
             ThumbnailDiskCache.remove(context, detailKey)
+            file.delete()
+        }
+    }
+
+    @Test fun scrollingKeepsThePreviewAndDefersOriginalDetailUntilSettled() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = File(context.cacheDir, "scroll-detail-${System.nanoTime()}.png")
+        val fixture = Bitmap.createBitmap(2048, 1536, Bitmap.Config.ARGB_8888)
+        fixture.eraseColor(android.graphics.Color.BLUE)
+        file.outputStream().use { fixture.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        fixture.recycle()
+        val uri = Uri.fromFile(file)
+        val moving = androidx.compose.runtime.mutableStateOf(true)
+        var bucket = 0
+        try {
+            composeRule.setContent {
+                bucket = gridThumbnailDimensionBucket(with(LocalDensity.current) { 160.dp.roundToPx() })
+                androidx.compose.runtime.CompositionLocalProvider(
+                    com.example.nativegallery.ui.components.LocalGridScrolling provides moving) {
+                    GalleryImage(null, uri, "Scroll preview", Modifier.size(160.dp), thumbnailSize = 128,
+                        animatedPlaceholder = false, sharpenThumbnail = true)
+                }
+            }
+            composeRule.waitUntil(5_000) { DisplayedBitmapCache.get(uri) != null }
+            Thread.sleep(300)
+            val key = gridThumbnailDetailKey(uri.toString(), null, bucket, bucket)
+            assertNull(ThumbnailMemoryCache.get(key))
+            composeRule.runOnIdle { moving.value = false }
+            composeRule.waitUntil(5_000) { ThumbnailMemoryCache.get(key) != null }
+        } finally {
+            ThumbnailMemoryCache.remove(ThumbnailMemoryCache.key(uri, 128))
+            val key = gridThumbnailDetailKey(uri.toString(), null, bucket, bucket)
+            ThumbnailMemoryCache.remove(key)
+            ThumbnailDiskCache.remove(context, key)
             file.delete()
         }
     }

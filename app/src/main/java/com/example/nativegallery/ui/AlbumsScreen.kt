@@ -6,6 +6,10 @@
 
 package com.example.nativegallery.ui
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
+
 import androidx.compose.foundation.layout.navigationBarsPadding
 
 import androidx.compose.foundation.gestures.scrollBy
@@ -323,6 +327,7 @@ fun AlbumsScreen(
     onOpenRecentlyDeleted: () -> Unit,
     onCreateAlbum: (String) -> Unit = {},
     onCreateSmartAlbum: () -> Unit = {},
+    smartAlbums: List<Album> = albums.filter { it.isSmart },
     peopleContent: (@Composable () -> Unit)? = null,
     onDeleteAlbum: (Album) -> Unit = {},
     canDeleteAlbum: (Album) -> Boolean = { !it.isAllPhotos },
@@ -347,7 +352,8 @@ fun AlbumsScreen(
     val hapticFeedback = LocalHapticFeedback.current
     var overflowExpanded by rememberSaveable { mutableStateOf(false) }
     var layoutExpanded by rememberSaveable { mutableStateOf(false) }
-    var sortAlphabetically by rememberSaveable { mutableStateOf(false) }
+    var showSortDialog by rememberSaveable { mutableStateOf(false) }
+    var showSmartAlbums by rememberSaveable { mutableStateOf(false) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var createAlbumName by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current.applicationContext
@@ -355,15 +361,12 @@ fun AlbumsScreen(
     var arrangementState by remember { mutableStateOf(arrangementRepository.load()) }
     val availableAlbumIds = remember(albums) { albums.map(Album::id) }
     val albumById = remember(albums) { albums.associateBy(Album::id) }
-    val sourceAlbumIds = remember(albums, sortAlphabetically) {
-        if (sortAlphabetically) {
-            albums.sortedBy { it.name.lowercase() }.map(Album::id)
-        } else {
-            availableAlbumIds
-        }
+    val automaticSort = arrangementState.sortMode != com.example.nativegallery.data.AlbumSortMode.Custom
+    val sourceAlbumIds = remember(albums, arrangementState.sortMode) {
+        com.example.nativegallery.data.sortAlbums(albums, arrangementState.sortMode).map(Album::id)
     }
-    val effectiveArrangement = remember(arrangementState, sortAlphabetically) {
-        if (sortAlphabetically) {
+    val effectiveArrangement = remember(arrangementState, automaticSort) {
+        if (automaticSort) {
             arrangementState.copy(orderIds = emptyList())
         } else {
             arrangementState
@@ -375,7 +378,7 @@ fun AlbumsScreen(
     }
     val leadingAlbum = sortedAlbums.firstOrNull()
     val remainingAlbums = sortedAlbums.drop(1)
-    val reorderEnabled = !sortAlphabetically && searchQuery.isBlank() && sortedAlbums.size > 1
+    val reorderEnabled = !automaticSort && searchQuery.isBlank() && sortedAlbums.size > 1
     val deferAlbumCoverLoads = remember { mutableStateOf(false) }
     // Coordinates change on every fling frame. Keeping them out of snapshot state prevents
     // album scrolling from invalidating and recomposing the whole screen.
@@ -454,11 +457,10 @@ fun AlbumsScreen(
         contextAlbumId = contextAlbumId,
         canDelete = canDeleteAlbum,
         onPinToggle = { album ->
-            sortAlphabetically = false
             arrangementState = arrangementRepository.save(
                 AlbumArrangementPolicy.togglePin(
                     availableIds = availableAlbumIds,
-                    state = arrangementState,
+                    state = arrangementState.copy(sortMode = com.example.nativegallery.data.AlbumSortMode.Custom),
                     albumId = album.id
                 )
             )
@@ -709,11 +711,11 @@ fun AlbumsScreen(
                             text = { Text("Sort albums") },
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null) },
                             trailingIcon = {
-                                if (sortAlphabetically) Icon(Icons.Filled.Check, contentDescription = null)
+                                if (automaticSort) Icon(Icons.Filled.Check, contentDescription = null)
                             },
                             onClick = {
                                 hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                sortAlphabetically = !sortAlphabetically
+                                showSortDialog = true
                                 overflowExpanded = false
                             }
                         )
@@ -725,9 +727,12 @@ fun AlbumsScreen(
                                 onOpenSettings()
                             }
                         )
-                        PremiumDropdownMenuItem(text = { Text("Save album filters (optional)") },
+                        PremiumDropdownMenuItem(text = { Text("New smart album") },
                             leadingIcon = { Icon(Icons.Filled.Add, null) },
                             onClick = { overflowExpanded = false; onCreateSmartAlbum() })
+                        PremiumDropdownMenuItem(text = { Text("Manage smart albums") },
+                            leadingIcon = { Icon(Icons.Filled.Settings, null) },
+                            onClick = { overflowExpanded = false; showSmartAlbums = true })
                     }
                 }
             }
@@ -938,6 +943,40 @@ fun AlbumsScreen(
         )
     }
 
+    if (showSortDialog) com.example.nativegallery.ui.components.GallerySortSheet(
+        title = "Sort albums", selectedKey = arrangementState.sortMode.name,
+        choices = com.example.nativegallery.data.AlbumSortMode.entries.map { mode ->
+            com.example.nativegallery.ui.components.GallerySortChoice(mode.name, mode.label, when (mode) {
+                com.example.nativegallery.data.AlbumSortMode.Custom -> "Your saved arrangement"
+                com.example.nativegallery.data.AlbumSortMode.NameAscending -> "Alphabetical, from A to Z"
+                com.example.nativegallery.data.AlbumSortMode.NameDescending -> "Reverse alphabetical, from Z to A"
+                com.example.nativegallery.data.AlbumSortMode.Newest -> "Albums with the newest media first"
+                com.example.nativegallery.data.AlbumSortMode.Oldest -> "Albums updated least recently first"
+                com.example.nativegallery.data.AlbumSortMode.MostItems -> "Largest collections first"
+                com.example.nativegallery.data.AlbumSortMode.FewestItems -> "Smallest collections first"
+            })
+        }, onSelect = { key ->
+            arrangementState = arrangementRepository.save(arrangementState.copy(
+                sortMode = com.example.nativegallery.data.AlbumSortMode.valueOf(key)))
+        }, onDismiss = { showSortDialog = false })
+
+    if (showSmartAlbums) AlertDialog(
+        onDismissRequest = { showSmartAlbums = false }, title = { Text("Smart albums") },
+        text = {
+            Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Saved filters that update automatically. Removing one keeps all original photos and videos.")
+                if (smartAlbums.isEmpty()) Text("No smart albums yet.")
+                smartAlbums.forEach { album ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(album.name, Modifier.weight(1f))
+                        IconButton(onClick = { pendingDeleteAlbum = album }) {
+                            Icon(Icons.Filled.Delete, "Remove smart album ${album.name}")
+                        }
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = { showSmartAlbums = false }) { Text("Done") } })
+
     pendingDeleteAlbum?.let { album ->
         AlertDialog(
             onDismissRequest = { pendingDeleteAlbum = null },
@@ -953,7 +992,7 @@ fun AlbumsScreen(
                         pendingDeleteAlbum = null
                         onDeleteAlbum(album)
                     }
-                ) { Text("Delete") }
+                ) { Text(if (album.isSmart) "Remove" else "Delete") }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteAlbum = null }) { Text("Cancel") }
@@ -1089,31 +1128,20 @@ private fun RecentlyDeletedPill(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(76.dp)
+            .height(80.dp)
             .bouncyClickable(onClick = onClick),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.46f),
-        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
         shadowElevation = 0.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp),
+            modifier = Modifier.padding(horizontal = 20.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                modifier = Modifier.size(46.dp),
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.11f),
-                shape = RoundedCornerShape(15.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Filled.Delete,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-            Spacer(Modifier.width(13.dp))
+            Icon(Icons.Filled.Delete, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(25.dp))
+            Spacer(Modifier.width(18.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Recently deleted",
@@ -1125,7 +1153,7 @@ private fun RecentlyDeletedPill(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Review items before they are removed",
+                    text = "Restore or permanently delete · 30 days",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
@@ -2060,6 +2088,7 @@ private fun AlbumDetailHeader(
 ) {
     val hapticFeedback = LocalHapticFeedback.current
     var menuExpanded by rememberSaveable { mutableStateOf(false) }
+    var showMediaSort by rememberSaveable { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxWidth()) {
         GalleryScreenHeader(
@@ -2091,13 +2120,8 @@ private fun AlbumDetailHeader(
                         trailingIcon = { Icon(Icons.Filled.ExpandMore, contentDescription = null) },
                         onClick = {
                             hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onSortModeChange(
-                                when (sortMode) {
-                                    AlbumDetailSortMode.Newest -> AlbumDetailSortMode.Oldest
-                                    AlbumDetailSortMode.Oldest -> AlbumDetailSortMode.Name
-                                    AlbumDetailSortMode.Name -> AlbumDetailSortMode.Newest
-                                }
-                            )
+                            menuExpanded = false
+                            showMediaSort = true
                         }
                     )
                     PremiumDropdownMenuItem(
@@ -2135,6 +2159,16 @@ private fun AlbumDetailHeader(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+    if (showMediaSort) com.example.nativegallery.ui.components.GallerySortSheet(
+        title = "Sort photos and videos", selectedKey = sortMode.name,
+        choices = AlbumDetailSortMode.entries.map { mode ->
+            com.example.nativegallery.ui.components.GallerySortChoice(mode.name, mode.label(), when (mode) {
+                AlbumDetailSortMode.Newest -> "Most recent photos and videos first"
+                AlbumDetailSortMode.Oldest -> "Start with the earliest memories"
+                AlbumDetailSortMode.Name -> "Arrange filenames alphabetically"
+            })
+        }, onSelect = { onSortModeChange(AlbumDetailSortMode.valueOf(it)) },
+        onDismiss = { showMediaSort = false })
 }
 
 
@@ -2804,7 +2838,7 @@ private fun AlbumContextMenu(
                 }
             )
             PremiumDropdownMenuItem(
-                text = { Text("Delete album") },
+                text = { Text(if (album.isSmart) "Remove smart album" else "Delete album") },
                 leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
                 enabled = interaction.canDelete(album),
                 onClick = { interaction.onDeleteRequest(album) }
@@ -2824,20 +2858,20 @@ private fun Modifier.albumReorderGesture(
         detectDragGesturesAfterLongPress(
             onDragStart = {
                 hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                if (latestInteraction.enabled) {
+                if (latestInteraction.enabled && !album.isSmart) {
                     latestInteraction.onDragStart(album)
                 } else {
                     latestInteraction.onContextMenuRequest(album)
                 }
             },
             onDragEnd = {
-                if (latestInteraction.enabled) latestInteraction.onDragEnd(true)
+                if (latestInteraction.enabled && !album.isSmart) latestInteraction.onDragEnd(true)
             },
             onDragCancel = {
-                if (latestInteraction.enabled) latestInteraction.onDragEnd(false)
+                if (latestInteraction.enabled && !album.isSmart) latestInteraction.onDragEnd(false)
             },
             onDrag = { change, dragAmount ->
-                if (latestInteraction.enabled) {
+                if (latestInteraction.enabled && !album.isSmart) {
                     change.consume()
                     latestInteraction.onDrag(dragAmount)
                 }

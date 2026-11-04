@@ -238,6 +238,7 @@ fun RecentlyDeletedScreen(
                 ) {
                     GalleryScreenHeader(
                         title = "Recently deleted",
+                        subtitle = "%1$,d items · Kept for 30 days".format(deletedItems.size),
                         onBack = onBack,
                         leadingIcon = Icons.AutoMirrored.Filled.ArrowBack,
                         leadingContentDescription = "Back",
@@ -254,17 +255,18 @@ fun RecentlyDeletedScreen(
                     )
                     Column(Modifier.graphicsLayer { alpha = if (isSelectionMode) 0f else 1f }) {
                         Spacer(Modifier.height(12.dp))
+                        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = RoundedCornerShape(16.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(Icons.Filled.Restore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(
-                            text = "Photos and videos are permanently removed after 30 days.",
+                            text = "Restore items to your library, or delete them permanently. Items expire after 30 days.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            text = "%1$,d items".format(deletedItems.size),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        }
+                        }
                     }
                     Spacer(Modifier.height(18.dp))
                 }
@@ -276,12 +278,14 @@ fun RecentlyDeletedScreen(
                     span = { GridItemSpan(maxLineSpan) },
                     contentType = "recently-deleted-empty"
                 ) {
-                    Text(
-                        text = "Nothing deleted yet",
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 28.dp),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 64.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(Icons.Filled.DeleteForever, null, Modifier.size(44.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Recently deleted is empty", style = MaterialTheme.typography.titleMedium)
+                        Text("Photos and videos you delete will appear here for 30 days.",
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    }
                 }
             } else {
                 items(

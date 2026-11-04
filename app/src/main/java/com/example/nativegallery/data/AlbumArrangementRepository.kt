@@ -4,7 +4,8 @@ import android.content.Context
 
 data class AlbumArrangementState(
     val orderIds: List<String> = emptyList(),
-    val pinnedAlbumId: String? = null
+    val pinnedAlbumId: String? = null,
+    val sortMode: AlbumSortMode = AlbumSortMode.Custom
 )
 
 /**
@@ -141,13 +142,15 @@ class AlbumArrangementRepository(context: Context) {
 
     fun load(): AlbumArrangementState = AlbumArrangementState(
         orderIds = AlbumOrderCodec.decode(preferences.getString(OrderKey, null)),
-        pinnedAlbumId = preferences.getString(PinnedAlbumKey, null)
+        pinnedAlbumId = preferences.getString(PinnedAlbumKey, null),
+        sortMode = AlbumSortMode.entries.firstOrNull { it.name == preferences.getString("sort_mode", null) } ?: AlbumSortMode.Custom
     )
 
     fun save(state: AlbumArrangementState): AlbumArrangementState {
         preferences.edit()
             .putString(OrderKey, AlbumOrderCodec.encode(state.orderIds))
             .putString(PinnedAlbumKey, state.pinnedAlbumId)
+            .putString("sort_mode", state.sortMode.name)
             .apply()
         return state
     }

@@ -128,6 +128,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -398,7 +399,10 @@ fun GalleryApp(
         }
     )
     val mediaUiState by mediaViewModel.uiState.collectAsStateWithLifecycle()
-    val navigationViewModel: GalleryNavigationViewModel = viewModel()
+    val navigationRepository = remember(context) { GalleryNavigationRepository(context) }
+    val navigationViewModel: GalleryNavigationViewModel = viewModel(
+        factory = remember(navigationRepository) { GalleryNavigationViewModelFactory(navigationRepository) }
+    )
     val navigationUiState by navigationViewModel.uiState.collectAsStateWithLifecycle()
     val viewerSessionViewModel: GalleryViewerSessionViewModel = viewModel()
     val retainedViewerSession = remember(viewerSessionViewModel) { viewerSessionViewModel.session }
@@ -564,6 +568,13 @@ fun GalleryApp(
     val photosListState = rememberLazyListState()
     val albumsListState = rememberLazyListState()
     val albumDetailListState = rememberLazyListState()
+    val gridScrolling = remember {
+        derivedStateOf {
+            photosListState.isScrollInProgress || albumsListState.isScrollInProgress ||
+                albumDetailListState.isScrollInProgress || mainPagerState.isScrollInProgress ||
+                anyTransitionActive || viewerVisible
+        }
+    }
     val analysisLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     val analysisLifecycleState by analysisLifecycle.currentStateFlow.collectAsStateWithLifecycle()
     LaunchedEffect(anyTransitionActive, viewerVisible, destination, selectedTab, analysisLifecycleState, mainPagerState, photosListState, albumsListState, albumDetailListState) {
@@ -588,8 +599,6 @@ fun GalleryApp(
         }
     }
     var bottomNavigationVisible by rememberSaveable { mutableStateOf(true) }
-    val predictiveBackProgress = remember { Animatable(0f) }
-    var predictiveBackSwipeEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_LEFT) }
     var predictiveBackGestureAction by remember { mutableStateOf<GalleryBackAction?>(null) }
 
     LaunchedEffect(settings.gridDensity) {
@@ -877,7 +886,8 @@ fun GalleryApp(
             delay(60_000)
         }
     }
-    val visibleMediaByAlbum = remember(visibleMedia, smartAlbumMedia, peopleMedia) { visibleMedia.groupBy { it.albumId } + smartAlbumMedia + peopleMedia }
+    val folderMedia = remember(visibleMedia) { visibleMedia.groupBy { it.albumId } }
+    val visibleMediaByAlbum = remember(folderMedia, smartAlbumMedia, peopleMedia) { folderMedia + smartAlbumMedia + peopleMedia }
     val favoriteMedia = remember(visibleMedia, favoriteMediaIds) {
         visibleMedia.filter { favoriteMediaIds.contains(it.id) }
     }
@@ -2555,15 +2565,10 @@ fun GalleryApp(
             GalleryBackAction.System,
             GalleryBackAction.BlockTransition -> Unit
             GalleryBackAction.CloseViewer -> {
-                val progress = predictiveBackProgress.value.coerceIn(0f, 1f)
-                val direction = if (predictiveBackSwipeEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
                 closeViewer(
-                    startOffset = Offset(
-                        x = direction * context.resources.displayMetrics.density * 24f * progress,
-                        y = 0f
-                    ),
-                    startScale = 1f - 0.04f * progress,
-                    startBackdropAlpha = 1f - 0.22f * progress
+                    startOffset = Offset.Zero,
+                    startScale = 1f,
+                    startBackdropAlpha = 1f
                 )
             }
             GalleryBackAction.CancelAlbumOpen -> {
@@ -2614,7 +2619,6 @@ fun GalleryApp(
             return@LaunchedEffect
         }
         if (gestureAction != null && gestureAction != backAction) {
-            predictiveBackProgress.animateTo(0f, tween(90))
             predictiveBackGestureAction = null
         }
     }
@@ -2624,18 +2628,14 @@ fun GalleryApp(
         predictiveBackGestureAction = actionAtStart
         if (actionAtStart == GalleryBackAction.BlockTransition) {
             progressFlow.collect()
-            predictiveBackProgress.snapTo(0f)
             predictiveBackGestureAction = null
             return@PredictiveBackHandler
         }
         try {
-            progressFlow.collect { event ->
-                predictiveBackSwipeEdge = event.swipeEdge
-                predictiveBackProgress.snapTo(event.progress.coerceIn(0f, 1f))
-            }
+            // The media stays still during the gesture; navigate only after it commits.
+            progressFlow.collect()
             performGalleryBack(actionAtStart)
         } catch (cancellation: CancellationException) {
-            predictiveBackProgress.animateTo(0f, tween(130))
             predictiveBackGestureAction = null
             throw cancellation
         }
@@ -2716,7 +2716,8 @@ fun GalleryApp(
 
         androidx.compose.runtime.CompositionLocalProvider(
             LocalDepartingMediaIds provides (animatedVisibleMedia.departing + animatedAlbumMedia.departing),
-            LocalAlbumTransitionSources provides albumTransitionSources
+            LocalAlbumTransitionSources provides albumTransitionSources,
+            com.example.nativegallery.ui.components.LocalGridScrolling provides gridScrolling
         ) {
         SharedTransitionLayout(
             modifier = Modifier
@@ -2830,6 +2831,8 @@ fun GalleryApp(
                                     Box(
                                         modifier = Modifier.fillMaxSize()
                                     ) {
+                                        CompositionLocalProvider(LocalGridPrefetchEnabled provides
+                                            (destination == GalleryDestination.Main && selectedTab == tab && !viewerVisible)) {
                                         when (tab) {
                                             GalleryTab.Photos -> PhotosScreen(
                                                 mediaItems = searchedVisibleMedia,
@@ -2909,6 +2912,7 @@ fun GalleryApp(
                                                 onOpenRecentlyDeleted = ::openRecentlyDeleted,
                                                 onCreateAlbum = ::startAlbumCreator,
                                                 onCreateSmartAlbum = { createSmartAlbumVisible = true },
+                                                smartAlbums = allSmartAlbums,
                                                 peopleContent = if (peopleState.enabled) {
                                                     {
                                                         PeopleSection(peopleState, peopleGroups, ::startAlbumOpen,
@@ -2974,6 +2978,7 @@ fun GalleryApp(
                                                 onOpenSettings = { showSettingsDialog = true },
                                                 onOpenCleanup = ::openCleanup
                                             )
+                                        }
                                         }
                                     }
                                 }
@@ -3378,17 +3383,7 @@ fun GalleryApp(
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = this,
                     sharedBoundsTransform = GalleryMediaBoundsTransform,
-                    sharedElementKeyPrefix = viewerSharedElementKeyPrefix,
-                    predictiveBackProgressProvider = {
-                        if (predictiveBackGestureAction == GalleryBackAction.CloseViewer) {
-                            predictiveBackProgress.value
-                        } else {
-                            0f
-                        }
-                    },
-                    predictiveBackDirectionProvider = {
-                        if (predictiveBackSwipeEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
-                    }
+                    sharedElementKeyPrefix = viewerSharedElementKeyPrefix
                 )
             }
 
@@ -4063,7 +4058,9 @@ private fun SettingsSwitchRow(
         modifier = Modifier
             .fillMaxWidth()
             .semantics(mergeDescendants = true) { }
-            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+            .toggleable(value = checked, role = Role.Switch,
+                interactionSource = remember { MutableInteractionSource() }, indication = null,
+                onValueChange = onCheckedChange)
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

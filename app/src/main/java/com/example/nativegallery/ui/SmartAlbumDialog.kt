@@ -16,9 +16,10 @@ internal fun SmartAlbumDialog(onDismiss: () -> Unit, onCreate: (SmartAlbumRule) 
     var days by remember { mutableIntStateOf(0) }
     var text by remember { mutableStateOf("") }
     var favorites by remember { mutableStateOf(false) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Save album filters") }, text = {
+    val hasFilter = type != "All" || days > 0 || text.isNotBlank() || favorites
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("New smart album") }, text = {
         Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Optional: save filters as a smart album. Matching photos appear automatically. Normal albums and your folders work without this.")
+            Text("A smart album is a saved search. For example: videos from the last 30 days, or favorites in your Camera folder. Matching items appear automatically; originals stay in their folders.")
             OutlinedTextField(name, { name = it.take(60) }, label = { Text("Album name") }, singleLine = true)
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 listOf("All", "Photos", "Videos").forEach { value -> FilterChip(type == value, { type = value }, { Text(value) }) }
@@ -29,7 +30,8 @@ internal fun SmartAlbumDialog(onDismiss: () -> Unit, onCreate: (SmartAlbumRule) 
             }
             OutlinedTextField(text, { text = it.take(100) }, label = { Text("Filename or folder contains") }, singleLine = true)
             Row { Checkbox(favorites, { favorites = it }); Text("Favorites only", Modifier.padding(top = 12.dp)) }
+            if (!hasFilter) Text("Choose at least one filter.", style = MaterialTheme.typography.bodySmall)
         }
-    }, confirmButton = { TextButton(onClick = { onCreate(SmartAlbumRule(name = name.trim(), mediaType = type, pastDays = days, text = text.trim(), favoritesOnly = favorites)) }, enabled = name.isNotBlank()) { Text("Create") } },
+    }, confirmButton = { TextButton(onClick = { onCreate(SmartAlbumRule(name = name.trim(), mediaType = type, pastDays = days, text = text.trim(), favoritesOnly = favorites)) }, enabled = name.isNotBlank() && hasFilter) { Text("Save smart album") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }

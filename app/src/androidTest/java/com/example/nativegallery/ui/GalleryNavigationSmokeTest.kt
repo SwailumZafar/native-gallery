@@ -1,6 +1,8 @@
 package com.example.nativegallery.ui
 
 import android.content.Context
+import android.content.Intent
+import androidx.test.filters.SdkSuppress
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasClickAction
@@ -29,6 +31,22 @@ import org.junit.runners.model.Statement
 
 @RunWith(AndroidJUnit4::class)
 class GalleryNavigationSmokeTest {
+    @org.junit.Before fun keepTestWindowAwake() = TestScreenAwake.enable()
+    @Test
+    @SdkSuppress(minSdkVersion = 31)
+    fun albumsSurvivesRootBackAndLauncherReturn() {
+        waitForPhotoHeader()
+        composeRule.onNodeWithContentDescription("Albums").performClick()
+        composeRule.waitForText("Search albums")
+        composeRule.runOnIdle { composeRule.activity.onBackPressedDispatcher.onBackPressed() }
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val launch = requireNotNull(context.packageManager.getLaunchIntentForPackage(context.packageName))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        context.startActivity(launch)
+        composeRule.waitForText("Search albums")
+        composeRule.onNodeWithContentDescription("Albums").onParent().assertIsSelected()
+        composeRule.onNodeWithText("Search albums").assertIsDisplayed()
+    }
 
     private val composeRule = createAndroidComposeRule<MainActivity>()
 
@@ -121,11 +139,22 @@ class GalleryNavigationSmokeTest {
                         Context.MODE_PRIVATE
                     )
                     val wasHandled = preferences.getBoolean(InitialPromptHandled, false)
+                    val navigation = context.getSharedPreferences("photo_lane_navigation", Context.MODE_PRIVATE)
+                    val previousNavigation = navigation.all.toMap()
+                    navigation.edit().clear().commit()
                     preferences.edit().putBoolean(InitialPromptHandled, true).commit()
                     try {
                         base.evaluate()
                     } finally {
                         preferences.edit().putBoolean(InitialPromptHandled, wasHandled).commit()
+                        val restore = navigation.edit().clear()
+                        previousNavigation.forEach { (key, value) ->
+                            when (value) {
+                                is String -> restore.putString(key, value)
+                                is Boolean -> restore.putBoolean(key, value)
+                            }
+                        }
+                        restore.commit()
                     }
                 }
             }

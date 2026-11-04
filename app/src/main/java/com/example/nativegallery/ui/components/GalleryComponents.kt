@@ -753,7 +753,7 @@ fun GalleryImage(
                                 scale(scale, scale, pivot = Offset.Zero)
                             }) {
                                 drawImage(image, colorFilter = colorFilter,
-                                    filterQuality = if (sharpenThumbnail) androidx.compose.ui.graphics.FilterQuality.High
+                                    filterQuality = if (sharpenThumbnail) androidx.compose.ui.graphics.FilterQuality.Medium
                                         else androidx.compose.ui.graphics.FilterQuality.Low)
                             }
                         }
@@ -763,7 +763,7 @@ fun GalleryImage(
                         bitmap = image,
                         contentDescription = contentDescription,
                         contentScale = if (imageState.loadComplete) contentScale else previewContentScale ?: contentScale,
-                        filterQuality = if (sharpenThumbnail) androidx.compose.ui.graphics.FilterQuality.High
+                        filterQuality = if (sharpenThumbnail) androidx.compose.ui.graphics.FilterQuality.Medium
                             else androidx.compose.ui.graphics.FilterQuality.Low,
                         modifier = Modifier.fillMaxSize(),
                         colorFilter = colorFilter
@@ -1002,7 +1002,11 @@ suspend fun prefetchMediaThumbnails(
 
     GalleryPerformanceMonitor.traceSuspend("Thumbnail prefetch ${mediaItems.size} items") {
         coroutineScope {
-            requests.map { request ->
+            // Bound queued work as well as active decodes. Large batches otherwise leave
+            // dozens of cancelled requests contending with the newly visible grid.
+            requests.groupBy { it.isVideo }.values.map { pipeline -> async {
+            pipeline.chunked(if (pipeline.first().isVideo) 1 else 2).forEach { batch ->
+            batch.map { request ->
                 async {
                     // A slow/paused video codec must never occupy both photo-prefetch slots.
                     val semaphore = if (request.isVideo) videoPrefetchSemaphore else thumbnailPrefetchSemaphore
@@ -1038,6 +1042,8 @@ suspend fun prefetchMediaThumbnails(
                     }
                 }
             }.awaitAll()
+            }
+            } }.awaitAll()
         }
     }
 }

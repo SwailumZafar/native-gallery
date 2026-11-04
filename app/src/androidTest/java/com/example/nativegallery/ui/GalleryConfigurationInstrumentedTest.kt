@@ -25,6 +25,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
@@ -45,6 +46,7 @@ import org.junit.runners.model.Statement
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.Q)
 class GalleryConfigurationInstrumentedTest {
+    @org.junit.Before fun keepTestWindowAwake() = TestScreenAwake.enable()
 
     private val fixtureRule = AppOwnedPhotoFixtureRule()
     private val composeRule = createAndroidComposeRule<MainActivity>()
@@ -153,6 +155,27 @@ class GalleryConfigurationInstrumentedTest {
             composeRule.onAllNodesWithTag(AlbumTransitionOverlayTestTag).fetchSemanticsNodes().isEmpty()
         )
         composeRule.onNodeWithText("Search albums").assertIsDisplayed()
+    }
+
+    @Test
+    fun openedAlbumSurvivesBackgroundAndRecreation() {
+        composeRule.onNodeWithContentDescription("Albums").performClick()
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithText("Search albums").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithText("Search albums").performTextInput(FixtureAlbumName)
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithContentDescription(FixtureAlbumName).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription(FixtureAlbumName).performClick()
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithContentDescription("Back").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        composeRule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        composeRule.activityRule.scenario.recreate()
+        composeRule.onNodeWithContentDescription("Back").assertIsDisplayed()
+        composeRule.onNodeWithText(FixtureAlbumName).assertIsDisplayed()
     }
     private class AppOwnedPhotoFixtureRule : TestRule {
         lateinit var displayName: String

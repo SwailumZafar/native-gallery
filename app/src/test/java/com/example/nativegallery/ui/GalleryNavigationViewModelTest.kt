@@ -6,6 +6,35 @@ import org.junit.Test
 import androidx.lifecycle.SavedStateHandle
 
 class GalleryNavigationViewModelTest {
+    @Test fun oldTaskBundleCannotOverwriteTheLatestBrowsingPage() {
+        val oldState = SavedStateHandle()
+        GalleryNavigationViewModel(oldState).openTab(GalleryTab.Photos)
+        val latest = GalleryLocation(GalleryDestination.AlbumDetail, GalleryTab.Albums, "camera")
+        val restored = GalleryNavigationViewModel(oldState, fallbackLocation = latest)
+        assertEquals(latest, restored.uiState.value.location())
+    }
+    @Test fun absentActivityBundleRestoresTheLastAlbum() {
+        var persisted: GalleryLocation? = null
+        val original = GalleryNavigationViewModel(persistLocation = { persisted = it })
+        original.openTab(GalleryTab.Albums)
+        original.selectAlbumForOpening("camera")
+        original.showAlbumDetail()
+        val recreated = GalleryNavigationViewModel(fallbackLocation = persisted)
+        assertEquals(GalleryDestination.AlbumDetail, recreated.uiState.value.destination)
+        assertEquals(GalleryTab.Albums, recreated.uiState.value.selectedTab)
+        assertEquals("camera", recreated.uiState.value.selectedAlbumId)
+    }
+
+    @Test fun closingAnAlbumRetainsAlbumsWhenTheTaskIsRelaunched() {
+        var persisted: GalleryLocation? = null
+        val original = GalleryNavigationViewModel(persistLocation = { persisted = it })
+        original.selectAlbumForOpening("camera")
+        original.showAlbumDetail()
+        original.closeAlbumDetail()
+        val recreated = GalleryNavigationViewModel(fallbackLocation = persisted)
+        assertEquals(GalleryDestination.Main, recreated.uiState.value.destination)
+        assertEquals(GalleryTab.Albums, recreated.uiState.value.selectedTab)
+    }
     @Test
     fun processRecreationRestoresAlbumAndOverlayReturnLocation() {
         val savedState = SavedStateHandle()

@@ -32,6 +32,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class GallerySettingsSheetTest {
+    @org.junit.Before fun keepTestWindowAwake() = TestScreenAwake.enable()
     @get:Rule val composeRule = createComposeRule()
 
     @Test fun peopleCanBeEnabledAndDisabledFromSettings() {

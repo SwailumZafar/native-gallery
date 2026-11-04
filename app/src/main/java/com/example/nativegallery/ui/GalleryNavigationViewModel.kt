@@ -60,12 +60,19 @@ internal data class GalleryNavigationUiState(
 }
 
 internal class GalleryNavigationViewModel(
-    private val savedState: SavedStateHandle = SavedStateHandle()
+    private val savedState: SavedStateHandle = SavedStateHandle(),
+    fallbackLocation: GalleryLocation? = null,
+    private val persistLocation: (GalleryLocation) -> Unit = {}
 ) : ViewModel() {
     private var overlayReturnLocation = restoreLocation("overlay")
     private var editorReturnLocation = restoreLocation("editor")
     private val _uiState = MutableStateFlow(
-        (restoreLocation("current") ?: GalleryNavigationUiState().location()).let { location ->
+        restoreLocation("current").let { restored ->
+            // Some OEMs return an older task Bundle. The persisted browsing page is newer.
+            if (restored == null || restored.destination == GalleryDestination.Main || restored.destination == GalleryDestination.AlbumDetail) {
+                fallbackLocation ?: restored ?: GalleryNavigationUiState().location()
+            } else restored
+        }.let { location ->
             // The editor's working bitmap is intentionally memory-only. Recover its source page.
             if (location.destination == GalleryDestination.PhotoEditor) {
                 editorReturnLocation ?: GalleryNavigationUiState().location()
@@ -77,6 +84,7 @@ internal class GalleryNavigationViewModel(
     private fun updateState(transform: (GalleryNavigationUiState) -> GalleryNavigationUiState) {
         _uiState.value = transform(_uiState.value)
         saveLocation("current", _uiState.value.location())
+        persistLocation(_uiState.value.location())
     }
 
     fun openTab(tab: GalleryTab) {

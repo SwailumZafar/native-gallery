@@ -21,6 +21,7 @@ import org.junit.runner.RunWith
 @OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 @RunWith(AndroidJUnit4::class)
 class RepeatedVideoPlaybackTest {
+    @org.junit.Before fun keepTestWindowAwake() = TestScreenAwake.enable()
     @get:Rule val composeRule = createComposeRule()
 
     @Test fun videoStartsAndAdvancesAcrossRepeatedReopens() {

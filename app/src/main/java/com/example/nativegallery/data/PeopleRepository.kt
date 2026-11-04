@@ -67,6 +67,7 @@ class PeopleRepository(context: Context) {
     private val context = context.applicationContext
     private val directory = File(this.context.noBackupFilesDir, "people-v1").apply { mkdirs() }
     private val index = AtomicFile(File(directory, "index.json"))
+    private val groupCache = AtomicFile(File(directory, "groups.json"))
     private val mutex = Mutex()
     private val database by lazy { PeopleDatabase(context, File(directory, "index.db").absolutePath) }
     private val preferences = this.context.getSharedPreferences("people", Context.MODE_PRIVATE)
@@ -76,11 +77,46 @@ class PeopleRepository(context: Context) {
 
     suspend fun clear() = mutex.withLock { withContext(Dispatchers.IO) {
         index.delete()
+        groupCache.delete()
         database.writableDatabase.delete("photos", null, null)
         directory.listFiles()?.filter { it.extension == "jpg" }?.forEach { it.delete() }
     } }
 
+    /** Browsing reads a small membership cache, without loading embeddings or running inference. */
+    suspend fun cachedGroups(media: List<MediaItem>): List<PersonGroup> = mutex.withLock { withContext(Dispatchers.IO) {
+        val byId = media.associateBy { it.id }
+        runCatching {
+            val groups = JSONArray(groupCache.openRead().bufferedReader().use { it.readText() })
+            (0 until groups.length()).mapNotNull { position ->
+                val group = groups.getJSONObject(position)
+                val cover = group.getString("cover")
+                if (File(cover).name != cover || !cover.endsWith(".jpg")) return@mapNotNull null
+                val entries = group.getJSONArray("photos")
+                val photos = (0 until entries.length()).mapNotNull { i ->
+                    val entry = entries.getJSONObject(i)
+                    byId[entry.getString("id")]?.takeIf { fingerprint(it) == entry.getString("revision") }
+                }
+                // A removed/hidden cover must never survive in the face row.
+                if (photos.isEmpty() || photos.size != entries.length() || !File(directory, cover).isFile) null
+                else PersonGroup(group.getString("id"), Uri.fromFile(File(directory, cover)), photos)
+            }
+        }.getOrDefault(emptyList())
+    } }
+
+    private fun saveGroups(groups: List<PersonGroup>) {
+        val json = JSONArray()
+        groups.forEach { group ->
+            val photos = JSONArray()
+            group.photos.forEach { photos.put(JSONObject().put("id", it.id).put("revision", fingerprint(it))) }
+            json.put(JSONObject().put("id", group.id).put("cover", File(requireNotNull(group.thumbnail.path)).name).put("photos", photos))
+        }
+        val stream = groupCache.startWrite()
+        try { stream.write(json.toString().toByteArray(Charsets.UTF_8)); groupCache.finishWrite(stream) }
+        catch (error: Exception) { groupCache.failWrite(stream); throw error }
+    }
+
     suspend fun scan(media: List<MediaItem>, progress: (List<PersonGroup>, Int, Int) -> Unit) = mutex.withLock { withContext(PhotoAnalysisWork.dispatcher) {
+        PhotoAnalysisWork.awaitPeopleAllowed()
         val photos = media.filter { !it.isVideo && it.contentUri != null }.distinctBy { it.id }
             .sortedByDescending { it.sortTimestampMillis }
         val records = load().toMutableMap()
@@ -89,12 +125,17 @@ class PeopleRepository(context: Context) {
         database.remove(obsolete)
         records.keys.removeAll(obsolete)
         prune(records)
-        val groupIndex = Groups(photos, records)
+        val groupIndex = Groups(photos)
+        records.entries.forEachIndexed { position, (id, record) ->
+            if (position % 8 == 0) PhotoAnalysisWork.awaitPeopleAllowed()
+            byId[id]?.let { groupIndex.add(it, record.faces) }
+        }
+        saveGroups(groupIndex.snapshot())
         progress(groupIndex.snapshot(), records.size, photos.size)
         if (records.size == photos.size) return@withContext
         PhotoAnalysisWork.awaitPeopleAllowed()
         check(OpenCVLoader.initLocal()) { "Face recognition could not start." }
-        Core.setNumThreads(2)
+        Core.setNumThreads(1)
         fun model(name: String): String {
             val file = File(directory, name)
             if (!file.exists()) {
@@ -176,7 +217,7 @@ class PeopleRepository(context: Context) {
                         }
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastPublished >= 1500L || (lastGroups.isEmpty() && groupsChanged)) {
-                            PhotoAnalysisWork.awaitPeopleAllowed()
+                            if (records.size + failed < photos.size) PhotoAnalysisWork.awaitPeopleAllowed()
                             if (groupsChanged) { lastGroups = groupIndex.snapshot(); groupsChanged = false }
                             progress(lastGroups, records.size + failed, photos.size)
                             lastPublished = now
@@ -186,10 +227,9 @@ class PeopleRepository(context: Context) {
             }
         } finally {
             // Preserve completed work even when a library refresh cancels the remaining scan.
-            withContext(NonCancellable) { database.upsert(changed) }
+            withContext(NonCancellable) { database.upsert(changed); saveGroups(groupIndex.snapshot()) }
         }
         prune(records)
-        PhotoAnalysisWork.awaitPeopleAllowed()
         progress(groupIndex.snapshot(), photos.size, photos.size)
         if (failed > 0) error("$failed photos could not be scanned. Tap Scan to retry.")
     } }
@@ -224,13 +264,10 @@ class PeopleRepository(context: Context) {
         return result
     }
 
-    private inner class Groups(photos: List<MediaItem>, records: Map<String, IndexedPhoto>) {
+    private inner class Groups(photos: List<MediaItem>) {
         private val index = FaceClusterIndex()
         private val byId = photos.associateBy { it.id }
         private val cachedGroups = mutableMapOf<String, PersonGroup>()
-        init {
-            records.forEach { (id, record) -> byId[id]?.let { add(it, record.faces) } }
-        }
 
         fun add(photo: MediaItem, faces: List<IndexedFace>) {
             faces.forEach { face ->

@@ -41,9 +41,11 @@ class GalleryLogicTest {
             backAction(destination = GalleryDestination.Main, selectedTab = GalleryTab.Photos)
         )
         assertEquals(
-            GalleryBackAction.OpenPhotos,
+            GalleryBackAction.System,
             backAction(destination = GalleryDestination.Main, selectedTab = GalleryTab.Albums)
         )
+        assertEquals(GalleryBackAction.System,
+            backAction(destination = GalleryDestination.Main, selectedTab = GalleryTab.Menu))
     }
 
     @Test
