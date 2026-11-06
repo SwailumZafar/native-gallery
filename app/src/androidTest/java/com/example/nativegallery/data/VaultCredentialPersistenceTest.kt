@@ -21,6 +21,40 @@ import kotlinx.coroutines.withTimeout
 /** Isolated preferences: never changes the installed user's vault credentials or files. */
 @RunWith(AndroidJUnit4::class)
 class VaultCredentialPersistenceTest {
+    @Test fun changingMethodsPersistsAndAnInterruptedSaveCannotUnlockTheVault(): Unit = runBlocking {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        val prefix = "vault-method-fixture-${UUID.randomUUID()}-"
+        val isolated = object : ContextWrapper(base) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences = base.getSharedPreferences(prefix + name, mode)
+        }
+        val repository = HiddenSecurityRepository(isolated)
+        assertTrue(repository.setPin("123456"))
+        val model = withContext(Dispatchers.Main) { LockedMediaSecurityViewModel(repository) }
+        try {
+            withContext(Dispatchers.Main) { model.unlockWithPin("123456") }
+            withTimeout(5_000) { while (!model.uiState.value.isUnlocked) delay(10) }
+            withContext(Dispatchers.Main) { model.changeCredential(VaultCredentialKind.Pattern, "12369", "12369") }
+            withTimeout(5_000) { while (model.uiState.value.operationInProgress) delay(10) }
+            assertEquals(VaultCredentialKind.Pattern, model.uiState.value.credentialKind)
+            assertEquals(1, model.uiState.value.settingsSavedEventId)
+            assertTrue(HiddenSecurityRepository(isolated).verifyPin("12369"))
+            withContext(Dispatchers.Main) {
+                model.changeCredential(VaultCredentialKind.Password, "a private fixture password", "a private fixture password")
+                model.lock()
+            }
+            withTimeout(5_000) { while (repository.credentialKind() != VaultCredentialKind.Password) delay(10) }
+            delay(100)
+            assertFalse(model.uiState.value.isUnlocked)
+            assertFalse(model.uiState.value.deviceRecoveryVerified)
+            assertEquals(1, model.uiState.value.settingsSavedEventId)
+            assertTrue(HiddenSecurityRepository(isolated).verifyPin("a private fixture password"))
+        } finally {
+            withContext(Dispatchers.Main) { model.viewModelScope.cancel() }
+            base.getSharedPreferences(prefix + "native_gallery_hidden_security", Context.MODE_PRIVATE).edit().clear().commit()
+        }
+    }
+
     @Test fun credentialsDecoyAndEscalatingFailuresSurviveRepositoryRecreation() {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
         val prefix = "vault-credential-fixture-${UUID.randomUUID()}-"

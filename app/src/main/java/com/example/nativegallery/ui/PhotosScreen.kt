@@ -146,6 +146,7 @@ fun PhotosScreen(
     contentPadding: PaddingValues,
     mediaAccessNotice: (@Composable () -> Unit)? = null,
     isLoading: Boolean = false,
+    isActive: Boolean = true,
     searchQuery: String = "",
     gridColumns: Int = 4,
     onGridColumnsChange: (Int) -> Unit = {},
@@ -224,7 +225,7 @@ fun PhotosScreen(
     var isSearchVisible by rememberSaveable { mutableStateOf(searchQuery.isNotBlank()) }
     val isRefreshing = remember { mutableStateOf(false) }
 
-    BackHandler(enabled = isSearchVisible) {
+    BackHandler(enabled = isActive && isSearchVisible) {
         keyboardController?.hide()
         onSearchQueryChange("")
         isSearchVisible = false

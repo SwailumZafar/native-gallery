@@ -24,6 +24,53 @@ class AlbumTransitionMotionTest {
         assertNotSame(AlbumTransitionMotion(true).progress, AlbumTransitionMotion(true).progress)
     }
 
+    @Test fun freshTransitionsMovePromptlyWithoutJumpingTheirStartingBounds(): Unit = runBlocking {
+        for (opening in listOf(true, false)) {
+            val frames = Frames()
+            val motion = AlbumTransitionMotion(opening)
+            val animation = launch(frames) { motion.animateTo(opening, fast = false) }
+            yield()
+            frames.tick()
+            assertEquals(if (opening) 0f else 1f, motion.progress.value, 0f)
+            frames.tick()
+            val distance = if (opening) motion.progress.value else 1f - motion.progress.value
+            assertTrue("First advancing frame must respond visibly: $distance", distance > 0.02f)
+            animation.cancelAndJoin()
+        }
+    }
+
+    @Test fun normalModeGlidesLongerThanFastModeInBothDirections(): Unit = runBlocking {
+        for (opening in listOf(true, false)) {
+            val frames = Frames()
+            val normal = AlbumTransitionMotion(opening)
+            val fast = AlbumTransitionMotion(opening)
+            val normalJob = launch(frames) { normal.animateTo(opening, false) }
+            // Separate clocks give each animation the same elapsed time.
+            val fastFrames = Frames()
+            val fastJob = launch(fastFrames) { fast.animateTo(opening, true) }
+            repeat(10) { frames.tick(); fastFrames.tick() }
+            val normalTravel = if (opening) normal.progress.value else 1f - normal.progress.value
+            val fastTravel = if (opening) fast.progress.value else 1f - fast.progress.value
+            assertTrue(normalTravel < 0.95f)
+            assertTrue(fastTravel > 0.95f)
+            normalJob.cancelAndJoin()
+            fastJob.cancelAndJoin()
+        }
+    }
+
+    @Test fun normalOpeningUses400MillisecondsAndClosingUses280Milliseconds(): Unit = runBlocking {
+        for (opening in listOf(true, false)) {
+            val frames = Frames()
+            val motion = AlbumTransitionMotion(opening)
+            val animation = launch(frames) { motion.animateTo(opening, false) }
+            repeat(if (opening) 24 else 17) { frames.tick() }
+            assertTrue("The transition must still be settling before its requested duration", animation.isActive)
+            repeat(2) { frames.tick() }
+            withTimeout(3000) { animation.join() }
+            assertEquals(if (opening) 1f else 0f, motion.progress.value, 0f)
+        }
+    }
+
     @Test fun reversingAnOpeningKeepsItsCurrentPositionAndReturnsToTheCover(): Unit = runBlocking {
         val frames = Frames()
         val motion = AlbumTransitionMotion(true)

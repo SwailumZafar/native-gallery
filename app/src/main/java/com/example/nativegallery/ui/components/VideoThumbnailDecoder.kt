@@ -4,6 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.net.Uri
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Process
+import android.view.PixelCopy
+import android.view.Surface
 import android.view.TextureView
 import android.view.Choreographer
 import androidx.annotation.OptIn
@@ -29,6 +34,7 @@ import com.example.nativegallery.player.galleryVideoMediaSourceFactory
 import com.example.nativegallery.player.galleryVideoRenderersFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.android.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
@@ -47,12 +53,18 @@ import kotlin.math.roundToInt
 /** A last resort for containers supported by Media3 but not Android's metadata retriever. */
 @OptIn(UnstableApi::class)
 internal object VideoThumbnailDecoder {
+    private val workerThread by lazy {
+        HandlerThread("gallery-video-thumbnails", Process.THREAD_PRIORITY_BACKGROUND).apply { start() }
+    }
+    internal val applicationLooper get() = workerThread.looper
+    private val workerHandler by lazy { Handler(applicationLooper) }
+    private val workerDispatcher by lazy { workerHandler.asCoroutineDispatcher("video-thumbnails") }
     private val texture = MutableStateFlow<TextureView?>(null)
     private val foreground = MutableStateFlow(false)
     private val interactionBlocked = MutableStateFlow(true)
     private val decoderMutex = Mutex()
     private val readiness = combine(texture, foreground, interactionBlocked) { view, resumed, blocked ->
-        view?.takeIf { resumed && !blocked && it.isAvailable }
+        view?.takeIf { resumed && !blocked }
     }
 
     fun setInteractionBlocked(blocked: Boolean) { interactionBlocked.value = blocked }
@@ -60,10 +72,10 @@ internal object VideoThumbnailDecoder {
     fun attach(view: TextureView) { if (view.isAvailable) texture.value = view }
     fun detach(view: TextureView) { if (texture.value === view) texture.value = null }
 
-    suspend fun decode(context: Context, uri: Uri, maxSide: Int): Bitmap? = withContext(Dispatchers.Main.immediate) {
+    suspend fun decode(context: Context, uri: Uri, maxSide: Int): Bitmap? = withContext(workerDispatcher) {
         decoderMutex.withLock {
-            // Releasing a decoder during a transition is immediate. The same visible request
-            // waits and retries after the viewer/transition finishes instead of competing for it.
+            // Cancellation may wait for a codec release. Keep that wait on our application
+            // looper, never the UI thread that must begin the tapped album transition.
             while (true) {
                 // A held scroll/viewer can outlast a timeout. Keep the visible request pending
                 // until codecs are allowed again; disposing the tile still cancels this wait.
@@ -92,15 +104,20 @@ internal object VideoThumbnailDecoder {
     }
 
     private suspend fun render(context: Context, uri: Uri, view: TextureView, maxSide: Int): Bitmap? {
-        val player = ExoPlayer.Builder(context, galleryVideoRenderersFactory(context))
+        val surface = withContext(Dispatchers.Main.immediate) {
+            view.surfaceTexture?.takeIf { view.isAvailable }?.let(::Surface)
+        } ?: return null
+        val player = try { ExoPlayer.Builder(context, galleryVideoRenderersFactory(context))
+            .setLooper(applicationLooper)
             .setMediaSourceFactory(galleryVideoMediaSourceFactory(context))
             .build()
+        } catch (error: Throwable) { surface.release(); throw error }
         return try {
             player.volume = 0f
             player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
                 .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
                 .build()
-            player.setVideoTextureView(view)
+            player.setVideoSurface(surface)
             if (!awaitFrame(player, timeoutMs = 1_200L) {
                     player.setMediaItem(MediaItem.fromUri(uri))
                     player.playWhenReady = true
@@ -115,13 +132,13 @@ internal object VideoThumbnailDecoder {
             var bestLuminance = -1.0
             for ((index, positionUs) in (listOf(0L) + candidates).distinct().withIndex()) {
                 if (index > 0 && !awaitFrame(player) { player.seekTo(positionUs / 1_000L) }) continue
-                repeat(2) { awaitDisplayFrame() }
-                if (!view.isAvailable) break
+                withContext(Dispatchers.Main.immediate) { repeat(2) { awaitDisplayFrame() } }
+                if (!surface.isValid) break
                 val videoSize = player.videoSize
                 val width = videoSize.width.coerceAtLeast(1)
                 val height = videoSize.height.coerceAtLeast(1)
                 val scale = (maxSide.toFloat() / maxOf(width, height)).coerceAtMost(1f)
-                val frame = view.getBitmap(
+                val frame = copyFrame(surface,
                     (width * scale).roundToInt().coerceAtLeast(1),
                     (height * scale).roundToInt().coerceAtLeast(1)
                 ) ?: continue
@@ -144,10 +161,29 @@ internal object VideoThumbnailDecoder {
         } catch (_: Exception) {
             null
         } finally {
-            player.clearVideoTextureView(view)
-            player.release()
+            try {
+                player.clearVideoSurface(surface)
+                player.release()
+            } finally { surface.release() }
         }
     }
+
+    private suspend fun copyFrame(surface: Surface, width: Int, height: Int): Bitmap? =
+        suspendCancellableCoroutine { continuation ->
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            try {
+                PixelCopy.request(surface, bitmap, { result ->
+                    if (result == PixelCopy.SUCCESS && continuation.isActive) continuation.resume(bitmap)
+                    else {
+                        bitmap.recycle()
+                        if (continuation.isActive) continuation.resume(null)
+                    }
+                }, workerHandler)
+            } catch (_: IllegalArgumentException) {
+                bitmap.recycle()
+                if (continuation.isActive) continuation.resume(null)
+            }
+        }
 
     private suspend fun awaitFrame(player: ExoPlayer, timeoutMs: Long = 1_000L, action: () -> Unit): Boolean {
         var listener: Player.Listener? = null

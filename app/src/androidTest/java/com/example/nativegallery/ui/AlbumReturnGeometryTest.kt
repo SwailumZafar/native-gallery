@@ -4,6 +4,7 @@ import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -24,6 +26,8 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class AlbumReturnGeometryTest {
+    @org.junit.Before fun keepTestWindowAwake() = TestScreenAwake.enable()
+
     @get:Rule
     val composeRule = createComposeRule()
 
@@ -31,6 +35,25 @@ class AlbumReturnGeometryTest {
     private val heroVisible = mutableStateOf(false)
     private var coverBounds = Rect.Zero
     private var pageWidthPx = 0f
+
+    @Test
+    fun partlyClippedHeroKeepsItsWholeCoverBoundsForTheTransition() {
+        var fullBounds = Rect.Zero
+        var clippedBounds = Rect.Zero
+        var expectedHeight = 0f
+        composeRule.setContent {
+            expectedHeight = with(LocalDensity.current) { 200.dp.toPx() }
+            Box(Modifier.size(240.dp, 100.dp).clipToBounds()) {
+                Box(Modifier.offset(y = 60.dp).requiredSize(220.dp, 200.dp).onGloballyPositioned {
+                    fullBounds = it.albumBoundsInWindow()
+                    clippedBounds = it.boundsInWindow()
+                })
+            }
+        }
+        composeRule.waitForIdle()
+        assertEquals(expectedHeight, fullBounds.height, 0.5f)
+        org.junit.Assert.assertTrue("The fixture must really be clipped by its scroll viewport", clippedBounds.height < fullBounds.height / 2f)
+    }
 
     @Test
     fun hiddenAlbumCoversKeepTheirExactReturnBoundsAcrossHeroHandoff() {

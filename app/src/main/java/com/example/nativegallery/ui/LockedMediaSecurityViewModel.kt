@@ -34,7 +34,8 @@ internal data class LockedMediaSecurityUiState(
     val recoveryPrompt: String = "Enter your recovery phrase",
     val lockoutRemainingMillis: Long = 0L,
     val hasDecoyPin: Boolean = false,
-    val deviceRecoveryVerified: Boolean = false
+    val deviceRecoveryVerified: Boolean = false,
+    val settingsSavedEventId: Int = 0
 )
 
 internal object LockedMediaSecurityPolicy {
@@ -46,7 +47,7 @@ internal object LockedMediaSecurityPolicy {
 
     fun lockoutMessage(remainingMillis: Long): String {
         val seconds = ceil(remainingMillis.coerceAtLeast(1L) / 1000.0).toInt()
-        return "Too many wrong PIN attempts. Try again in ${seconds}s."
+        return "Too many incorrect attempts. Try again in ${seconds}s."
     }
 }
 
@@ -67,7 +68,7 @@ internal class LockedMediaSecurityViewModel(
             while (true) {
                 val remaining = (repository.pinLockoutUntilMillis() - System.currentTimeMillis()).coerceAtLeast(0)
                 _uiState.update { it.copy(lockoutRemainingMillis = remaining, requiresRecovery = repository.requiresRecovery(),
-                    authMessage = if (it.lockoutRemainingMillis > 0 && remaining == 0L && it.authMessage?.startsWith("Too many wrong") == true) null else it.authMessage) }
+                    authMessage = if (it.lockoutRemainingMillis > 0 && remaining == 0L && it.authMessage?.startsWith("Too many ") == true) null else it.authMessage) }
                 delay(1_000)
             }
         }
@@ -92,6 +93,7 @@ internal class LockedMediaSecurityViewModel(
                 if (saved) {
                     current.copy(
                         hasPin = true,
+                        credentialKind = VaultCredentialKind.Pin,
                         isUnlocked = true,
                         authMessage = null,
                         operationInProgress = false,
@@ -158,7 +160,7 @@ internal class LockedMediaSecurityViewModel(
                             authMessage = if (remaining > 0L) {
                                 LockedMediaSecurityPolicy.lockoutMessage(remaining)
                             } else {
-                                "Incorrect PIN."
+                                "Incorrect ${current.credentialKind.label()}."
                             },
                             operationInProgress = false, requiresRecovery = result.failureState.failedAttempts >= 30,
                             lockoutRemainingMillis = remaining
@@ -199,14 +201,19 @@ internal class LockedMediaSecurityViewModel(
     fun changeCredential(kind: VaultCredentialKind, secret: String, confirm: String) {
         if (!_uiState.value.isUnlocked || _uiState.value.isDecoy || _uiState.value.operationInProgress) return
         if (secret != confirm || !validVaultCredential(kind, secret)) {
-            showMessage("Credentials must match. Use 4–16 PIN digits, an 8–128 character password, or 4–9 different pattern dots.")
+            showMessage(if (secret != confirm) "${kind.label()} entries don’t match." else kind.requirements())
             return
         }
-        _uiState.update { it.copy(operationInProgress = true) }
+        val generation = ++operationGeneration
+        _uiState.update { it.copy(operationInProgress = true, authMessage = null) }
         viewModelScope.launch {
             val saved = withContext(Dispatchers.Default) { repository.setCredential(kind, secret) }
-            _uiState.update { it.copy(credentialKind = repository.credentialKind(), operationInProgress = false,
-                authMessage = if (saved) "Vault credential updated." else "Could not save the credential.") }
+            _uiState.update {
+                if (generation != operationGeneration) it.copy(credentialKind = repository.credentialKind())
+                else it.copy(credentialKind = repository.credentialKind(), operationInProgress = false,
+                    settingsSavedEventId = it.settingsSavedEventId + if (saved) 1 else 0,
+                    authMessage = if (saved) "Unlock method updated." else "Could not save this unlock method. Try a different credential.")
+            }
         }
     }
 
@@ -215,29 +222,40 @@ internal class LockedMediaSecurityViewModel(
         if (secret != confirm || secret.length !in 12..128 || prompt.isBlank()) {
             showMessage("Use a recovery prompt and a matching recovery phrase of 12–128 characters."); return
         }
-        _uiState.update { it.copy(operationInProgress = true) }
+        val generation = ++operationGeneration
+        _uiState.update { it.copy(operationInProgress = true, authMessage = null) }
         viewModelScope.launch {
             val saved = withContext(Dispatchers.Default) { repository.setRecovery(prompt, secret) }
-            _uiState.update { it.copy(hasRecovery = repository.hasRecovery(), recoveryPrompt = repository.recoveryPrompt(),
-                operationInProgress = false, authMessage = if (saved) "Recovery phrase saved." else "Could not save recovery.") }
+            _uiState.update {
+                if (generation != operationGeneration) it.copy(hasRecovery = repository.hasRecovery(), recoveryPrompt = repository.recoveryPrompt())
+                else it.copy(hasRecovery = repository.hasRecovery(), recoveryPrompt = repository.recoveryPrompt(),
+                    settingsSavedEventId = it.settingsSavedEventId + if (saved) 1 else 0,
+                    operationInProgress = false, authMessage = if (saved) "Recovery phrase saved." else "Could not save recovery.")
+            }
         }
     }
 
     fun configureDecoy(pin: String, confirm: String) {
         if (!_uiState.value.isUnlocked || _uiState.value.isDecoy || _uiState.value.operationInProgress) return
         if (pin != confirm || !HiddenSecurityRepository.isValidPin(pin)) { showMessage("Use matching 4–16 digit decoy PINs."); return }
-        _uiState.update { it.copy(operationInProgress = true) }
+        val generation = ++operationGeneration
+        _uiState.update { it.copy(operationInProgress = true, authMessage = null) }
         viewModelScope.launch {
             val saved = withContext(Dispatchers.Default) { repository.setDecoyPin(pin) }
-            _uiState.update { it.copy(hasDecoyPin = repository.hasDecoyPin(), operationInProgress = false,
-                authMessage = if (saved) "Decoy PIN saved. Select media and add it to the decoy view." else "Choose a decoy PIN different from your real credential.") }
+            _uiState.update {
+                if (generation != operationGeneration) it.copy(hasDecoyPin = repository.hasDecoyPin())
+                else it.copy(hasDecoyPin = repository.hasDecoyPin(), operationInProgress = false,
+                    settingsSavedEventId = it.settingsSavedEventId + if (saved) 1 else 0,
+                    authMessage = if (saved) "Decoy PIN saved." else "Choose a decoy PIN different from your saved unlock method.")
+            }
         }
     }
 
     fun removeDecoy() {
-        if (!_uiState.value.isUnlocked || _uiState.value.isDecoy) return
+        if (!_uiState.value.isUnlocked || _uiState.value.isDecoy || _uiState.value.operationInProgress) return
+        operationGeneration++
         repository.removeDecoyPin(); repository.clearDecoyMedia()
-        _uiState.update { it.copy(hasDecoyPin = false, authMessage = "Decoy access disabled.") }
+        _uiState.update { it.copy(hasDecoyPin = false, settingsSavedEventId = it.settingsSavedEventId + 1, authMessage = "Decoy access disabled.") }
     }
 
     fun recover(secret: String, credential: String) {

@@ -23,6 +23,38 @@ class MediaStoreGalleryRepository(
     context: Context
 ) : GalleryMediaSource {
     private val appContext = context.applicationContext
+    private val diskCache = GallerySnapshotDiskCache(java.io.File(appContext.cacheDir, "gallery_catalogue_v1"))
+    private var savedSnapshot: GallerySnapshot? = null
+    private var savedProviderRevision: String? = null
+
+    override fun loadSavedGallery(access: MediaAccessState): GallerySnapshot? = diskCache.loadCatalogue(access)?.let { saved ->
+        savedSnapshot = saved.snapshot
+        savedProviderRevision = saved.providerRevision
+        synchronized(SnapshotLock) {
+            CachedSnapshots[access.mediaKinds.toSet()] = saved.snapshot
+            if (saved.providerRevision != null) CachedProviderRevisions[access.mediaKinds.toSet()] = saved.providerRevision
+            else CachedProviderRevisions.remove(access.mediaKinds.toSet())
+            CompleteSnapshots.add(access.mediaKinds.toSet())
+        }
+        saved.snapshot
+    }
+    override fun saveGallery(access: MediaAccessState, snapshot: GallerySnapshot) {
+        synchronized(SnapshotLock) {
+            if (!access.isLimited && access.hasAccess) CompleteSnapshots.add(access.mediaKinds.toSet())
+            else CompleteSnapshots.remove(access.mediaKinds.toSet())
+        }
+        val revision = synchronized(SnapshotLock) { CachedProviderRevisions[access.mediaKinds] }
+        if (savedSnapshot != snapshot || savedProviderRevision != revision) {
+            diskCache.save(access, snapshot, revision)
+            if (!access.isLimited && access.hasAccess) {
+                savedSnapshot = snapshot
+                savedProviderRevision = revision
+            }
+        }
+    }
+    override fun hasCompleteCachedGallery(mediaKinds: Set<MediaKind>): Boolean = synchronized(SnapshotLock) {
+        mediaKinds in CompleteSnapshots
+    }
 
     override fun cachedGallery(mediaKinds: Set<MediaKind>): GallerySnapshot? {
         val cacheKey = mediaKinds.toSet()
@@ -31,20 +63,41 @@ class MediaStoreGalleryRepository(
         }
     }
 
+    override fun isCachedGalleryCurrent(mediaKinds: Set<MediaKind>): Boolean {
+        val previous = synchronized(SnapshotLock) {
+            CachedProviderRevisions[mediaKinds].takeIf { mediaKinds in CompleteSnapshots }
+        } ?: return false
+        return providerRevision() == previous
+    }
+
+    private fun providerRevision(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        return runCatching {
+            MediaStore.getExternalVolumeNames(appContext).sorted().also { require(it.isNotEmpty()) }
+                .joinToString("|") { volume ->
+                    "$volume:${MediaStore.getVersion(appContext, volume)}:${MediaStore.getGeneration(appContext, volume)}"
+                }
+        }.getOrNull()
+    }
+
     override fun loadGallery(mediaKinds: Set<MediaKind>): GallerySnapshot {
         return GalleryPerformanceMonitor.trace("MediaStore full gallery load") {
             if (mediaKinds.isEmpty()) {
                 return@trace GallerySnapshot(emptyList(), emptyList())
             }
 
+            val revisionBefore = providerRevision()
             val rawRows = queryMedia(mediaKinds)
             val rows = groupBurstRows(normalizeBurstAlbumRows(rawRows))
             val snapshot = GallerySnapshot(
                 mediaItems = rows.map { it.mediaItem },
                 albums = buildAlbums(rows)
             )
+            val revisionAfter = providerRevision()
             synchronized(SnapshotLock) {
                 val key = mediaKinds.toSet()
+                if (revisionBefore != null && revisionBefore == revisionAfter) CachedProviderRevisions[key] = revisionAfter
+                else CachedProviderRevisions.remove(key)
                 val previous = CachedSnapshots[key]
                 // Equality stays on the IO worker; an unchanged scan must not rebuild every grid.
                 if (previous == snapshot) previous!! else snapshot.also { CachedSnapshots[key] = it }
@@ -159,6 +212,7 @@ class MediaStoreGalleryRepository(
             )
         }
         synchronized(SnapshotLock) {
+            if (baseSnapshot == null) CompleteSnapshots.remove(mediaKinds.toSet())
             CachedSnapshots[mediaKinds.toSet()] = mergedSnapshot
         }
         return mergedSnapshot
@@ -532,6 +586,8 @@ class MediaStoreGalleryRepository(
         const val InitialGalleryPageSize = 72
 
         private val SnapshotLock = Any()
+        private val CompleteSnapshots = mutableSetOf<Set<MediaKind>>()
+        private val CachedProviderRevisions = mutableMapOf<Set<MediaKind>, String>()
         private val CachedSnapshots = mutableMapOf<Set<MediaKind>, GallerySnapshot>()
 
     }

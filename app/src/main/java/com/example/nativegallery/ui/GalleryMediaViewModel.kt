@@ -53,10 +53,10 @@ internal class GalleryMediaViewModel(
     private val _uiState = MutableStateFlow(
         GalleryMediaUiState(
             mediaAccess = initialAccess,
-            snapshot = initialAccess.takeIf { it.hasAccess }
+            snapshot = initialAccess.takeIf { it.hasAccess && !it.isLimited }
                 ?.let { repository.cachedGallery(it.mediaKinds) },
             trashedMedia = emptyList(),
-            initialSyncComplete = !initialAccess.hasAccess
+            initialSyncComplete = !initialAccess.hasAccess || (!initialAccess.isLimited && repository.hasCompleteCachedGallery(initialAccess.mediaKinds))
         )
     )
     val uiState: StateFlow<GalleryMediaUiState> = _uiState.asStateFlow()
@@ -74,10 +74,10 @@ internal class GalleryMediaViewModel(
         lastFullRefreshElapsedMillis = -1L
         _uiState.value = GalleryMediaUiState(
             mediaAccess = access,
-            snapshot = access.takeIf { it.hasAccess }
+            snapshot = access.takeIf { it.hasAccess && !it.isLimited }
                 ?.let { repository.cachedGallery(it.mediaKinds) },
             trashedMedia = emptyList(),
-            initialSyncComplete = !access.hasAccess
+            initialSyncComplete = !access.hasAccess || (!access.isLimited && repository.hasCompleteCachedGallery(access.mediaKinds))
         )
         requestFullRefresh()
     }
@@ -107,9 +107,19 @@ internal class GalleryMediaViewModel(
         scheduledRefresh = viewModelScope.launch {
             do {
                 observerRefreshPending = false
+                if (!_uiState.value.initialSyncComplete && !access.isLimited) {
+                    val revision = mutationGate.revision
+                    val saved = withContext(Dispatchers.IO) { repository.loadSavedGallery(access) }
+                    if (saved != null && isCurrentAccess(access) && mutationGate.canPublish(revision)) {
+                        _uiState.update { it.copy(snapshot = saved, initialSyncComplete = true) }
+                    }
+                }
                 val presentingFromCache = _uiState.value.snapshot != null
                 if (presentingFromCache) delay(160L)
                 refreshSafely {
+                    if (presentingFromCache && !access.isLimited && withContext(Dispatchers.IO) {
+                        repository.isCachedGalleryCurrent(access.mediaKinds)
+                    }) return@refreshSafely
                     if (!presentingFromCache) {
                         refreshMutex.withLock { refreshLatestPage(access) }
                         delay(ColdStartFullRefreshYieldMillis)
@@ -133,6 +143,16 @@ internal class GalleryMediaViewModel(
         ) return
 
         scheduledRefresh = viewModelScope.launch {
+            // Resuming a retained page must not immediately compete with its first
+            // touch for CPU, disk and bitmap uploads.
+            delay(600L)
+            GalleryImageWorkScheduler.awaitIdle()
+            if (!access.isLimited && withContext(Dispatchers.IO) {
+                repository.isCachedGalleryCurrent(access.mediaKinds)
+            }) {
+                if (recentlyDeletedVisible) refreshTrashedMedia(access)
+                return@launch
+            }
             refreshSafely { refreshMutex.withLock {
                 val latestPageChanged = refreshLatestPage(access)
                 if (
@@ -223,6 +243,7 @@ internal class GalleryMediaViewModel(
             )
         }
         val changed = mergedSnapshot !== baseSnapshot
+        GalleryImageWorkScheduler.awaitIdle()
         if (!mutationGate.canPublish(queryRevision)) return false
         _uiState.update { current ->
             if (!changed && current.initialSyncComplete) {
@@ -244,6 +265,8 @@ internal class GalleryMediaViewModel(
         val snapshot = withContext(Dispatchers.IO) {
             repository.loadGallery(access.mediaKinds)
         }
+        // A refreshed catalogue must not rebuild the page midway through its hero.
+        GalleryImageWorkScheduler.awaitIdle()
         if (!isCurrentAccess(access) || !mutationGate.canPublish(queryRevision)) return
         lastFullRefreshElapsedMillis = SystemClock.elapsedRealtime()
         _uiState.update { current ->
@@ -254,6 +277,7 @@ internal class GalleryMediaViewModel(
             if (next == current) current else next
         }
         GalleryImageWorkScheduler.notifyLibrarySettled()
+        withContext(Dispatchers.IO) { repository.saveGallery(access, snapshot) }
         if (recentlyDeletedVisible) refreshTrashedMedia(access)
     }
 

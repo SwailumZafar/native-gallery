@@ -301,7 +301,7 @@ fun LockedMediaScreen(
                             credentialKind = credentialKind, requiresRecovery = requiresRecovery,
                             hasRecovery = hasRecovery, recoveryPrompt = recoveryPrompt,
                             remainingMillis = lockoutRemainingMillis, onRecovery = onRecovery, onDeviceRecovery = onDeviceRecovery,
-                            deviceRecoveryVerified = deviceRecoveryVerified
+                            deviceRecoveryVerified = deviceRecoveryVerified, hasDecoyPin = hasDecoyPin
                         )
                     }
                 }
@@ -329,7 +329,7 @@ fun LockedMediaScreen(
                                         Spacer(Modifier.width(14.dp))
                                         Column {
                                             Text("Vault settings", style = MaterialTheme.typography.titleMedium)
-                                            Text("PIN, password, pattern · Recovery · Decoy vault", style = MaterialTheme.typography.bodySmall)
+                                            Text("Unlock method, recovery and decoy access", style = MaterialTheme.typography.bodySmall)
                                         }
                                     }
                                 }
@@ -468,61 +468,82 @@ private fun LockedMediaHeader(
 }
 
 @Composable
-private fun LockedMediaAuthCard(
+internal fun LockedMediaAuthCard(
     hasPin: Boolean, biometricAvailable: Boolean, authMessage: String?, authInProgress: Boolean,
     onPinCreated: (String, String) -> Unit, onPinUnlock: (String) -> Unit, onBiometricUnlock: () -> Unit,
     credentialKind: com.example.nativegallery.data.VaultCredentialKind,
     requiresRecovery: Boolean, hasRecovery: Boolean, recoveryPrompt: String, remainingMillis: Long,
-    onRecovery: (String, String) -> Unit, onDeviceRecovery: () -> Unit, deviceRecoveryVerified: Boolean
+    onRecovery: (String, String) -> Unit, onDeviceRecovery: () -> Unit, deviceRecoveryVerified: Boolean,
+    hasDecoyPin: Boolean = false
 ) {
-    var secret by remember(hasPin) { mutableStateOf("") }
-    var confirm by remember(hasPin) { mutableStateOf("") }
-    var recovery by remember { mutableStateOf("") }
+    var secret by remember(hasPin, credentialKind) { mutableStateOf("") }
+    var firstPin by remember(hasPin) { mutableStateOf("") }
+    var confirmingPin by remember(hasPin) { mutableStateOf(false) }
+    var recovery by remember(requiresRecovery) { mutableStateOf("") }
+    var recoveryCredentialStep by remember(requiresRecovery) { mutableStateOf(false) }
     var entryKind by remember(credentialKind) { mutableStateOf(credentialKind) }
     val ready = !authInProgress && remainingMillis <= 0
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(if (requiresRecovery) "Verify vault recovery" else if (hasPin) "Unlock locked media" else "Set up locked media",
-                style = MaterialTheme.typography.titleLarge)
+    val pinKind = com.example.nativegallery.data.VaultCredentialKind.Pin
+    val validEntry = com.example.nativegallery.data.validVaultCredential(if (hasPin) entryKind else pinKind, secret)
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Icon(Icons.Filled.Lock, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
+            Text(if (requiresRecovery) "Recover vault access" else if (hasPin) "Unlock locked media"
+                else if (confirmingPin) "Confirm your PIN" else "Protect your media", style = MaterialTheme.typography.headlineSmall)
             if (requiresRecovery) {
-                Text("30 incorrect combinations. Your private media remains protected.")
+                Text("Your private media is protected after repeated incorrect attempts.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (hasRecovery) {
-                    Text(recoveryPrompt)
-                    VaultCredentialField(com.example.nativegallery.data.VaultCredentialKind.Password, recovery,
-                        { recovery = it }, "Recovery phrase", ready)
-                    VaultCredentialField(credentialKind, secret, { secret = it }, "Vault credential", ready)
-                    Button(onClick = { onRecovery(recovery, secret); secret = ""; recovery = "" }, enabled = ready) { Text("Recover access") }
+                    if (!recoveryCredentialStep) {
+                        Text("Enter your saved recovery phrase. You’ll also need your vault ${credentialKind.label()}.")
+                        VaultCredentialField(com.example.nativegallery.data.VaultCredentialKind.Password, recovery,
+                            { recovery = it }, "Recovery phrase", ready)
+                        Button(onClick = { recoveryCredentialStep = true; secret = "" },
+                            enabled = ready && recovery.isNotBlank()) { Text("Continue") }
+                    } else {
+                        Text("Enter your saved ${credentialKind.label()} to complete recovery.")
+                        VaultCredentialField(credentialKind, secret, { secret = it }, credentialKind.label(), ready)
+                        Button(onClick = { onRecovery(recovery, secret) }, enabled = ready && secret.isNotBlank()) { Text("Recover access") }
+                        TextButton(onClick = { recoveryCredentialStep = false; secret = "" }, enabled = ready) { Text("Change recovery phrase") }
+                    }
                 } else {
-                    Text("This vault predates recovery setup. Verify your phone's screen lock and vault credential to regain access.")
+                    Text("Recovery wasn’t configured. Verify your phone’s screen lock, then enter your saved vault ${credentialKind.label()}.")
                     if (deviceRecoveryVerified) {
-                        VaultCredentialField(credentialKind, secret, { secret = it }, "Vault credential", ready)
-                        Button(onClick = { onRecovery("", secret); secret = "" }, enabled = ready) { Text("Recover access") }
-                    } else Button(onClick = onDeviceRecovery, enabled = !authInProgress) { Text("Verify phone owner") }
+                        VaultCredentialField(credentialKind, secret, { secret = it }, credentialKind.label(), ready)
+                        Button(onClick = { onRecovery("", secret) }, enabled = ready && secret.isNotBlank()) { Text("Recover access") }
+                    } else Button(onClick = onDeviceRecovery, enabled = ready) { Text("Verify phone owner") }
                 }
             } else {
-                Text(if (hasPin) "After unlocking, open Vault settings to change your PIN, password or pattern and configure a decoy vault."
-                    else "Create a PIN first. Then open Vault settings to choose a password or pattern and set up recovery or a decoy vault.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (hasPin) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    com.example.nativegallery.data.VaultCredentialKind.entries.forEach { kind ->
-                        androidx.compose.material3.FilterChip(entryKind == kind, { entryKind = kind; secret = "" }, { Text(kind.name) })
+                Text(if (hasPin) "Use your saved ${entryKind.label()} to continue."
+                    else if (confirmingPin) "Enter the same PIN again."
+                    else "Create a PIN to protect your private photos and videos. You can change the unlock method in Vault settings.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                fun submit() {
+                    if (!ready || secret.isBlank()) return
+                    if (hasPin && !com.example.nativegallery.data.validVaultCredential(entryKind, secret)) return
+                    if (hasPin) onPinUnlock(secret)
+                    else if (confirmingPin && secret == firstPin) onPinCreated(firstPin, secret)
+                    else if (!confirmingPin && com.example.nativegallery.data.validVaultCredential(pinKind, secret)) {
+                        firstPin = secret; secret = ""; confirmingPin = true
                     }
                 }
-                VaultCredentialField(if (hasPin) entryKind else com.example.nativegallery.data.VaultCredentialKind.Pin,
-                    secret, { secret = it }, if (hasPin) "Credential" else "New PIN", ready)
-                if (!hasPin) VaultCredentialField(com.example.nativegallery.data.VaultCredentialKind.Pin, confirm,
-                    { confirm = it }, "Confirm PIN", ready)
-                Button(onClick = {
-                    if (hasPin) onPinUnlock(secret) else onPinCreated(secret, confirm)
-                    secret = ""
-                }, enabled = ready && secret.isNotBlank() && (hasPin || secret == confirm)) {
+                VaultCredentialField(if (hasPin) entryKind else pinKind, secret, { secret = it },
+                    if (hasPin) entryKind.label() else if (confirmingPin) "Confirm PIN" else "New PIN", ready, ::submit)
+                if (!hasPin && !confirmingPin) Text(pinKind.requirements(), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (confirmingPin && secret.isNotEmpty() && firstPin != secret) Text("PINs don’t match yet.", color = MaterialTheme.colorScheme.error)
+                Button(onClick = ::submit, modifier = Modifier.fillMaxWidth(),
+                    enabled = ready && validEntry && (!confirmingPin || firstPin == secret)) {
                     if (authInProgress) {
                         androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(10.dp))
                     }
-                    Text(if (authInProgress) "Verifying…" else if (hasPin) "Unlock" else "Create PIN")
+                    Text(if (authInProgress) "Verifying…" else if (hasPin) "Unlock" else if (confirmingPin) "Create PIN" else "Continue")
                 }
+                if (confirmingPin) TextButton(onClick = { confirmingPin = false; firstPin = ""; secret = "" }, enabled = ready) { Text("Choose a different PIN") }
                 if (hasPin && biometricAvailable) TextButton(onClick = onBiometricUnlock, enabled = ready) { Text("Use biometrics") }
+                if (hasPin && hasDecoyPin && credentialKind != pinKind) TextButton(onClick = {
+                    entryKind = if (entryKind == pinKind) credentialKind else pinKind; secret = ""
+                }, enabled = ready) { Text(if (entryKind == pinKind) "Use ${credentialKind.label()}" else "Use PIN") }
             }
             if (remainingMillis > 0) Text("Try again in ${kotlin.math.ceil(remainingMillis / 1000.0).toInt()}s", color = MaterialTheme.colorScheme.error)
             authMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }

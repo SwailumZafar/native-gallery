@@ -22,9 +22,8 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.os.CancellationSignal
 import android.view.WindowManager
-import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.PredictiveBackHandler
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -41,7 +40,6 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.selection.toggleable
@@ -145,7 +143,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -154,17 +151,15 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
-import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
@@ -232,7 +227,6 @@ import com.example.nativegallery.ui.components.MotionSpecs
 import com.example.nativegallery.ui.components.solarTactile
 import com.example.nativegallery.ui.components.bouncyClickable
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -572,7 +566,10 @@ fun GalleryApp(
         derivedStateOf {
             photosListState.isScrollInProgress || albumsListState.isScrollInProgress ||
                 albumDetailListState.isScrollInProgress || mainPagerState.isScrollInProgress ||
-                anyTransitionActive || viewerVisible
+                // Read snapshot state here. Capturing the computed Boolean from the
+                // first composition kept detail uploads enabled during later motion.
+                albumTransition != null || albumClosePreparing || pendingMediaOpenKey != null ||
+                mediaOpenTransition != null || mediaCloseTransition != null || viewerVisible
         }
     }
     val analysisLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
@@ -599,16 +596,9 @@ fun GalleryApp(
         }
     }
     var bottomNavigationVisible by rememberSaveable { mutableStateOf(true) }
-    var predictiveBackGestureAction by remember { mutableStateOf<GalleryBackAction?>(null) }
 
     LaunchedEffect(settings.gridDensity) {
         albumDetailGridModes.clear()
-    }
-
-    LaunchedEffect(selectedAlbumId) {
-        if (selectedAlbumId != null) {
-            albumDetailListState.scrollToItem(0)
-        }
     }
 
     LaunchedEffect(destination, selectedTab) {
@@ -684,6 +674,7 @@ fun GalleryApp(
         }
     }
 
+    val currentPrivateViewerMode = rememberUpdatedState(viewerActionMode)
     DisposableEffect(context) {
         val activity = context.findActivity() as? ComponentActivity
         if (activity == null) {
@@ -691,6 +682,25 @@ fun GalleryApp(
         } else {
             var initialResumeDelivered = false
             val lifecycleObserver = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_STOP) {
+                    lockedSecurityViewModel.lock()
+                    vaultSecurityVisible = false
+                    hiddenBiometricCancellation?.cancel()
+                    hiddenBiometricCancellation = null
+                    if (currentPrivateViewerMode.value == ViewerActionMode.Locked) {
+                        viewerVisible = false
+                        viewerMediaItem = null
+                        viewerMediaItems = emptyList()
+                        mediaOpenTransition = null
+                        pendingMediaOpenKey = null
+                        mediaCloseTransition = null
+                        viewerOpeningPreview = null
+                        viewerOpeningPreviewId = null
+                        viewerSharedElementKey = null
+                        viewerCloseInProgress = false
+                    }
+                    prefetchScope.launch(Dispatchers.IO) { LockedMediaVaultProvider.clearSessionCache(context.applicationContext) }
+                }
                 if (event == Lifecycle.Event.ON_RESUME) {
                     if (!initialResumeDelivered) {
                         initialResumeDelivered = true
@@ -740,7 +750,7 @@ fun GalleryApp(
 
     DisposableEffect(destination, hiddenVaultUnlocked, context) {
         val activity = context.findActivity()
-        val secureWindow = destination == GalleryDestination.LockedMedia && hiddenVaultUnlocked
+        val secureWindow = destination == GalleryDestination.LockedMedia
         if (secureWindow) {
             activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
@@ -1004,23 +1014,6 @@ fun GalleryApp(
             emptyList()
         } else {
             visibleMedia.filter { mediaItem -> selectedMediaIds.contains(mediaItem.id) }
-        }
-    }
-
-    val albumPreviewWarmupKey = remember(visibleAlbums) {
-        visibleAlbums.take(12).joinToString(separator = "|") { "${it.id}:${it.itemCount}" }
-    }
-
-    LaunchedEffect(destination, selectedTab, albumPreviewWarmupKey, visibleMedia.size, favoriteMediaIds, albumTransition) {
-        if (destination == GalleryDestination.Main && selectedTab == GalleryTab.Albums && visibleMedia.isNotEmpty() && albumTransition == null) {
-            visibleAlbums.take(12).forEach { album ->
-                prefetchMediaThumbnails(
-                    context = context.applicationContext,
-                    mediaItems = mediaForAlbumFast(album, visibleMedia, visibleMediaByAlbum, favoriteMedia),
-                    thumbnailSizes = listOf(160),
-                    maxItems = 24
-                )
-            }
         }
     }
 
@@ -1396,6 +1389,7 @@ fun GalleryApp(
             }
         }
         val tileBounds = bounds.takeIf { it != Rect.Zero } ?: albumTileBounds[album.id]
+        albumDetailListState.requestScrollToItem(0)
         val openingMedia = mediaForAlbumFast(album, visibleMedia, visibleMediaByAlbum, favoriteMedia)
         val openingColumns = (
             (albumDetailGridModes[album.id] ?: defaultAlbumGridMode).columns + launchAdaptivePolicy.albumDetailColumnBoost
@@ -1403,12 +1397,13 @@ fun GalleryApp(
         val openingWarmItemCount = (openingColumns * AlbumOpeningWarmRowCount).coerceAtMost(24)
         val firstViewportMedia = openingMedia
             .take(openingWarmItemCount)
-        navigationViewModel.selectAlbumForOpening(album.id)
         selectedMediaIds = emptySet()
 
         // Warm the exact preview keys while the tile expands. Video cache reads are cheap;
         // starting native codecs here would compete with the opening animation.
         prefetchScope.launch {
+            // Let the tapped cover submit its first frame before queuing warm-up work.
+            withFrameNanos { }
             prefetchMediaThumbnails(
                 context = context.applicationContext,
                 mediaItems = firstViewportMedia,
@@ -1444,6 +1439,7 @@ fun GalleryApp(
             )
             return
         }
+        navigationViewModel.selectAlbumForOpening(album.id)
         navigationViewModel.showAlbumDetail()
         prefetchScope.launch {
             prefetchMediaThumbnails(
@@ -2609,36 +2605,10 @@ fun GalleryApp(
         }
     }
 
-    LaunchedEffect(backAction, viewerVisible, viewerCloseInProgress) {
-        val gestureAction = predictiveBackGestureAction
-        if (
-            gestureAction == GalleryBackAction.CloseViewer &&
-            viewerVisible &&
-            viewerCloseInProgress
-        ) {
-            return@LaunchedEffect
-        }
-        if (gestureAction != null && gestureAction != backAction) {
-            predictiveBackGestureAction = null
-        }
-    }
-
-    PredictiveBackHandler(enabled = backAction != GalleryBackAction.System) { progressFlow ->
-        val actionAtStart = currentBackAction
-        predictiveBackGestureAction = actionAtStart
-        if (actionAtStart == GalleryBackAction.BlockTransition) {
-            progressFlow.collect()
-            predictiveBackGestureAction = null
-            return@PredictiveBackHandler
-        }
-        try {
-            // The media stays still during the gesture; navigate only after it commits.
-            progressFlow.collect()
-            performGalleryBack(actionAtStart)
-        } catch (cancellation: CancellationException) {
-            predictiveBackGestureAction = null
-            throw cancellation
-        }
+    // A canceled edge gesture must not mutate the scene or rebuild the large grids.
+    // Android owns its edge indicator; the app starts its return motion on commit.
+    BackHandler(enabled = backAction != GalleryBackAction.System) {
+        performGalleryBack(currentBackAction)
     }
     val mediaAccessNotice: (@Composable () -> Unit)? = when {
         !mediaAccess.hasAccess -> {
@@ -2745,15 +2715,23 @@ fun GalleryApp(
                     containerColor = MaterialTheme.colorScheme.background,
                     bottomBar = {
                         if (!adaptivePolicy.useNavigationRail) {
+                            val closingAlbum = albumTransition?.takeIf { it.mode == AlbumTransitionMode.Closing }
                             val shouldShowBottomBar = destination == GalleryDestination.Main &&
-                                mainNavigationChromeReady &&
+                                (mainNavigationChromeReady || closingAlbum != null) &&
                                 selectedMediaIds.isEmpty() &&
                                 !viewerVisible &&
-                                (navigationTransitionIdle || mediaCloseTransition?.mediaItem?.isVideo == true)
+                                (navigationTransitionIdle || closingAlbum != null || mediaCloseTransition?.mediaItem?.isVideo == true)
+                            val barRevealStart = rootHeightPx - with(density) { 110.dp.toPx() }
+                            val barRevealEnd = rootHeightPx - with(density) { 24.dp.toPx() }
                             GalleryBottomBar(
                                 selectedTab = selectedTab,
                                 visible = shouldShowBottomBar && bottomNavigationVisible,
-                                onTabSelected = ::selectMainTab
+                                albumReturnVisibility = closingAlbum?.takeIf { bottomNavigationVisible }?.let { closing -> {
+                                    val source = closing.tileBounds.relativeToRoot(transitionRootBoundsInWindow, rootWidthPx, rootHeightPx)
+                                    val bottom = albumContainerFrame(source, rootWidthPx, rootHeightPx, closing.motion.progress.value).bounds.bottom
+                                    1f - GalleryMotion.smoothstep(barRevealStart, barRevealEnd, bottom)
+                                } },
+                                onTabSelected = { tab -> if (closingAlbum == null) selectMainTab(tab) }
                             )
                         }
                     }
@@ -2836,6 +2814,8 @@ fun GalleryApp(
                                         when (tab) {
                                             GalleryTab.Photos -> PhotosScreen(
                                                 mediaItems = searchedVisibleMedia,
+                                                isActive = destination == GalleryDestination.Main && selectedTab == GalleryTab.Photos &&
+                                                    !viewerVisible && navigationTransitionIdle,
                                                 favoriteMediaIds = favoriteMediaIds,
                                                 contentPadding = innerPadding,
                                                 mediaAccessNotice = mediaAccessNotice,
@@ -3244,6 +3224,7 @@ fun GalleryApp(
                         if (albumTransition?.key == finishedTransition.key) {
                             if (finishedTransition.mode == AlbumTransitionMode.Opening) {
                                 albumTransitionAwaitingDestinationKey = finishedTransition.key
+                                navigationViewModel.selectAlbumForOpening(finishedTransition.album.id)
                                 navigationViewModel.showAlbumDetail()
                                 val warmColumns = (
                                     (albumDetailGridModes[finishedTransition.album.id] ?: defaultAlbumGridMode).columns + adaptivePolicy.albumDetailColumnBoost
@@ -3283,6 +3264,7 @@ fun GalleryApp(
                             sharedBoundsTransform = GalleryMediaBoundsTransform,
                             activeSharedElementKey = viewerSharedElementKey ?: mediaOpenTransition?.sharedElementKey,
                             albumEnterProgress = 1f,
+                            deferInteractiveRows = albumTransition != null,
                             gridMode = albumDetailGridModes[pageAlbum.id] ?: defaultAlbumGridMode,
                             onGridModeChange = { gridMode -> albumDetailGridModes[pageAlbum.id] = gridMode },
                             sortMode = albumDetailSortModes[pageAlbum.id] ?: AlbumDetailSortMode.Newest,
@@ -4054,13 +4036,21 @@ private fun SettingsSwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val view = LocalView.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .semantics(mergeDescendants = true) { }
             .toggleable(value = checked, role = Role.Switch,
                 interactionSource = remember { MutableInteractionSource() }, indication = null,
-                onValueChange = onCheckedChange)
+                onValueChange = { next ->
+                    if (next != checked) {
+                        // Some ColorOS drivers discard TOGGLE_OFF's texture effect.
+                        // Use the standard click for reliable feedback in both directions.
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
+                        onCheckedChange(next)
+                    }
+                })
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -4791,7 +4781,8 @@ private fun PositionAwareAlbumTransitionOverlay(
     val sourceBounds = transition?.tileBounds?.relativeToRoot(
         rootBoundsInWindow = rootBoundsInWindow,
         fallbackRootWidth = rootWidthPx,
-        fallbackRootHeight = rootHeightPx
+        fallbackRootHeight = rootHeightPx,
+        clampToViewport = false
     ) ?: Rect(0f, 0f, rootWidthPx, rootHeightPx)
     val moving = transition != null && sourceBounds.isUsableTransitionBounds()
     if (transition != null && !moving) {
@@ -4800,8 +4791,13 @@ private fun PositionAwareAlbumTransitionOverlay(
             onFinished(transition)
         }
     }
-    if (transition?.mode == AlbumTransitionMode.Opening && !committed) {
-        SideEffect { onCommitted(transition) }
+    val pageReady by rememberAlbumPageReady(
+        pageAlbum.id,
+        deferNewPage = moving && transition?.mode == AlbumTransitionMode.Opening &&
+            (transition.source?.available == true || transition.previewBitmap != null)
+    )
+    LaunchedEffect(transition?.key, pageReady) {
+        if (pageReady && transition?.mode == AlbumTransitionMode.Opening && !committed) onCommitted(transition)
     }
 
     // Direction changes share the in-flight value instead of jumping to an endpoint.
@@ -4817,12 +4813,11 @@ private fun PositionAwareAlbumTransitionOverlay(
     }
 
     val density = LocalDensity.current
-    val rootBounds = Rect(0f, 0f, rootWidthPx, rootHeightPx)
     val rootWidthDp = with(density) { rootWidthPx.toDp() }
     val rootHeightDp = with(density) { rootHeightPx.toDp() }
-    val reusableClippingPath = remember { Path() }
-    val sourceWidthDp = with(density) { sourceBounds.width.toDp() }
-    val sourceHeightDp = with(density) { sourceBounds.height.toDp() }
+    val containerFrame = {
+        albumContainerFrame(sourceBounds, rootWidthPx, rootHeightPx, progress?.value ?: 1f)
+    }
 
     Box(
         modifier = Modifier
@@ -4837,7 +4832,7 @@ private fun PositionAwareAlbumTransitionOverlay(
             .drawBehind {
                 val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                 val scrimAlpha = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
-                    (1f - GalleryMotion.smoothstep(0.65f, 0.95f, expansion)) * 0.22f
+                    (1f - GalleryMotion.smoothstep(0.65f, 0.95f, expansion)) * 0.08f
                 if (scrimAlpha > 0.001f) {
                     drawRect(Color.Black.copy(alpha = scrimAlpha))
                 }
@@ -4848,87 +4843,53 @@ private fun PositionAwareAlbumTransitionOverlay(
             modifier = Modifier
                 .requiredWidth(rootWidthDp)
                 .requiredHeight(rootHeightDp)
-                .graphicsLayer {
-                    val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
-                    val heroBounds = lerpRect(sourceBounds, rootBounds, expansion)
-                    val liftProgress = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
-                        (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))
-                    val detailAlpha = GalleryMotion.smoothstep(0.08f, 0.70f, expansion)
-                    val transitElevationPx = 18.dp.toPx() * liftProgress
-
-                    transformOrigin = TransformOrigin(0.5f, 0.5f)
-                    translationX = heroBounds.center.x - rootWidthPx / 2f
-                    translationY = heroBounds.center.y - rootHeightPx / 2f
-                    val contentScale = lerp(0.88f, 1f, expansion)
-                    scaleX = contentScale
-                    scaleY = contentScale
-                    alpha = detailAlpha
-                    shadowElevation = transitElevationPx
-                    cameraDistance = 16f * density.density
-                }
-                .drawWithContent {
-                    val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
-                    val heroBounds = lerpRect(sourceBounds, rootBounds, expansion)
-                    val heroWidth = heroBounds.width.coerceAtLeast(1f)
-                    val heroHeight = heroBounds.height.coerceAtLeast(1f)
-                    val cornerRadius = lerp(transition?.sourceCornerRadiusDp ?: 0f, 0f, expansion).dp
-                    val cornerRadiusPx = cornerRadius.toPx()
-                    val clipLeft = (rootWidthPx - heroWidth) / 2f
-                    val clipTop = (rootHeightPx - heroHeight) / 2f
-                    val clipRight = clipLeft + heroWidth
-                    val clipBottom = clipTop + heroHeight
-
-                    reusableClippingPath.reset()
-                    reusableClippingPath.addRoundRect(
-                        RoundRect(
-                            rect = Rect(clipLeft, clipTop, clipRight, clipBottom),
-                            cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx)
-                        )
-                    )
-                    clipPath(reusableClippingPath) { this@drawWithContent.drawContent() }
-                }
+                .albumPageLayer(
+                    source = sourceBounds,
+                    width = rootWidthPx,
+                    height = rootHeightPx,
+                    sourceRadius = with(density) { (transition?.sourceCornerRadiusDp ?: 0f).dp.toPx() },
+                    progress = { progress?.value ?: 1f },
+                    reveal = { if (pageReady) 1f else 0f }
+                )
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            content(pageAlbum)
+            if (pageReady) content(pageAlbum)
         }
-        // Keep the cover over the same live page used at rest. Transform its layer without
-        // remeasuring the LazyColumn or replacing its thumbnail/header composition.
+        // The live miniature page owns the journey; its cover only blends at the
+        // source-sized end, matching the slow-motion native reference.
         if (transition != null && moving) Box(
             modifier = Modifier
-                .requiredWidth(sourceWidthDp)
-                .requiredHeight(sourceHeightDp)
+                .fillMaxSize()
                 .graphicsLayer {
                     val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
-                    val heroBounds = lerpRect(sourceBounds, rootBounds, expansion)
-                    val heroWidth = heroBounds.width.coerceAtLeast(1f)
-                    val heroHeight = heroBounds.height.coerceAtLeast(1f)
-                    val liftProgress = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
-                        (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))
-                    val cornerRadius = lerp(transition.sourceCornerRadiusDp, 0f, expansion).dp
-                    val transitElevationPx = 18.dp.toPx() * liftProgress
-
-                    transformOrigin = TransformOrigin(0f, 0f)
-                    translationX = heroBounds.left
-                    translationY = heroBounds.top
-                    scaleX = heroWidth / sourceBounds.width.coerceAtLeast(1f)
-                    scaleY = heroHeight / sourceBounds.height.coerceAtLeast(1f)
-                    shadowElevation = transitElevationPx
-                    cameraDistance = 16f * density.density
+                    val heroBounds = containerFrame().bounds
                     clip = true
-                    shape = RoundedCornerShape(cornerRadius)
+                    shape = MediaHeroShape(heroBounds, lerp(transition.sourceCornerRadiusDp, 0f, expansion).dp.toPx())
                 }
         ) {
             val source = transition.source
-            val faceSource = transition.album.id.startsWith("person:") && source?.available == true
-            if (!faceSource) GalleryImage(
+            val coverAlpha = {
+                if (!pageReady) 1f else albumCoverAlpha(sourceBounds, (progress?.value ?: 1f).coerceIn(0f, 1f), rootWidthPx)
+            }
+            val capturedCover = source?.available == true
+            if (!capturedCover) GalleryImage(
                 imageRes = transition.album.coverRes,
                 imageUri = transition.album.coverUri.takeUnless { transition.previewBitmap != null },
                 contentDescription = transition.album.name,
                 modifier = Modifier
-                    .fillMaxSize()
+                    .then(if (transition.previewBitmap != null) Modifier.fillMaxSize() else Modifier
+                        .requiredWidth(with(density) { sourceBounds.width.toDp() })
+                        .requiredHeight(with(density) { sourceBounds.height.toDp() }))
                     .graphicsLayer {
-                        val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
-                        alpha = 1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)
+                        if (transition.previewBitmap == null) {
+                            val crop = albumCoverTransform(sourceBounds.width, sourceBounds.height, containerFrame().bounds)
+                            transformOrigin = TransformOrigin(0f, 0f)
+                            translationX = crop.translation.x
+                            translationY = crop.translation.y
+                            scaleX = crop.scale
+                            scaleY = crop.scale
+                        }
+                        alpha = coverAlpha()
                     },
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Crop,
@@ -4937,33 +4898,33 @@ private fun PositionAwareAlbumTransitionOverlay(
                 backgroundColor = MaterialTheme.colorScheme.surfaceVariant,
                 cachedOnly = true,
                 animatedPlaceholder = false,
+                drawBounds = if (transition.previewBitmap != null) { { containerFrame().bounds } } else null,
                 initialBitmap = transition.previewBitmap,
                 isVideo = transition.album.hasVideoBadge,
                 cacheRevision = transition.album.coverMediaItem?.let { com.example.nativegallery.ui.components.mediaThumbnailCacheRevision(it) }
             )
-            // Match the actual card at the two endpoints, including labels and its gradient.
-            // Its chrome fades before the cover begins the existing image/page crossfade.
             if (source != null && source.available) {
-                Box(Modifier.fillMaxSize()
+                Box(Modifier
+                    .requiredWidth(with(density) { source.size.width.toDp() })
+                    .requiredHeight(with(density) { source.size.height.toDp() })
                     .graphicsLayer {
-                        val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
-                        alpha = (1f - GalleryMotion.smoothstep(0.12f, 0.60f, expansion)) *
-                            (if (faceSource) 1f else 1f - GalleryMotion.smoothstep(0f, 0.12f, expansion))
+                        val crop = albumCoverTransform(source.size.width.toFloat(), source.size.height.toFloat(), containerFrame().bounds)
+                        transformOrigin = TransformOrigin(0f, 0f)
+                        translationX = crop.translation.x
+                        translationY = crop.translation.y
+                        scaleX = crop.scale
+                        scaleY = crop.scale
+                        alpha = coverAlpha()
                     }
                     .drawBehind {
                         if (source.available && source.size.width > 0 && source.size.height > 0) {
-                            withTransform({
-                                scale(size.width / source.size.width, size.height / source.size.height, Offset.Zero)
-                            }) { drawLayer(source.layer) }
+                            drawLayer(source.layer)
                         }
                     })
             }
         }
     }
 }
-
-private val ReferenceViewerOpenEasing = CubicBezierEasing(0.16f, 0.82f, 0.22f, 1f)
-private val ReferenceViewerCloseEasing = CubicBezierEasing(0.30f, 0f, 0.58f, 1f)
 
 @Composable
 private fun ReferenceMediaOpenOverlay(
@@ -5029,10 +4990,10 @@ private fun ReferenceMediaOpenOverlay(
         startBounds = tileBounds,
         endBounds = fittedMediaRect(rootWidthPx, rootHeightPx, geometryMediaItem),
         progress = { progress.value },
-        backdropAlpha = { GalleryMotion.smoothstep(0f, 0.82f, progress.value.coerceIn(0f, 1f)) },
+        backdropAlpha = { GalleryMotion.smoothstep(0.22f, 1f, progress.value.coerceIn(0f, 1f)) },
         shadowElevation = {
             val expansion = progress.value.coerceIn(0f, 1f)
-            (18f * GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
+            (6f * GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
                 (1f - GalleryMotion.smoothstep(0.70f, 1f, expansion))).dp
         },
         thumbnailSize = heroThumbnailSize,
@@ -5129,7 +5090,7 @@ private fun ReferenceMediaCloseOverlay(
     } else if (transition.startScale < 0.99f) {
         lerp(18f, 28f, dismissFraction)
     } else {
-        24f
+        0f
     }
 
     val startBounds = scaledRectAroundCenter(
@@ -5146,14 +5107,14 @@ private fun ReferenceMediaCloseOverlay(
         progress = { progress.value },
         backdropAlpha = {
             transition.startBackdropAlpha *
-                (1f - GalleryMotion.smoothstep(0.12f, 0.92f, progress.value.coerceIn(0f, 1f)))
+                (1f - GalleryMotion.smoothstep(0f, 0.62f, progress.value.coerceIn(0f, 1f)))
         },
         cornerRadius = {
             lerp(startRadius, 0f, GalleryMotion.smoothstep(0.20f, 1f, progress.value.coerceIn(0f, 1f))).dp
         },
         shadowElevation = {
             ((if (transition.mediaItem.isVideo) 22f * dismissFraction * transition.startScale
-                else lerp(14f, 20f, dismissFraction)) *
+                else lerp(6f, 18f, dismissFraction)) *
                 (1f - GalleryMotion.smoothstep(0.80f, 1f, progress.value.coerceIn(0f, 1f)))).dp
         },
         rotationZ = {
@@ -5335,6 +5296,7 @@ private fun scaledRectAroundCenter(rect: Rect, scale: Float, offset: Offset): Re
 private fun GalleryBottomBar(
     selectedTab: GalleryTab,
     visible: Boolean,
+    albumReturnVisibility: (() -> Float)? = null,
     onTabSelected: (GalleryTab) -> Unit
 ) {
     val containerShape = RoundedCornerShape(50.dp)
@@ -5363,7 +5325,7 @@ private fun GalleryBottomBar(
 
     val visibilityProgress by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
-        animationSpec = spring(
+        animationSpec = if (albumReturnVisibility != null) snap() else spring(
             dampingRatio = 0.76f,
             stiffness = Spring.StiffnessMediumLow
         ),
@@ -5407,11 +5369,14 @@ private fun GalleryBottomBar(
             .navigationBarsPadding()
             .padding(bottom = 4.dp)
             .graphicsLayer {
-                alpha = visibilityProgress.coerceIn(0f, 1f)
-                val scale = 0.88f + 0.12f * visibilityProgress
+                // The bar belongs to the retained Albums page. Reveal it as that
+                // area is uncovered, without a second entrance after the hero lands.
+                val reveal = albumReturnVisibility?.invoke() ?: visibilityProgress
+                alpha = reveal.coerceIn(0f, 1f)
+                val scale = if (albumReturnVisibility != null) 1f else 0.88f + 0.12f * reveal
                 scaleX = scale
                 scaleY = scale
-                translationY = hideDistancePx * (1f - visibilityProgress)
+                translationY = if (albumReturnVisibility != null) 0f else hideDistancePx * (1f - reveal)
             },
         contentAlignment = Alignment.Center
     ) {

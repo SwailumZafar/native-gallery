@@ -21,7 +21,7 @@ class LockedMediaSecurityPolicyTest {
     @Test
     fun lockoutMessageRoundsUpRemainingSeconds() {
         assertEquals(
-            "Too many wrong PIN attempts. Try again in 2s.",
+            "Too many incorrect attempts. Try again in 2s.",
             LockedMediaSecurityPolicy.lockoutMessage(1_001L)
         )
     }

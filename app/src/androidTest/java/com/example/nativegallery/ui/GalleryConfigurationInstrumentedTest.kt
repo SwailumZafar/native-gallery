@@ -26,6 +26,9 @@ import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.isFocused
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
@@ -55,6 +58,30 @@ class GalleryConfigurationInstrumentedTest {
     val rules: TestRule = RuleChain
         .outerRule(fixtureRule)
         .around(composeRule)
+
+    @Test
+    fun cancelingEdgeBackKeepsTheAlbumAndTheNextCommittedBackStillWorks() {
+        composeRule.onNodeWithContentDescription("Albums").performClick()
+        composeRule.onNodeWithText("Search albums").performTextInput(FixtureAlbumName)
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithContentDescription(FixtureAlbumName).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription(FixtureAlbumName).performClick()
+        composeRule.onNodeWithContentDescription("Back").assertIsDisplayed()
+        composeRule.runOnIdle {
+            val dispatcher = composeRule.activity.onBackPressedDispatcher
+            dispatcher.dispatchOnBackStarted(androidx.activity.BackEventCompat(0f, 1000f, 0f, androidx.activity.BackEventCompat.EDGE_LEFT))
+            dispatcher.dispatchOnBackProgressed(androidx.activity.BackEventCompat(220f, 1000f, 0.5f, androidx.activity.BackEventCompat.EDGE_LEFT))
+            dispatcher.dispatchOnBackCancelled()
+        }
+        composeRule.onNodeWithContentDescription("Back").assertIsDisplayed()
+        composeRule.onNodeWithText(FixtureAlbumName).assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithTag(AlbumTransitionOverlayTestTag).fetchSemanticsNodes().isEmpty())
+        composeRule.runOnIdle { composeRule.activity.onBackPressedDispatcher.onBackPressed() }
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithContentDescription("Back").fetchSemanticsNodes().isEmpty()
+        }
+    }
 
     @Test
     fun openViewerRemainsOpenAfterLandscapeRecreation() {
@@ -124,7 +151,8 @@ class GalleryConfigurationInstrumentedTest {
             composeRule.onAllNodesWithContentDescription(fixtureRule.displayName)
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithText("Albums").performClick()
+        composeRule.onNodeWithContentDescription("Albums").performClick()
+        composeRule.onNode(hasSetTextAction()).performTextInput(FixtureAlbumName)
         composeRule.waitUntil(ConfigurationTimeoutMillis) {
             composeRule.onAllNodesWithContentDescription(FixtureAlbumName)
                 .fetchSemanticsNodes().isNotEmpty()
@@ -141,9 +169,7 @@ class GalleryConfigurationInstrumentedTest {
             composeRule.onAllNodesWithTag(AlbumTransitionOverlayTestTag)
                 .fetchSemanticsNodes().isEmpty()
         }
-        composeRule.waitUntil(ConfigurationTimeoutMillis) {
-            composeRule.onAllNodesWithText("Search albums").fetchSemanticsNodes().isNotEmpty()
-        }
+        composeRule.onNode(hasSetTextAction() and isFocused()).performTextClearance()
 
         composeRule.onRoot().performTouchInput {
             swipeUp(durationMillis = 80L)
@@ -191,6 +217,8 @@ class GalleryConfigurationInstrumentedTest {
                         Context.MODE_PRIVATE
                     )
                     val wasPromptHandled = preferences.getBoolean(InitialPromptHandled, false)
+                    val navigation = context.getSharedPreferences("photo_lane_navigation", Context.MODE_PRIVATE)
+                    val previousNavigation = navigation.all.toMap()
                     val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         Manifest.permission.READ_MEDIA_IMAGES
                     } else {
@@ -206,11 +234,20 @@ class GalleryConfigurationInstrumentedTest {
                         instrumentation.uiAutomation.grantRuntimePermission(context.packageName, permission)
                     }
                     try {
+                        navigation.edit().clear().commit()
                         fixtureUri = insertFixture(context, displayName)
                         base.evaluate()
                     } finally {
                         fixtureUri?.let { runCatching { context.contentResolver.delete(it, null, null) } }
                         preferences.edit().putBoolean(InitialPromptHandled, wasPromptHandled).commit()
+                        val restoreNavigation = navigation.edit().clear()
+                        previousNavigation.forEach { (key, value) ->
+                            when (value) {
+                                is String -> restoreNavigation.putString(key, value)
+                                is Boolean -> restoreNavigation.putBoolean(key, value)
+                            }
+                        }
+                        restoreNavigation.commit()
                         if (!permissionWasGranted) {
                             runCatching {
                                 instrumentation.uiAutomation.revokeRuntimePermission(context.packageName, permission)

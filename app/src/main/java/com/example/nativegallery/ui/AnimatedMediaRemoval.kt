@@ -17,6 +17,9 @@ internal fun retainDepartingMedia(previous: List<MediaItem>, incoming: List<Medi
 internal fun rememberAnimatedMediaRemoval(incoming: List<MediaItem>, key: Any? = Unit): AnimatedMediaList {
     var state by remember(key) { mutableStateOf(AnimatedMediaList(incoming, emptySet())) }
     LaunchedEffect(incoming, key) {
+        // Opening an album installs this exact list. Avoid walking the entire library
+        // twice on the UI thread before its first animated frame.
+        if (state.items === incoming && state.departing.isEmpty()) return@LaunchedEffect
         val nextIds = incoming.mapTo(hashSetOf()) { it.id }
         val removed = state.items.mapTo(hashSetOf()) { it.id } - nextIds
         if (removed.isEmpty()) state = AnimatedMediaList(incoming, emptySet())
