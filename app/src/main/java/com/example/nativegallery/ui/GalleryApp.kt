@@ -271,9 +271,8 @@ internal data class AlbumTransitionSpec(
     val source: AlbumTransitionSource<GraphicsLayer>? = null,
     val previewBitmap: Bitmap? = null,
     val classicAnimation: Boolean = false,
-    val heroPacing: Boolean = false,
     val motion: AlbumTransitionMotion = AlbumTransitionMotion(opening = mode == AlbumTransitionMode.Opening,
-        classic = classicAnimation, hero = heroPacing)
+        classic = classicAnimation)
 )
 
 private const val FavoritesAlbumId = "favorites"
@@ -1439,7 +1438,6 @@ fun GalleryApp(
                 },
                 mode = AlbumTransitionMode.Opening,
                 classicAnimation = settings.useClassicAlbumAnimation,
-                heroPacing = useHeroAlbumPacing(albumLayoutMode, tileBounds.width, transitionRootBoundsInWindow.width),
                 source = albumTransitionSources.get(album.id),
                 previewBitmap = DisplayedBitmapCache.get(album.coverUri),
                 sortMode = albumDetailSortModes[album.id] ?: AlbumDetailSortMode.Newest
@@ -1507,7 +1505,6 @@ fun GalleryApp(
                 },
                 mode = AlbumTransitionMode.Closing,
                 classicAnimation = settings.useClassicAlbumAnimation,
-                heroPacing = useHeroAlbumPacing(albumLayoutMode, closingBounds.width, transitionRootBoundsInWindow.width),
                 source = albumTransitionSources.get(closingAlbum.id),
                 previewBitmap = DisplayedBitmapCache.get(closingAlbum.coverUri),
                 sortMode = albumDetailSortModes[closingAlbum.id] ?: AlbumDetailSortMode.Newest,
@@ -2737,7 +2734,8 @@ fun GalleryApp(
                                 visible = shouldShowBottomBar && bottomNavigationVisible,
                                 albumReturnVisibility = closingAlbum?.takeIf { bottomNavigationVisible }?.let { closing -> {
                                     val source = closing.tileBounds.relativeToRoot(transitionRootBoundsInWindow, rootWidthPx, rootHeightPx)
-                                    val bottom = albumContainerFrame(source, rootWidthPx, rootHeightPx, closing.motion.progress.value).bounds.bottom
+                                    val bottom = albumContainerFrame(source, rootWidthPx, rootHeightPx, closing.motion.progress.value,
+                                        smoothPacing = !closing.classicAnimation).bounds.bottom
                                     1f - GalleryMotion.smoothstep(barRevealStart, barRevealEnd, bottom)
                                 } },
                                 onTabSelected = { tab -> if (closingAlbum == null) selectMainTab(tab) }
@@ -4820,6 +4818,7 @@ internal fun PositionAwareAlbumTransitionOverlay(
 
     // Keep the chosen path and spring together if a transition reverses direction.
     val classic = transition?.classicAnimation ?: useClassicAnimation
+    val smoothPacing = !classic
 
     val sourceBounds = transition?.tileBounds?.relativeToRoot(
         rootBoundsInWindow = rootBoundsInWindow,
@@ -4859,7 +4858,7 @@ internal fun PositionAwareAlbumTransitionOverlay(
     val rootWidthDp = with(density) { rootWidthPx.toDp() }
     val rootHeightDp = with(density) { rootHeightPx.toDp() }
     val containerFrame = {
-        albumContainerFrame(sourceBounds, rootWidthPx, rootHeightPx, progress?.value ?: 1f)
+        albumContainerFrame(sourceBounds, rootWidthPx, rootHeightPx, progress?.value ?: 1f, smoothPacing)
     }
 
     Box(
@@ -4898,7 +4897,8 @@ internal fun PositionAwareAlbumTransitionOverlay(
                     height = rootHeightPx,
                     sourceRadius = with(density) { (transition?.sourceCornerRadiusDp ?: 0f).dp.toPx() },
                     progress = { progress?.value ?: 1f },
-                    reveal = { if (pageReady) 1f else 0f }
+                    reveal = { if (pageReady) 1f else 0f },
+                    smoothPacing = smoothPacing
                 ))
                 .background(MaterialTheme.colorScheme.background)
         ) {
@@ -4922,7 +4922,7 @@ internal fun PositionAwareAlbumTransitionOverlay(
                 .graphicsLayer {
                     val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                     val heroBounds = containerFrame().bounds
-                    alpha = if (!pageReady) 1f else albumCoverAlpha(sourceBounds, expansion, rootWidthPx)
+                    alpha = if (!pageReady) 1f else albumCoverAlpha(sourceBounds, expansion, rootWidthPx, smoothPacing)
                     compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
                     clip = true
                     shape = MediaHeroShape(heroBounds, lerp(transition.sourceCornerRadiusDp, 0f, expansion).dp.toPx())

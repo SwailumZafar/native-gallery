@@ -7,6 +7,32 @@ import org.junit.Test
 import com.example.nativegallery.ui.components.GalleryMotion
 
 class AlbumContainerGeometryTest {
+    @Test fun sharedPacingPreservesTheHeroAndKeepsOtherPagesAndCoversAligned() {
+        val hero = Rect(54f, 802f, 1210f, 1326f)
+        for (step in 0..100) {
+            val progress = step / 100f
+            assertEquals(albumContainerFrame(hero, 1264f, 2780f, progress),
+                albumContainerFrame(hero, 1264f, 2780f, progress, smoothPacing = true))
+        }
+        for ((width, height) in listOf(1264f to 2780f, 2780f to 1264f)) {
+            for (source in listOf(Rect(54f, 802f, 578f, 1326f), Rect(50f, 300f, 1100f, 480f),
+                Rect(40f, 300f, 116f, 376f))) {
+                var previousAlpha = 1f
+                for (step in 0..100) {
+                    val progress = step / 100f
+                    val frame = albumContainerFrame(source, width, height, progress, smoothPacing = true)
+                    assertMappedClip(frame)
+                    val alpha = albumCoverAlpha(source, progress, width, smoothPacing = true)
+                    assertTrue(alpha <= previousAlpha)
+                    previousAlpha = alpha
+                }
+                assertEquals(source, albumContainerFrame(source, width, height, 0f, smoothPacing = true).bounds)
+                assertEquals(Rect(0f, 0f, width, height),
+                    albumContainerFrame(source, width, height, 1f, smoothPacing = true).bounds)
+            }
+        }
+    }
+
     @Test fun heroFirstAndLastFramesStayGentleAtTheUnchangedAnimationTimings() {
         val source = Rect(54f, 802f, 1210f, 1326f)
         val firstOpeningProgress = 16.6667f / GalleryMotion.AlbumOpenMillis

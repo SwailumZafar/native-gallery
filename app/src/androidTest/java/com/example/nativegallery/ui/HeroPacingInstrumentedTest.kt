@@ -26,8 +26,11 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.nativegallery.model.Album
+import com.example.nativegallery.data.FolderTransitionStyle
 import com.example.nativegallery.ui.theme.GalleryTheme
 import java.io.File
+import kotlin.math.ceil
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -45,13 +48,35 @@ class HeroPacingInstrumentedTest {
     @Before fun keepAwake() = TestScreenAwake.enable()
     private lateinit var renderedFixture: GraphicsLayer
 
-    @Test fun normalHeroMovesThroughoutOpeningAndClosingWithSyntheticContent() {
+    @Test fun normalHeroMovesThroughoutOpeningAndClosingWithSyntheticContent() =
+        checkTile(Rect(8f, 100f, 192f, 185f), captureFrames = true)
+
+    @Test fun normalSquareMovesWithTheSamePacingAsHero() = checkTile(Rect(8f, 100f, 92f, 184f))
+
+    @Test fun normalListMovesWithTheSamePacingAsHero() = checkTile(Rect(8f, 100f, 192f, 136f))
+
+    @Test fun normalCompactTileMovesWithTheSamePacingAsHero() = checkTile(Rect(8f, 100f, 44f, 136f))
+
+    @Test fun enhancedHeroOpensAndClosesSmoothlyWithSyntheticContent() =
+        checkTile(Rect(8f, 100f, 192f, 185f), captureFrames = true, fast = true)
+
+    @Test fun enhancedSquareUsesTheSameRefinedPacing() = checkTile(Rect(8f, 100f, 92f, 184f), fast = true)
+
+    @Test fun enhancedListUsesTheSameRefinedPacing() = checkTile(Rect(8f, 100f, 192f, 136f), fast = true)
+
+    @Test fun enhancedCompactTileUsesTheSameRefinedPacing() = checkTile(Rect(8f, 100f, 44f, 136f), fast = true)
+
+    private fun checkTile(tile: Rect, captureFrames: Boolean = false, fast: Boolean = false) {
         composeRule.mainClock.autoAdvance = false
+        val openingDuration = if (fast) EnhancedAlbumOpenMillis else 400
+        val closingDuration = if (fast) EnhancedAlbumCloseMillis else 280
+        val style = if (fast) "enhanced" else "normal"
+        val phaseNames = listOf("quarter", "half", "three-quarter")
         val cover = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888).apply {
             eraseColor(android.graphics.Color.rgb(211, 87, 72))
         }
         val album = Album("synthetic-hero-pacing", "Test album", 12, emptyList())
-        val motion = AlbumTransitionMotion(true, hero = true)
+        val motion = AlbumTransitionMotion(true)
         var transition by mutableStateOf<AlbumTransitionSpec?>(null)
         var settled by mutableStateOf(false)
         var visible by mutableStateOf(true)
@@ -68,13 +93,13 @@ class HeroPacingInstrumentedTest {
                         val density = LocalDensity.current
                         width = with(density) { 200.dp.toPx() }
                         height = with(density) { 440.dp.toPx() }
-                        source = with(density) { Rect(8.dp.toPx(), 100.dp.toPx(), 192.dp.toPx(), 185.dp.toPx()) }
+                        source = with(density) { Rect(tile.left.dp.toPx(), tile.top.dp.toPx(), tile.right.dp.toPx(), tile.bottom.dp.toPx()) }
                         Box(Modifier.size(200.dp, 440.dp).drawWithContent {
                             fixtureLayer.record { this@drawWithContent.drawContent() }
                             drawLayer(fixtureLayer)
                         }.background(Color(0xFFE9E4EF)).testTag("synthetic-hero-root")) {
-                            if (transition == null && !settled) Box(Modifier.offset(8.dp, 100.dp)
-                                .size(184.dp, 85.dp).background(Color(0xFFD35748)))
+                            if (transition == null && !settled) Box(Modifier.offset(tile.left.dp, tile.top.dp)
+                                .size(tile.width.dp, tile.height.dp).background(Color(0xFFD35748)))
                             PositionAwareAlbumTransitionOverlay(
                                 transition = transition,
                                 settledAlbum = album.takeIf { settled },
@@ -82,6 +107,7 @@ class HeroPacingInstrumentedTest {
                                 rootWidthPx = width,
                                 rootHeightPx = height,
                                 rootBoundsInWindow = Rect(0f, 0f, width, height),
+                                transitionStyle = if (fast) FolderTransitionStyle.Fast else FolderTransitionStyle.Normal,
                                 onCommitted = {},
                                 onFinished = {
                                     settled = it.mode == AlbumTransitionMode.Opening
@@ -106,44 +132,47 @@ class HeroPacingInstrumentedTest {
             }
             composeRule.runOnIdle {
                 initial = AlbumTransitionSpec(1, album, source, 24f, AlbumTransitionMode.Opening,
-                    previewBitmap = cover, heroPacing = true, motion = motion)
+                    previewBitmap = cover, motion = motion)
                 transition = initial
             }
             repeat(2) { composeRule.mainClock.advanceTimeByFrame(); composeRule.waitForIdle() }
-            saveFrame("open-000")
-            composeRule.mainClock.advanceTimeBy(96)
-            composeRule.waitForIdle()
-            assertTrue("Normal Hero must not finish in the first quarter", expansion(source, width, height, motion) in 0.07f..0.16f)
-            saveFrame("open-096")
-            composeRule.mainClock.advanceTimeBy(96)
-            composeRule.waitForIdle()
-            assertTrue(expansion(source, width, height, motion) in 0.40f..0.58f)
-            saveFrame("open-192")
-            composeRule.mainClock.advanceTimeBy(96)
-            composeRule.waitForIdle()
-            assertTrue(expansion(source, width, height, motion) in 0.82f..0.94f)
-            saveFrame("open-288")
-            composeRule.mainClock.advanceTimeBy(128)
+            if (captureFrames) saveFrame("$style-open-start")
+            var elapsed = 0L
+            for (phase in 1..3) {
+                val time = (openingDuration * phase / 4f / 16f).roundToInt() * 16L
+                composeRule.mainClock.advanceTimeBy(time - elapsed)
+                composeRule.waitForIdle()
+                val range = listOf(0.04f..0.22f, 0.33f..0.68f, 0.78f..0.98f)[phase - 1]
+                assertTrue("$style must keep moving across opening phase $phase", expansion(source, width, height, motion) in range)
+                if (captureFrames) saveFrame("$style-open-${phaseNames[phase - 1]}")
+                elapsed = time
+            }
+            composeRule.mainClock.advanceTimeBy(ceil(openingDuration / 16.0).toLong() * 16 + 16 - elapsed)
             composeRule.waitForIdle()
             assertEquals(1f, motion.progress.value, 0f)
-            saveFrame("open-416")
+            if (captureFrames) saveFrame("$style-open-end")
 
             composeRule.runOnIdle {
                 settled = false
                 transition = requireNotNull(initial).copy(key = 2, mode = AlbumTransitionMode.Closing)
             }
             repeat(2) { composeRule.mainClock.advanceTimeByFrame(); composeRule.waitForIdle() }
-            saveFrame("close-000")
-            for (time in listOf(64, 128, 192)) {
-                composeRule.mainClock.advanceTimeBy(64)
+            if (captureFrames) saveFrame("$style-close-start")
+            elapsed = 0L
+            for (phase in 1..3) {
+                val time = (closingDuration * phase / 4f / 16f).roundToInt() * 16L
+                composeRule.mainClock.advanceTimeBy(time - elapsed)
                 composeRule.waitForIdle()
-                saveFrame("close-$time")
+                val range = listOf(0.78f..0.98f, 0.33f..0.68f, 0.02f..0.22f)[phase - 1]
+                assertTrue("$style must keep moving across closing phase $phase", expansion(source, width, height, motion) in range)
+                if (captureFrames) saveFrame("$style-close-${phaseNames[phase - 1]}")
+                elapsed = time
             }
-            composeRule.mainClock.advanceTimeBy(96)
+            composeRule.mainClock.advanceTimeBy(ceil(closingDuration / 16.0).toLong() * 16 + 16 - elapsed)
             composeRule.waitForIdle()
             assertEquals(0f, motion.progress.value, 0f)
             assertTrue(!settled && transition == null)
-            saveFrame("close-288")
+            if (captureFrames) saveFrame("$style-close-end")
         } finally {
             composeRule.runOnIdle { visible = false }
             composeRule.mainClock.advanceTimeByFrame()
@@ -153,7 +182,8 @@ class HeroPacingInstrumentedTest {
     }
 
     private fun expansion(source: Rect, width: Float, height: Float, motion: AlbumTransitionMotion): Float =
-        (albumContainerFrame(source, width, height, motion.progress.value).bounds.height - source.height) / (height - source.height)
+        (albumContainerFrame(source, width, height, motion.progress.value, smoothPacing = true).bounds.width - source.width) /
+            (width - source.width)
 
     private fun saveFrame(name: String) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext

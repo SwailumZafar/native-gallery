@@ -1,6 +1,6 @@
 # Aster App Handoff
 
-Last updated: 2026-11-08
+Last updated: 2026-11-09
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -119,11 +119,11 @@ Current repository state:
 ```text
 Branch: main
 Remote tracking branch: origin/main
-Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
-Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
-Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Photo Lane v0.9.51 / code 54; Normal LivingFlow Hero uses its full animation clock, with spring/Enhanced presets and scrolling improvements preserved
-Installed build: Photo Lane v0.9.51 / code 54 optimized ARM64 benchmark variant on RMX3852 at 192.168.18.95:36993; upgrade/hash verified and cold launch succeeds in 343 ms; 16 focused debug phone checks passed across the initial run and one isolated retry
+Previous pushed implementation baseline: 3875b40 Save Photo Lane 0.9.51 with smooth Hero pacing and optimized scrolling
+Previous save point: v0.9.51 / code 54; accepted smooth Hero, pushed before extending the motion to other tiles
+Current source save point: installed Photo Lane v0.9.53 / code 56; resolve its commit with git log -1
+Current workspace: Photo Lane v0.9.53 / code 56; refined Enhanced LivingFlow with accepted Normal retained; 252 JVM tests and 24 phone checks pass
+Installed build: Photo Lane v0.9.53 / code 56 optimized ARM64 benchmark variant on RMX3852 at 192.168.18.95:43369; upgrade/hash verified and cold launch succeeds in 345 ms
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -131,6 +131,8 @@ Repository visibility: private
 Recent saved work:
 
 ```text
+3875b40 Save Photo Lane 0.9.51 with smooth Hero pacing and optimized scrolling
+d43a2f5 Release Photo Lane 0.9.47 with smoother album transitions
 c729e02 Introduce Luma Nook palettes and continuous grid preloading
 c7a0424 Improve photo detail, viewer return, and settings in v0.9.16
 ec0cbc0 Promote selected v0.9.15 source as build 18
@@ -153,6 +155,28 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-11-09 Enhanced LivingFlow refinement (v0.9.53)
+
+- The user accepted Normal's shared pacing and requested refinement of Fast Enhanced, particularly its abrupt Hero. Enhanced was still using high-stiffness springs and initial velocities of +6/-7, followed by size-dependent spatial easing, concentrating movement in early frames.
+- Enhanced now uses a linear clock and the same single smooth spatial curve for the page, cover, and bottom-navigation return. Its opening/closing clocks are calculated once from the previous springs' full-trip settling durations (193/176 ms); the launch kick and long nearly-stationary tail are replaced by a smooth full journey. Partial reversals retain position and scale their remaining duration.
+- Normal's 400/280 ms clocks and spatial curve are unchanged. The separate Spring animation toggle retains its historical Normal/Fast spring traces. No scrolling-policy changes were made.
+- Related hardening: clock tests compare Enhanced's endpoint timing against the prior springs, measure first-frame/peak Hero displacement, and cover source sizes/directions. Controlled Android rendering now checks both speeds and both directions on four generated tile shapes; repeated real-app fixture visits cover Enhanced as well as Normal.
+- All 252 JVM tests pass, including less than 1.5% first-frame Hero displacement in either direction at 60 Hz, at least 15% lower peak frame displacement versus the old Enhanced path, and endpoint timing within one frame of its prior springs.
+- All 24 focused RMX3852 checks pass in 39.802 seconds, covering eight generated overlay cases, retained layers, return geometry, row activation, recovered timestamps, page entry, and repeated visits in Normal/Enhanced with both toggles. The first test-helper install returned -99 while the phone was locked; after the user unlocked it, installation and the complete run passed.
+- Generated Enhanced Hero frames at 48/96/144 ms were exported and inspected; the cover, intermediate page, and late expansion progress across the journey. No live-gallery recording or private-photo export was made. Local generated keyframes/logs remain ignored under `tmp/enhanced-v053-*`.
+- Debug, test, and optimized benchmark builds pass (7m 49s). Lint has 0 errors and 12 warnings, including the expected ChromeOS warning for phone-only ARM64 packaging. An ignored copy of the accepted v0.9.52 optimized APK is retained at `tmp/photo-lane-v0.9.52-accepted.apk`.
+- Installed the optimized ARM64 benchmark APK in place, retaining app data/settings. Confirmed version 0.9.53/code 56, no DEBUGGABLE flag, 345 ms cold launch, and matching installed SHA-256 `CDAC5106F6C18AE92E2C76BC75066B8F43D0B9197FA8D030E8A64B26292D7FC2`. Removed the temporary test helper and exactly the generated color-fixture PNGs. The v0.9.52/53 implementation, tests, and notes are included in the v0.9.53 GitHub save point requested 2026-11-09. See `docs/ENHANCED_PACING_0.9.53.md`.
+
+## 2026-11-08 Shared LivingFlow album pacing (v0.9.52)
+
+- The user accepted the smooth v0.9.51 Hero, requested committing it to GitHub first, then applying the same optimization to other tiles. Saved and pushed the complete existing version as `3875b40` on `origin/main` before editing the new version.
+- Every Normal LivingFlow album card now uses a linear clock and the same single smooth spatial curve as the accepted Hero. Cover fading, retained page clipping, and bottom-navigation reveal read the same geometry. The actual source rectangle, miniature-page treatment, and center mask remain size aware.
+- Opening/closing durations remain 400/280 ms. The Hero geometry remains identical; Fast Enhanced and Spring animation retain their saved springs and launch behavior. No scrolling policy changes were needed.
+- Related hardening: frame-clock checks compare several tile sizes in both directions; geometry checks cover clipping/cover alignment and portrait/landscape endpoints; an exact spring trace protects Enhanced. The controlled Android overlay fixture now covers Hero, square, list, and compact source cards using generated content only.
+- Verification: all 251 JVM tests and all 19 focused phone checks pass. The device checks include four generated tile shapes, retained-grid rendering, return geometry, row activation, recovered timestamps, page entry, and repeated visits with both styles. The first device runner was killed by the phone system before an assertion (`OTHER KILLS BY SYSTEM`, no Java exception); reopening the app and rerunning produced `OK (19 tests)` in 31.848 seconds.
+- Debug, Android-test, and optimized benchmark assembly pass; debug lint has 0 errors and 12 warnings (11 existing plus the expected phone-only ARM64/ChromeOS warning). Full build completed in 8m 14s. Build/test logs remain ignored under `tmp/album-pacing-v052-*.log`.
+- Installed the optimized ARM64 benchmark APK in place, retaining app data. Confirmed version 0.9.52/code 55, no DEBUGGABLE flag, successful 354 ms cold launch, and matching installed SHA-256 `2AA0C365C2D3B02019D1947DA7E5E14CEAB4656BA802CC9555CD17E58AFCEF8A`. Removed only the temporary test helper and generated color-fixture PNGs. These changes are included in the subsequent v0.9.53 GitHub save point. See `docs/ALBUM_PACING_0.9.52.md`.
 
 ## 2026-11-08 Normal Hero pacing correction (v0.9.51)
 

@@ -36,8 +36,8 @@ android {
         applicationId = "com.swailumzafar.nativegallery"
         minSdk = 26
         targetSdk = 36
-        versionCode = 54
-        versionName = "0.9.51"
+        versionCode = 56
+        versionName = "0.9.53"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         targetDeviceAbi?.let { abi -> ndk { abiFilters += abi } }
 

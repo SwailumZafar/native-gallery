@@ -26,9 +26,9 @@ internal fun albumSmoothFraction(value: Float): Float {
     return (t * t * t * (t * (t * 6f - 15f) + 10f)).coerceIn(0f, 1f)
 }
 
-private fun albumSpatialFraction(progress: Float, large: Float): Float {
+private fun albumSpatialFraction(progress: Float, large: Float, smoothPacing: Boolean): Float {
     val fraction = progress.coerceIn(0f, 1f)
-    return lerp(fraction, albumSmoothFraction(fraction), large)
+    return lerp(fraction, albumSmoothFraction(fraction), if (smoothPacing) 1f else large)
 }
 
 internal data class AlbumContainerFrame(
@@ -46,21 +46,23 @@ internal fun albumCoverTransform(width: Float, height: Float, bounds: Rect): Alb
     return AlbumCoverTransform(scale, Offset(bounds.center.x - width * scale / 2f, bounds.center.y - height * scale / 2f))
 }
 
-internal fun albumCoverAlpha(source: Rect, progress: Float, width: Float = Float.POSITIVE_INFINITY): Float {
+internal fun albumCoverAlpha(source: Rect, progress: Float, width: Float = Float.POSITIVE_INFINITY,
+    smoothPacing: Boolean = false): Float {
     // The slow-motion reference retains the page until the final cover-sized part
     // of the collapse. A large cover must not replace the still-tall shrinking grid.
     val banner = GalleryMotion.smoothstep(1.2f, 2.2f, source.width / source.height.coerceAtLeast(1f))
     val large = albumLargeTileFraction(source, width)
-    val fraction = albumSpatialFraction(progress, large)
+    val fraction = albumSpatialFraction(progress, large, smoothPacing)
     val start = lerp(0f, 0.08f, large)
     val end = lerp(lerp(0.16f, 0.20f, banner), 0.62f, large)
     return 1f - albumSmoothFraction((fraction - start) / (end - start))
 }
 
 /** Uniform page scaling, with a top anchor for small tiles and a center mask for wide cards. */
-internal fun albumContainerFrame(source: Rect, width: Float, height: Float, progress: Float): AlbumContainerFrame {
+internal fun albumContainerFrame(source: Rect, width: Float, height: Float, progress: Float,
+    smoothPacing: Boolean = false): AlbumContainerFrame {
     val large = albumLargeTileFraction(source, width)
-    val fraction = albumSpatialFraction(progress, large)
+    val fraction = albumSpatialFraction(progress, large, smoothPacing)
     // A native album is a miniature page for most of its journey. Its height only
     // compresses into the cover near the source, rather than cropping away rows
     // throughout the whole collapse. The same curve makes reversals continuous.

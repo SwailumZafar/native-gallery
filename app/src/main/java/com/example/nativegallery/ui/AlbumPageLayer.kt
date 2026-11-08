@@ -25,10 +25,11 @@ internal fun Modifier.albumPageLayer(
     height: Float,
     sourceRadius: Float,
     progress: () -> Float,
-    reveal: () -> Float = { 1f }
+    reveal: () -> Float = { 1f },
+    smoothPacing: Boolean = false
 ): Modifier = graphicsLayer {
     val fraction = progress().coerceIn(0f, 1f)
-    val frame = albumContainerFrame(source, width, height, fraction)
+    val frame = albumContainerFrame(source, width, height, fraction, smoothPacing)
     transformOrigin = TransformOrigin(0f, 0f)
     translationX = frame.translation.x
     translationY = frame.translation.y

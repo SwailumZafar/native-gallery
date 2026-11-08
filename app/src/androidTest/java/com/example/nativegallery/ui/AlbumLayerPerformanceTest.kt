@@ -53,7 +53,8 @@ class AlbumLayerPerformanceTest {
             ) else Modifier.albumPageLayer(
                 source = source,
                 width = width, height = height, sourceRadius = 18f,
-                progress = { progress.floatValue }
+                progress = { progress.floatValue },
+                smoothPacing = true
             )).layout { measurable, constraints ->
                 measurements++
                 val placeable = measurable.measure(constraints)

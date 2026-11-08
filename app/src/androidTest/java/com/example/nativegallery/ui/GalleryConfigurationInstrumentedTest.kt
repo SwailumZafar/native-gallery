@@ -61,13 +61,20 @@ class GalleryConfigurationInstrumentedTest {
         .around(composeRule)
 
     @Test
-    fun bothAlbumAnimationsSupportRepeatedOpenAndClose() {
+    fun bothAlbumAnimationsSupportRepeatedOpenAndClose() = checkRepeatedAlbumVisits(
+        com.example.nativegallery.data.FolderTransitionStyle.Normal)
+
+    @Test
+    fun enhancedAlbumAnimationsSupportRepeatedOpenAndClose() = checkRepeatedAlbumVisits(
+        com.example.nativegallery.data.FolderTransitionStyle.Fast)
+
+    private fun checkRepeatedAlbumVisits(style: com.example.nativegallery.data.FolderTransitionStyle) {
         val repository = GallerySettingsRepository(InstrumentationRegistry.getInstrumentation().targetContext)
         val previousSettings = repository.initialSettings()
         try {
             for (classic in listOf(false, true)) {
                 repository.save(previousSettings.copy(useClassicAlbumAnimation = classic,
-                    folderTransitionStyle = com.example.nativegallery.data.FolderTransitionStyle.Normal))
+                    folderTransitionStyle = style))
                 composeRule.activityRule.scenario.recreate()
                 composeRule.onNodeWithContentDescription("Albums").performClick()
                 composeRule.onNode(hasSetTextAction()).performTextClearance()

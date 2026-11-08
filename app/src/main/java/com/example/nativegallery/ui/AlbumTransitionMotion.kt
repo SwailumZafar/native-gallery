@@ -2,22 +2,31 @@ package com.example.nativegallery.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.SpringSpec
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.spring
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.MotionSpecs
-import com.example.nativegallery.model.AlbumLayoutMode
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
-/** Use the captured tile's actual width so adaptive Big tiles keep the right pacing. */
-internal fun useHeroAlbumPacing(layout: AlbumLayoutMode, sourceWidth: Float, rootWidth: Float): Boolean =
-    (layout == AlbumLayoutMode.Hero || layout == AlbumLayoutMode.BigTiles) &&
-        rootWidth > 0f && sourceWidth / rootWidth > 0.60f
+// Preserve Enhanced's previous endpoint timing, but spread its visible journey
+// across that clock instead of combining a launch kick with front-loaded springs.
+private fun enhancedSettleMillis(spec: SpringSpec<Float>, launchVelocity: Float): Int = ceil(
+    spec.vectorize(Float.VectorConverter).getDurationNanos(
+        AnimationVector1D(0f), AnimationVector1D(1f), AnimationVector1D(launchVelocity)
+    ) / 1_000_000.0
+).toInt()
+
+internal val EnhancedAlbumOpenMillis = enhancedSettleMillis(MotionSpecs.AppleSpringFolderFast, 6f)
+internal val EnhancedAlbumCloseMillis = enhancedSettleMillis(MotionSpecs.AppleSpringFolderCloseFast, 7f)
 
 /** Shared across direction changes; new albums get independent motion. */
-internal class AlbumTransitionMotion(opening: Boolean, val classic: Boolean = false, val hero: Boolean = false) {
+internal class AlbumTransitionMotion(opening: Boolean, val classic: Boolean = false) {
     val progress = Animatable(if (opening) 0f else 1f)
 
     suspend fun animateTo(opening: Boolean, fast: Boolean) {
@@ -30,27 +39,19 @@ internal class AlbumTransitionMotion(opening: Boolean, val classic: Boolean = fa
                 opening -> spring(dampingRatio = 0.82f, stiffness = 300f)
                 else -> spring(dampingRatio = 0.84f, stiffness = 320f)
             }
-        } else if (fast) {
-            if (opening) MotionSpecs.AppleSpringFolderFast else MotionSpecs.AppleSpringFolderCloseFast
         } else {
-            val duration = if (opening) GalleryMotion.AlbumOpenMillis else GalleryMotion.AlbumCloseMillis
+            val duration = when {
+                fast && opening -> EnhancedAlbumOpenMillis
+                fast -> EnhancedAlbumCloseMillis
+                opening -> GalleryMotion.AlbumOpenMillis
+                else -> GalleryMotion.AlbumCloseMillis
+            }
             tween(
                 durationMillis = (duration * abs(target - progress.value)).roundToInt().coerceAtLeast(80),
-                // Hero geometry already applies a smooth spatial curve. Feeding it the
-                // normal ease-out completed almost all visible motion in the first 150 ms.
-                // A linear clock applies that curve once, over the entire 400/280 ms.
-                easing = if (hero) LinearEasing else if (opening) GalleryMotion.AlbumOpenEasing else GalleryMotion.AlbumCloseEasing
+                // Geometry applies the smooth curve once for either LivingFlow speed.
+                easing = LinearEasing
             )
         }
-        // Start moving on the first advancing frame instead of spending the beginning
-        // of a tap accelerating from rest. Direction changes keep their current position.
-        val launchVelocity = when {
-            classic -> progress.velocity
-            hero && !fast -> progress.velocity
-            opening && progress.value == 0f -> if (fast) 6f else 2.8f
-            !opening && progress.value == 1f -> if (fast) -7f else -3.4f
-            else -> progress.velocity
-        }
-        progress.animateTo(target, animation, initialVelocity = launchVelocity)
+        progress.animateTo(target, animation, initialVelocity = progress.velocity)
     }
 }
