@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.State
@@ -38,6 +39,23 @@ internal fun gridThumbnailDimensionBucket(pixels: Int): Int =
 
 internal fun gridVideoThumbnailSize(width: Int, height: Int, previewSize: Int): Int =
     max(previewSize, gridThumbnailDimensionBucket(ceil(max(width, height) * 16.0 / 9.0).toInt())).coerceAtMost(1536)
+
+/** Keep the prepared 384 px poster during a fling; request larger frames after settling. */
+@Composable
+internal fun rememberGridVideoThumbnailSize(uri: Uri?, revision: String?, width: Int, height: Int, previewSize: Int): Int {
+    var requested by remember(uri, revision, previewSize) { mutableIntStateOf(previewSize) }
+    val scrolling = LocalGridScrolling.current
+    LaunchedEffect(uri, revision, width, height, previewSize, scrolling) {
+        if (uri == null || width <= 0 || height <= 0) return@LaunchedEffect
+        snapshotFlow { scrolling.value }.collectLatest { moving ->
+            if (!moving) {
+                delay(180L)
+                requested = max(requested, gridVideoThumbnailSize(width, height, previewSize))
+            }
+        }
+    }
+    return requested
+}
 
 internal fun gridThumbnailDetailKey(uri: String, revision: String?, width: Int, height: Int): String =
     "$uri#grid-detail-v1:${revision.orEmpty()}:${width}x$height@${max(width, height)}"

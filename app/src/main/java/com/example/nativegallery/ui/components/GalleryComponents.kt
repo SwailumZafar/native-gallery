@@ -122,6 +122,9 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
+import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -139,6 +142,12 @@ internal object ThumbnailLoadCoordinator {
     private val loadSemaphore = Semaphore(permits = 4)
     val videoDecodeSemaphore = Semaphore(permits = 2)
     private val keyLocks = ConcurrentHashMap<String, KeyLock>()
+    private val decodeDispatcher = Executors.newFixedThreadPool(3) { task ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            task.run()
+        }, "GalleryThumbnailDecode")
+    }.asCoroutineDispatcher()
 
     private class KeyLock {
         val mutex = Mutex()
@@ -157,7 +166,7 @@ internal object ThumbnailLoadCoordinator {
         return try {
             keyLock.mutex.withLock {
                 validatedCachedBitmap(cacheKey, validator) ?: loadSemaphore.withPermit {
-                    withContext(Dispatchers.IO) {
+                    withContext(decodeDispatcher) {
                         currentCoroutineContext().ensureActive()
                         val decoded = try { loader() }
                         catch (_: java.io.IOException) { null }
@@ -222,26 +231,46 @@ internal fun rememberVideoDurationMillis(mediaItem: MediaItem): Long? {
     val context = LocalContext.current.applicationContext
     val uri = mediaItem.contentUri
     val revision = mediaThumbnailCacheRevision(mediaItem)
-    var duration by remember(uri, revision) { mutableStateOf(mediaItem.durationMillis) }
-    LaunchedEffect(uri, revision, mediaItem.isVideo) {
+    val identity = remember(uri, mediaItem.id, revision) {
+        uri?.let { VideoDurationCache.identity(it, mediaItem.id, mediaItem.fileSizeBytes, mediaItem.dateModifiedMillis) }
+    }
+    var duration by remember(identity, mediaItem.durationMillis) {
+        mutableStateOf(identity?.let(VideoDurationCache::peek)?.takeIf { it > 0L } ?: mediaItem.durationMillis)
+    }
+    val scrolling = LocalGridScrolling.current
+    LaunchedEffect(identity, mediaItem.isVideo, mediaItem.durationMillis, scrolling) {
         if (!mediaItem.isVideo || uri == null) return@LaunchedEffect
-        duration = withContext(Dispatchers.IO) {
-            videoMetadataSemaphore.withPermit {
-                val key = VideoDurationCache.identity(uri, mediaItem.id, mediaItem.fileSizeBytes, mediaItem.dateModifiedMillis)
-                VideoDurationCache.get(context, key).takeIf { it > 0L } ?: run {
-                    // Grid badges use known metadata; the full viewer resolves container timing.
-                    val needsRecovery = duration == null || duration!! <= 0L
-                    if (needsRecovery) {
-                        VideoDurationResolver.resolve(context, uri, mediaItem.title, mediaItem.mimeType)
-                            .takeIf { it > 0L }
-                            ?.also { VideoDurationCache.put(context, key, it) }
-                            ?: mediaItem.durationMillis
-                    } else mediaItem.durationMillis
-                }
-            }
+        snapshotFlow { scrolling.value }.collectLatest { moving ->
+            if (moving) return@collectLatest
+            delay(160L)
+            duration = loadVideoDurationMillis(context, mediaItem)
         }
     }
     return duration
+}
+
+internal suspend fun loadVideoDurationMillis(context: Context, mediaItem: MediaItem): Long? {
+    val uri = mediaItem.contentUri ?: return mediaItem.durationMillis
+    if (!mediaThumbnailIsVideo(mediaItem)) return mediaItem.durationMillis
+    val identity = VideoDurationCache.identity(uri, mediaItem.id, mediaItem.fileSizeBytes, mediaItem.dateModifiedMillis)
+    VideoDurationCache.peek(identity).takeIf { it > 0L }?.let { return it }
+    return withContext(Dispatchers.IO) {
+        videoMetadataSemaphore.withPermit {
+            VideoDurationCache.get(context, identity).takeIf { it > 0L }
+                ?: (mediaItem.durationMillis?.takeIf { it > 0L } ?: run {
+                    GalleryImageWorkScheduler.awaitIdle()
+                    VideoDurationResolver.resolve(context, uri, mediaItem.title, mediaItem.mimeType).takeIf { it > 0L }
+                })?.also { VideoDurationCache.put(context, identity, it) }
+        }
+    }
+}
+
+internal fun videoDurationLabel(mediaItem: MediaItem, durationMillis: Long?): String {
+    val duration = durationMillis?.takeIf { it > 0L } ?: return mediaItem.durationLabel.orEmpty()
+    val seconds = duration / 1_000L
+    return if (seconds >= 3_600L) {
+        String.format(java.util.Locale.US, "%d:%02d:%02d", seconds / 3_600L, seconds / 60L % 60L, seconds % 60L)
+    } else String.format(java.util.Locale.US, "%02d:%02d", seconds / 60L, seconds % 60L)
 }
 
 internal fun thumbnailCacheIdentityUri(
@@ -578,12 +607,7 @@ fun MediaThumbnail(
         if (mediaItem.isVideo && mediaItem.contentUri != null) {
             val durationMillis = rememberVideoDurationMillis(mediaItem)
             VideoBadge(
-                duration = durationMillis?.takeIf { it > 0L }?.let { duration ->
-                    val seconds = duration / 1_000L
-                    if (seconds >= 3_600L) {
-                        String.format(java.util.Locale.US, "%d:%02d:%02d", seconds / 3_600L, seconds / 60L % 60L, seconds % 60L)
-                    } else String.format(java.util.Locale.US, "%02d:%02d", seconds / 60L, seconds % 60L)
-                } ?: mediaItem.durationLabel.orEmpty(),
+                duration = videoDurationLabel(mediaItem, durationMillis),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(6.dp)
@@ -695,8 +719,8 @@ fun GalleryImage(
     displayedBitmapKey: Any? = null
 ) {
     var renderedSize by remember { mutableStateOf(IntSize.Zero) }
-    val requestSize = if (sharpenThumbnail && isVideo && renderedSize != IntSize.Zero) {
-        gridVideoThumbnailSize(renderedSize.width, renderedSize.height, thumbnailSize)
+    val requestSize = if (sharpenThumbnail && isVideo) {
+        rememberGridVideoThumbnailSize(imageUri, cacheRevision, renderedSize.width, renderedSize.height, thumbnailSize)
     } else thumbnailSize
     val imageState = rememberContentUriBitmap(
         imageUri = imageUri,
@@ -885,23 +909,23 @@ fun VideoBadge(
         shape = CircleShape
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = Icons.Filled.PlayArrow,
                 contentDescription = null,
                 tint = Color.White,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(13.dp)
             )
             if (duration.isNotBlank()) {
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(2.dp))
                 Text(
                     text = duration,
                     color = Color.White,
                     style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = 10.sp,
-                        lineHeight = 12.sp,
+                        fontSize = 9.sp,
+                        lineHeight = 11.sp,
                         fontWeight = FontWeight.Normal
                     )
                 )
@@ -1236,11 +1260,9 @@ private suspend fun loadCachedBitmap(
     ThumbnailMemoryCache.get(cacheKey)?.takeIf(validator)?.let { return it }
     GalleryImageWorkScheduler.awaitIdle()
     if (diskCacheEligible) {
-        val diskHit = withContext(Dispatchers.IO) {
+        val diskHit = ThumbnailLoadCoordinator.load(cacheKey, validator) {
             ThumbnailDiskCache.get(context, cacheKey)?.let { cached ->
                 if (validator(cached)) {
-                    cached.prepareToDraw()
-                    ThumbnailMemoryCache.put(cacheKey, cached)
                     cached
                 } else {
                     ThumbnailDiskCache.remove(context, cacheKey)
@@ -1299,13 +1321,10 @@ private suspend fun loadPersistedThumbnail(
         !bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0
     }
     ThumbnailMemoryCache.get(cacheKey)?.takeIf(validator)?.let { return it }
-    return withContext(Dispatchers.IO) {
+    return ThumbnailLoadCoordinator.load(cacheKey, validator) {
         ThumbnailDiskCache.get(context, cacheKey)?.also { cached ->
             if (!validator(cached)) ThumbnailDiskCache.remove(context, cacheKey)
-        }?.takeIf(validator)?.also {
-            it.prepareToDraw()
-            ThumbnailMemoryCache.put(cacheKey, it)
-        }
+        }?.takeIf(validator)
     }
 }
 

@@ -4,7 +4,7 @@ Photo Lane is a privacy-focused Android photo and video gallery built with
 Kotlin and Jetpack Compose. It reads the device library through MediaStore and
 keeps its core organization, search, editing, and vault flows on the device.
 
-> Status: version 0.9.47 pre-release. A candidate Play identity and reproducible
+> Status: version 0.9.51 pre-release. A candidate Play identity and reproducible
 > release configuration are in place. Confirm ownership of the final application
 > ID, then complete physical-device, accessibility, and large-library testing
 > before public launch.
@@ -54,6 +54,13 @@ From PowerShell:
 
 The debug APK is generated at
 `app/build/outputs/apk/debug/app-debug.apk`.
+
+For on-device performance testing and everyday local use, build the optimized,
+locally signed variant with `.\gradlew.bat :app:assembleBenchmark`. Its APK is
+`app/build/outputs/apk/benchmark/app-benchmark.apk`; it updates the existing local
+installation in place. Run instrumentation against the debug variant first.
+For an ARM64 phone, add `-PtargetDeviceAbi=arm64-v8a` to produce a smaller device
+package. Omit this property when a universal package is needed.
 
 ## Release build
 

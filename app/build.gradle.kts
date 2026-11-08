@@ -18,6 +18,11 @@ val uploadSigningValues = listOf(
 )
 val uploadSigningProvided = uploadSigningValues.any { !it.isNullOrBlank() }
 val uploadSigningConfigured = uploadSigningValues.all { !it.isNullOrBlank() }
+val targetDeviceAbi = providers.gradleProperty("targetDeviceAbi").orNull
+
+require(targetDeviceAbi == null || targetDeviceAbi in setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")) {
+    "targetDeviceAbi must name a supported Android ABI."
+}
 
 require(!uploadSigningProvided || uploadSigningConfigured) {
     "Set all four NATIVE_GALLERY_UPLOAD_* variables, or leave all four unset for an unsigned release build."
@@ -31,9 +36,10 @@ android {
         applicationId = "com.swailumzafar.nativegallery"
         minSdk = 26
         targetSdk = 36
-        versionCode = 50
-        versionName = "0.9.47"
+        versionCode = 54
+        versionName = "0.9.51"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        targetDeviceAbi?.let { abi -> ndk { abiFilters += abi } }
 
         vectorDrawables {
             useSupportLibrary = true

@@ -853,8 +853,8 @@ private fun LazyListScope.photoSection(
     item(key = "section-$title", contentType = "photo-section-title") {
         Box(
             modifier = Modifier.animateItem(
-                fadeInSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 380f),
-                fadeOutSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 380f),
+                fadeInSpec = null,
+                fadeOutSpec = null,
                 placementSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 350f)
             )
         ) {
@@ -874,11 +874,13 @@ private fun LazyListScope.photoSection(
         contentType = { "photo-grid-row" }
     ) { rowIndex ->
         val startIndex = rowIndex * columns
-        val rowItems = mediaItems.subList(startIndex, minOf(startIndex + columns, mediaItems.size))
+        val rowItems = remember(mediaItems, startIndex, columns) {
+            mediaItems.subList(startIndex, minOf(startIndex + columns, mediaItems.size))
+        }
         Box(
             modifier = Modifier.animateItem(
-                fadeInSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 380f),
-                fadeOutSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 380f),
+                fadeInSpec = null,
+                fadeOutSpec = null,
                 placementSpec = androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 350f)
             )
         ) {

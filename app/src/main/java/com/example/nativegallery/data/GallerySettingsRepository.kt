@@ -10,7 +10,8 @@ data class GallerySettings(
     val viewerTransitionStyle: ViewerTransitionStyle = ViewerTransitionStyle.Normal,
     val autoplayVideos: Boolean = true,
     val startVideosMuted: Boolean = false,
-    val performanceMode: Boolean = true
+    val performanceMode: Boolean = true,
+    val useClassicAlbumAnimation: Boolean = false
 )
 
 enum class GalleryThemeMode {
@@ -68,7 +69,8 @@ class GallerySettingsRepository(context: Context) {
             },
             autoplayVideos = preferences.getBoolean(AUTOPLAY_VIDEOS_KEY, true),
             startVideosMuted = preferences.getBoolean(START_VIDEOS_MUTED_KEY, false),
-            performanceMode = preferences.getBoolean(PERFORMANCE_MODE_KEY, true)
+            performanceMode = preferences.getBoolean(PERFORMANCE_MODE_KEY, true),
+            useClassicAlbumAnimation = preferences.getBoolean(CLASSIC_ALBUM_ANIMATION_KEY, false)
         )
     }
 
@@ -82,6 +84,7 @@ class GallerySettingsRepository(context: Context) {
             .putBoolean(AUTOPLAY_VIDEOS_KEY, settings.autoplayVideos)
             .putBoolean(START_VIDEOS_MUTED_KEY, settings.startVideosMuted)
             .putBoolean(PERFORMANCE_MODE_KEY, settings.performanceMode)
+            .putBoolean(CLASSIC_ALBUM_ANIMATION_KEY, settings.useClassicAlbumAnimation)
             .apply()
         return settings
     }
@@ -100,5 +103,6 @@ class GallerySettingsRepository(context: Context) {
         const val AUTOPLAY_VIDEOS_KEY = "autoplay_videos"
         const val START_VIDEOS_MUTED_KEY = "start_videos_muted"
         const val PERFORMANCE_MODE_KEY = "performance_mode"
+        const val CLASSIC_ALBUM_ANIMATION_KEY = "classic_album_animation"
     }
 }

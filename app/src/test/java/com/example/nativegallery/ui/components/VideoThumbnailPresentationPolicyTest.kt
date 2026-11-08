@@ -8,6 +8,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VideoThumbnailPresentationPolicyTest {
+    @Test fun durationLabelsMatchDuringOpeningAndAfterTheGridBecomesInteractive() {
+        val video = MediaItem("video", "camera", MediaType.Video, "Video.mp4", "", durationLabel = "00:45")
+        assertEquals("00:45", videoDurationLabel(video, null))
+        assertEquals("00:45", videoDurationLabel(video, 0L))
+        assertEquals("02:03", videoDurationLabel(video, 123_000L))
+        assertEquals("1:01:01", videoDurationLabel(video, 3_661_000L))
+    }
+
     @Test
     fun genericVideoIconNeverFlashesDuringLoadingOrTransitionPreview() {
         assertFalse(shouldShowVideoThumbnailFallback(isVideo = true, loadComplete = false, cachedOnly = false))

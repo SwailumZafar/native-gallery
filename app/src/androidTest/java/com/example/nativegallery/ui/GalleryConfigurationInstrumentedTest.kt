@@ -33,6 +33,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.nativegallery.MainActivity
+import com.example.nativegallery.data.GallerySettingsRepository
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import org.junit.Assume.assumeTrue
@@ -58,6 +59,38 @@ class GalleryConfigurationInstrumentedTest {
     val rules: TestRule = RuleChain
         .outerRule(fixtureRule)
         .around(composeRule)
+
+    @Test
+    fun bothAlbumAnimationsSupportRepeatedOpenAndClose() {
+        val repository = GallerySettingsRepository(InstrumentationRegistry.getInstrumentation().targetContext)
+        val previousSettings = repository.initialSettings()
+        try {
+            for (classic in listOf(false, true)) {
+                repository.save(previousSettings.copy(useClassicAlbumAnimation = classic,
+                    folderTransitionStyle = com.example.nativegallery.data.FolderTransitionStyle.Normal))
+                composeRule.activityRule.scenario.recreate()
+                composeRule.onNodeWithContentDescription("Albums").performClick()
+                composeRule.onNode(hasSetTextAction()).performTextClearance()
+                composeRule.onNode(hasSetTextAction()).performTextInput(FixtureAlbumName)
+                composeRule.waitUntil(ConfigurationTimeoutMillis) {
+                    composeRule.onAllNodesWithContentDescription(FixtureAlbumName).fetchSemanticsNodes().isNotEmpty()
+                }
+                repeat(3) {
+                    composeRule.onNodeWithContentDescription(FixtureAlbumName).performClick()
+                    composeRule.waitUntil(ConfigurationTimeoutMillis) {
+                        composeRule.onAllNodesWithContentDescription("Back").fetchSemanticsNodes().isNotEmpty() &&
+                            composeRule.onAllNodesWithTag(AlbumTransitionOverlayTestTag).fetchSemanticsNodes().isEmpty()
+                    }
+                    composeRule.onNodeWithContentDescription("Back").performClick()
+                    composeRule.waitUntil(ConfigurationTimeoutMillis) {
+                        composeRule.onAllNodesWithContentDescription("Back").fetchSemanticsNodes().isEmpty() &&
+                            composeRule.onAllNodesWithTag(AlbumTransitionOverlayTestTag).fetchSemanticsNodes().isEmpty() &&
+                            composeRule.onAllNodesWithContentDescription(FixtureAlbumName).fetchSemanticsNodes().isNotEmpty()
+                    }
+                }
+            }
+        } finally { repository.save(previousSettings) }
+    }
 
     @Test
     fun cancelingEdgeBackKeepsTheAlbumAndTheNextCommittedBackStillWorks() {

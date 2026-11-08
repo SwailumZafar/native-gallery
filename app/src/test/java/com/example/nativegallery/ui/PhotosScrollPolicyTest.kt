@@ -6,6 +6,19 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PhotosScrollPolicyTest {
+    @Test fun movingPrefetchIsSmallerAndFollowsTheDirectionOfTravel() {
+        val resting = mediaPrefetchRange(400, 1000, 4)
+        val forward = mediaPrefetchRange(400, 1000, 4, scrolling = true, forward = true)
+        val backward = mediaPrefetchRange(400, 1000, 4, scrolling = true, forward = false)
+        assertTrue(forward.count() < resting.count())
+        assertTrue(backward.count() < resting.count())
+        assertTrue(400 in forward && 400 in backward)
+        assertTrue(forward.last > backward.last)
+        assertTrue(backward.first < forward.first)
+        assertEquals(0, mediaPrefetchRange(0, 10, 4, scrolling = true).first)
+        assertEquals(999, mediaPrefetchRange(999, 1000, 4, scrolling = true).last)
+    }
+
     @Test
     fun normalGridSkipsContinuousTileBoundsTracking() {
         assertFalse(shouldTrackPhotoTileBounds(selectionMode = false, revealInProgress = false))

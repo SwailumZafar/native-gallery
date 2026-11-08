@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -20,15 +21,19 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.model.MediaType
+import com.example.nativegallery.data.VideoDurationCache
 import com.example.nativegallery.ui.components.GalleryImageWorkScheduler
 import com.example.nativegallery.ui.components.ThumbnailDiskCache
 import com.example.nativegallery.ui.components.ThumbnailMemoryCache
 import com.example.nativegallery.ui.components.mediaThumbnailCacheRevision
 import com.example.nativegallery.ui.components.thumbnailCacheIdentityUri
+import com.example.nativegallery.ui.components.rememberVideoDurationMillis
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -38,6 +43,60 @@ import org.junit.Test
 class AlbumRowActivationTest {
     @get:Rule val composeRule = createComposeRule()
     @Before fun keepAwake() = TestScreenAwake.enable()
+
+    @Test fun scrollingPastRowsDoesNotRecomposeAlreadyInteractiveRows() {
+        val firstVisible = mutableIntStateOf(0)
+        var compositions = 0
+        composeRule.setContent {
+            Column {
+                repeat(8) { row ->
+                    rememberAlbumRowInteractive(false, row) { firstVisible.intValue }
+                    SideEffect { compositions++ }
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        val initial = compositions
+        for (index in 1..20) {
+            composeRule.runOnIdle { firstVisible.intValue = index }
+            composeRule.waitForIdle()
+        }
+        assertEquals("Crossing a row must not recompose every visible row", initial, compositions)
+    }
+
+    @Test fun recoveredTimestampsArePresentOnTheFirstCompositionOfEveryAlbumVisit() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val item = MediaItem("cached-duration", "fixture", MediaType.Video, "Recovered.mp4", "",
+            contentUri = Uri.parse("content://album-duration-fixture/${System.nanoTime()}"), isVideo = true,
+            fileSizeBytes = 42L, dateModifiedMillis = 100L)
+        val identity = VideoDurationCache.identity(requireNotNull(item.contentUri), item.id, item.fileSizeBytes, item.dateModifiedMillis)
+        VideoDurationCache.put(context, identity, 123_000L)
+        val visit = mutableIntStateOf(0)
+        val firstDurations = mutableMapOf<Int, Long?>()
+        try {
+            GalleryImageWorkScheduler.setNavigationMoving(true)
+            composeRule.setContent {
+                key(visit.intValue) {
+                    val duration = rememberVideoDurationMillis(item)
+                    val currentVisit = visit.intValue
+                    SideEffect {
+                        if (!firstDurations.containsKey(currentVisit)) firstDurations[currentVisit] = duration
+                    }
+                    AlbumOpeningRow(listOf(item), 1, Modifier.width(100.dp))
+                }
+            }
+            repeat(6) { iteration ->
+                if (iteration > 0) composeRule.runOnIdle { visit.intValue = iteration }
+                composeRule.onNodeWithText("02:03").assertIsDisplayed()
+                composeRule.runOnIdle { assertEquals(123_000L, firstDurations[iteration]) }
+            }
+            assertEquals(0L, VideoDurationCache.peek(VideoDurationCache.identity(
+                requireNotNull(item.contentUri), item.id, item.fileSizeBytes, 101L)))
+        } finally {
+            GalleryImageWorkScheduler.setNavigationMoving(false)
+            context.getSharedPreferences("native_gallery_video_durations_v1", 0).edit().remove(identity).apply()
+        }
+    }
 
     @Test fun aDiskCachedRowAppearsWhileNavigationStillBlocksMediaDecoders() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -97,7 +156,7 @@ class AlbumRowActivationTest {
         composeRule.setContent {
             Column {
                 repeat(ready.size) { row ->
-                    val interactive = rememberAlbumRowInteractive(moving.value, row + 20, 20).value
+                    val interactive = rememberAlbumRowInteractive(moving.value, row + 20) { 20 }.value
                     SideEffect { ready[row] = interactive }
                 }
             }

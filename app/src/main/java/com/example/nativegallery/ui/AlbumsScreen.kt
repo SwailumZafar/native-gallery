@@ -347,7 +347,8 @@ fun AlbumsScreen(
     onSearchQueryChange: (String) -> Unit = {},
     bigTileColumns: Int = 2,
     basicTileColumns: Int = 3,
-    heroHeight: androidx.compose.ui.unit.Dp = 176.dp
+    heroHeight: androidx.compose.ui.unit.Dp = 176.dp,
+    onPreloadAlbums: suspend (List<Album>) -> Unit = {}
 ) {
     val hapticFeedback = LocalHapticFeedback.current
     var overflowExpanded by rememberSaveable { mutableStateOf(false) }
@@ -378,6 +379,25 @@ fun AlbumsScreen(
     }
     val leadingAlbum = sortedAlbums.firstOrNull()
     val remainingAlbums = sortedAlbums.drop(1)
+    val preloadEnabled = LocalGridPrefetchEnabled.current
+    val latestOnPreloadAlbums by rememberUpdatedState(onPreloadAlbums)
+    LaunchedEffect(sortedAlbums, listState, layoutMode, preloadEnabled) {
+        if (!preloadEnabled) return@LaunchedEffect
+        snapshotFlow {
+            // Entry preparation is speculative. Never decode entire folders while the
+            // user is flinging past their covers; visible cover requests still run.
+            if (listState.isScrollInProgress) emptyList()
+            else listState.layoutInfo.visibleItemsInfo.map { it.key.toString() }
+        }
+            .distinctUntilChanged()
+            .collectLatest { keys ->
+                val candidates = albumEntryPreloadCandidates(sortedAlbums, keys, layoutMode == AlbumLayoutMode.BigTiles)
+                if (candidates.isNotEmpty()) {
+                    delay(160L)
+                    latestOnPreloadAlbums(candidates)
+                }
+            }
+    }
     val reorderEnabled = !automaticSort && searchQuery.isBlank() && sortedAlbums.size > 1
     val deferAlbumCoverLoads = remember { mutableStateOf(false) }
     // Coordinates change on every fling frame. Keeping them out of snapshot state prevents
@@ -2160,7 +2180,7 @@ private fun LazyListScope.albumDetailRows(
                 placementSpec = spring(dampingRatio = 0.82f, stiffness = 350f)
             )
         ) {
-            val interactive by rememberAlbumRowInteractive(deferInteractiveRows, rowIndex, listState.firstVisibleItemIndex)
+            val interactive by rememberAlbumRowInteractive(deferInteractiveRows, rowIndex) { listState.firstVisibleItemIndex }
             if (!interactive) {
                 AlbumOpeningRow(rowItems, columns, Modifier.fillMaxWidth())
             } else AlbumDetailRow(

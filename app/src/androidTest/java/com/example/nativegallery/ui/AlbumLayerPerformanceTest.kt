@@ -30,7 +30,13 @@ class AlbumLayerPerformanceTest {
     @Test fun heroCenterMaskDoesNotRedrawOrRemeasureItsGridInEitherDirection() =
         checkRetainedGrid(wide = true)
 
-    private fun checkRetainedGrid(wide: Boolean) {
+    @Test fun classicPageMaskDoesNotRedrawOrRemeasureItsGrid() =
+        checkRetainedGrid(wide = false, classic = true)
+
+    @Test fun classicHeroMaskRetainsTheGridInBothDirections() =
+        checkRetainedGrid(wide = true, classic = true)
+
+    private fun checkRetainedGrid(wide: Boolean, classic: Boolean = false) {
         val progress = mutableFloatStateOf(0.3f)
         var compositions = 0
         var measurements = 0
@@ -40,11 +46,15 @@ class AlbumLayerPerformanceTest {
             val density = LocalDensity.current
             val width = with(density) { 160.dp.toPx() }
             val height = with(density) { 320.dp.toPx() }
-            Box(Modifier.size(160.dp, 320.dp).testTag("page").albumPageLayer(
-                source = Rect(width * 0.1f, height * 0.3f, width * if (wide) 0.95f else 0.5f, height * 0.5f),
+            val source = Rect(width * 0.1f, height * 0.3f, width * if (wide) 0.95f else 0.5f, height * 0.5f)
+            Box(Modifier.size(160.dp, 320.dp).testTag("page").then(if (classic) Modifier.classicAlbumPageLayer(
+                source = source, width = width, height = height, sourceRadius = 18f,
+                progress = { progress.floatValue }
+            ) else Modifier.albumPageLayer(
+                source = source,
                 width = width, height = height, sourceRadius = 18f,
                 progress = { progress.floatValue }
-            ).layout { measurable, constraints ->
+            )).layout { measurable, constraints ->
                 measurements++
                 val placeable = measurable.measure(constraints)
                 layout(placeable.width, placeable.height) { placeable.place(0, 0) }

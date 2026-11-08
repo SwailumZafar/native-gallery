@@ -1,5 +1,7 @@
 package com.example.nativegallery.ui
 
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
@@ -18,6 +20,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import com.example.nativegallery.data.GallerySettings
+import com.example.nativegallery.data.GallerySettingsRepository
+import com.example.nativegallery.data.FolderTransitionStyle
 import com.example.nativegallery.data.GalleryThemeMode
 import com.example.nativegallery.data.GalleryPalette
 import com.example.nativegallery.data.MediaManagementAccessState
@@ -34,6 +38,41 @@ import org.junit.runner.RunWith
 class GallerySettingsSheetTest {
     @org.junit.Before fun keepTestWindowAwake() = TestScreenAwake.enable()
     @get:Rule val composeRule = createComposeRule()
+
+    @Test fun classicAlbumAnimationTogglePersistsBothWaysAndKeepsOtherPreferences() {
+        val base = InstrumentationRegistry.getInstrumentation().targetContext
+        val preferencesName = "classic-motion-${System.nanoTime()}"
+        val context = object : ContextWrapper(base) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String, mode: Int) = base.getSharedPreferences(preferencesName, mode)
+        }
+        val repository = GallerySettingsRepository(context)
+        var settings by mutableStateOf(repository.initialSettings().copy(
+            palette = GalleryPalette.Sunset, folderTransitionStyle = FolderTransitionStyle.Fast))
+        try {
+            assertFalse(settings.useClassicAlbumAnimation)
+            composeRule.setContent {
+                GalleryTheme(darkTheme = false) {
+                    GallerySettingsSheet(settings,
+                        MediaManagementAccessStatus(MediaManagementAccessState.UnsupportedAndroidVersion), {},
+                        { settings = repository.save(it) }, {})
+                }
+            }
+            composeRule.onNodeWithText("Spring animation").performScrollTo().performClick()
+            composeRule.runOnIdle {
+                assertTrue(settings.useClassicAlbumAnimation)
+                assertEquals(settings, GallerySettingsRepository(context).initialSettings())
+            }
+            saveSheet("settings-classic-motion.png")
+            composeRule.onNodeWithText("Spring animation").performScrollTo().performClick()
+            composeRule.runOnIdle {
+                assertFalse(settings.useClassicAlbumAnimation)
+                assertEquals(settings, GallerySettingsRepository(context).initialSettings())
+                assertEquals(GalleryPalette.Sunset, settings.palette)
+                assertEquals(FolderTransitionStyle.Fast, settings.folderTransitionStyle)
+            }
+        } finally { base.deleteSharedPreferences(preferencesName) }
+    }
 
     @Test fun peopleCanBeEnabledAndDisabledFromSettings() {
         var enabled by mutableStateOf(false)

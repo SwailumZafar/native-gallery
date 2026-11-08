@@ -52,6 +52,27 @@ class GalleryImagePerformanceTest {
     @get:Rule
     val composeRule = createComposeRule()
 
+    @Test fun videoPosterSizePromotesAfterScrollingAndKeepsItsLoadedDetailOnTheNextFling() {
+        val moving = androidx.compose.runtime.mutableStateOf(true)
+        val uri = Uri.parse("content://video-poster-size-fixture")
+        var requested = 0
+        composeRule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.example.nativegallery.ui.components.LocalGridScrolling provides moving) {
+                val size = com.example.nativegallery.ui.components.rememberGridVideoThumbnailSize(uri, "1", 400, 400, 384)
+                androidx.compose.runtime.SideEffect { requested = size }
+            }
+        }
+        composeRule.waitForIdle()
+        Thread.sleep(250)
+        composeRule.runOnIdle { assertEquals(384, requested); moving.value = false }
+        composeRule.waitUntil(5_000) { requested > 384 }
+        val detailSize = requested
+        composeRule.runOnIdle { moving.value = true }
+        composeRule.waitForIdle()
+        assertEquals("Starting another fling must keep the already loaded poster", detailSize, requested)
+    }
+
     @Test fun aVisibleMissingImageRetriesAfterTheLibrarySettlesWithoutScrolling() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val file = File(context.cacheDir, "restored-thumbnail-${System.nanoTime()}.png")

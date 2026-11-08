@@ -4,8 +4,24 @@ import androidx.compose.ui.geometry.Rect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.example.nativegallery.ui.components.GalleryMotion
 
 class AlbumContainerGeometryTest {
+    @Test fun heroFirstAndLastFramesStayGentleAtTheUnchangedAnimationTimings() {
+        val source = Rect(54f, 802f, 1210f, 1326f)
+        val firstOpeningProgress = 16.6667f / GalleryMotion.AlbumOpenMillis
+        val firstClosingProgress = 1f - 16.6667f / GalleryMotion.AlbumCloseMillis
+        val first = albumContainerFrame(source, 1264f, 2780f, firstOpeningProgress)
+        val close = albumContainerFrame(source, 1264f, 2780f, firstClosingProgress)
+        assertTrue("The Hero must not leap hundreds of pixels on its first frame", first.bounds.height - source.height < 100f)
+        val previousClosingStep = (2780f - source.height) * (1f - firstClosingProgress)
+        assertTrue("Closing must reduce the first-frame jump by more than half: ${2780f - close.bounds.height} vs $previousClosingStep",
+            2780f - close.bounds.height < previousClosingStep * 0.5f)
+        assertTrue("The captured Hero must cover the initial page preparation", albumCoverAlpha(source, firstOpeningProgress, 1264f) > 0.98f)
+        assertEquals(400, GalleryMotion.AlbumOpenMillis)
+        assertEquals(280, GalleryMotion.AlbumCloseMillis)
+    }
+
     @Test fun coversOnlyBlendAtTheSourceSizedEndOfTheJourney() {
         val banner = Rect(54f, 802f, 1210f, 1326f)
         val square = Rect(54f, 802f, 578f, 1326f)
@@ -49,7 +65,8 @@ class AlbumContainerGeometryTest {
                 previous = frame
             }
             assertEquals(Rect(0f, 0f, 1264f, 2780f), previous.bounds)
-            assertEquals(0f, albumCoverAlpha(source, 0.30f, 1264f), 0f)
+            assertTrue("Hero cover must blend over several advancing frames", albumCoverAlpha(source, 0.30f, 1264f) > 0.5f)
+            assertEquals(0f, albumCoverAlpha(source, 0.80f, 1264f), 0f)
         }
     }
 

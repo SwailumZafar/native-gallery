@@ -32,6 +32,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -39,13 +41,30 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.collect
 import kotlin.math.floor
 import kotlin.math.roundToInt
+
+internal data class FastScrollTarget(val index: Int, val offset: Int)
+
+internal fun fastScrollTarget(fraction: Float, totalItems: Int, visibleItems: Int, itemSize: Int): FastScrollTarget {
+    val maxFirst = (totalItems - visibleItems.coerceAtLeast(1)).coerceAtLeast(0)
+    val safeFraction = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
+    if (maxFirst == 0) return FastScrollTarget(0, 0)
+    // Let LazyColumn clamp the last row to its exact viewport end, including partial rows.
+    if (safeFraction == 1f) return FastScrollTarget((totalItems - 1).coerceAtLeast(0), 0)
+    val exact = safeFraction * maxFirst
+    val index = floor(exact).toInt().coerceIn(0, maxFirst)
+    return FastScrollTarget(index, ((exact - index) * itemSize.coerceAtLeast(1)).roundToInt())
+}
 
 @Composable
 fun GalleryFastScroller(
@@ -82,6 +101,19 @@ fun GalleryFastScroller(
     var dragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
     var visible by remember { mutableStateOf(false) }
+    var pendingTarget by remember(listState) { mutableStateOf<FastScrollTarget?>(null) }
+    LaunchedEffect(listState) {
+        snapshotFlow { pendingTarget }.filterNotNull().conflate().collect {
+            // Touch samples can arrive faster than display frames. Measure only the
+            // latest destination once per frame, rather than every intermediate sample.
+            withFrameNanos { }
+            val latest = pendingTarget
+            if (latest != null && (listState.firstVisibleItemIndex != latest.index ||
+                    listState.firstVisibleItemScrollOffset != latest.offset)) {
+                listState.requestScrollToItem(latest.index, latest.offset)
+            }
+        }
+    }
     val hapticFeedback = LocalHapticFeedback.current
     val thumbHeight = 58.dp
     val thumbHeightPx = with(LocalDensity.current) { thumbHeight.roundToPx() }
@@ -106,11 +138,14 @@ fun GalleryFastScroller(
                 }
 
                 dragging = true
+                pendingTarget = null
                 dragFraction = fraction.value
                 hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                 down.consume()
                 try {
                     val grabOffset = down.position.y - currentThumbTop
+                    val sizes = listState.layoutInfo.visibleItemsInfo.map { it.size }.filter { it > 0 }.sorted()
+                    val representativeItemSize = sizes.getOrNull(sizes.size / 2) ?: 1
                     var change = down
                     do {
                         val event = awaitPointerEvent()
@@ -125,20 +160,7 @@ fun GalleryFastScroller(
                         // leaving the thumb behind on media-heavy lists.
                         val layoutInfo = listState.layoutInfo
                         val visibleCount = layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-                        val maxFirstItem = (totalItems - visibleCount).coerceAtLeast(0)
-                        val exactItem = requestedFraction * maxFirstItem
-                        val requestedItem = floor(exactItem).toInt().coerceIn(0, maxFirstItem)
-                        val itemSizes = layoutInfo.visibleItemsInfo
-                            .map { it.size }
-                            .filter { it > 0 }
-                            .sorted()
-                        val representativeItemSize = itemSizes
-                            .getOrNull(itemSizes.size / 2)
-                            ?: 1
-                        val requestedOffset = (
-                            (exactItem - requestedItem) * representativeItemSize
-                            ).roundToInt()
-                        listState.requestScrollToItem(requestedItem, requestedOffset)
+                        pendingTarget = fastScrollTarget(requestedFraction, totalItems, visibleCount, representativeItemSize)
                         change.consume()
                     } while (change.pressed)
                 } finally {
@@ -167,6 +189,7 @@ fun GalleryFastScroller(
                 .fillMaxSize()
                 .padding(top = effectiveTopPadding, bottom = bottomPadding)
                 .onSizeChanged { trackHeightPx = it.height }
+                .testTag("gallery-fast-scroll-track")
                 .then(dragModifier),
             contentAlignment = Alignment.TopCenter
         ) {
@@ -186,6 +209,7 @@ fun GalleryFastScroller(
             ) {
                 Surface(
                     modifier = Modifier
+                        .testTag("gallery-fast-scroll-thumb")
                         .width(34.dp)
                         .height(thumbHeight)
                         .graphicsLayer {

@@ -223,10 +223,12 @@ import com.example.nativegallery.ui.components.MediaAccessNotice
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.ThumbnailMemoryCache
 import com.example.nativegallery.ui.components.prefetchMediaThumbnails
+import com.example.nativegallery.ui.components.loadVideoDurationMillis
 import com.example.nativegallery.ui.components.MotionSpecs
 import com.example.nativegallery.ui.components.solarTactile
 import com.example.nativegallery.ui.components.bouncyClickable
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -252,12 +254,12 @@ private data class ViewerSessionSnapshot(
     val sourceGridColumns: Int
 )
 
-private enum class AlbumTransitionMode {
+internal enum class AlbumTransitionMode {
     Opening,
     Closing
 }
 
-private data class AlbumTransitionSpec(
+internal data class AlbumTransitionSpec(
     val key: Int,
     val album: Album,
     val tileBounds: Rect,
@@ -268,11 +270,14 @@ private data class AlbumTransitionSpec(
     val firstVisibleRowOffset: Int = 0,
     val source: AlbumTransitionSource<GraphicsLayer>? = null,
     val previewBitmap: Bitmap? = null,
-    val motion: AlbumTransitionMotion = AlbumTransitionMotion(opening = mode == AlbumTransitionMode.Opening)
+    val classicAnimation: Boolean = false,
+    val heroPacing: Boolean = false,
+    val motion: AlbumTransitionMotion = AlbumTransitionMotion(opening = mode == AlbumTransitionMode.Opening,
+        classic = classicAnimation, hero = heroPacing)
 )
 
 private const val FavoritesAlbumId = "favorites"
-private const val AlbumOpeningWarmRowCount = 3
+private const val AlbumOpeningWarmRowCount = 6
 private const val InitialPresentationThumbnailCount = 6
 private const val InitialPresentationPrefetchCount = 12
 
@@ -1394,8 +1399,8 @@ fun GalleryApp(
         val openingColumns = (
             (albumDetailGridModes[album.id] ?: defaultAlbumGridMode).columns + launchAdaptivePolicy.albumDetailColumnBoost
         ).coerceIn(1, 10)
-        val openingWarmItemCount = (openingColumns * AlbumOpeningWarmRowCount).coerceAtMost(24)
-        val firstViewportMedia = openingMedia
+        val openingWarmItemCount = (openingColumns * AlbumOpeningWarmRowCount).coerceAtMost(48)
+        val firstViewportMedia = sortAlbumMedia(openingMedia, albumDetailSortModes[album.id] ?: AlbumDetailSortMode.Newest)
             .take(openingWarmItemCount)
         selectedMediaIds = emptySet()
 
@@ -1433,6 +1438,8 @@ fun GalleryApp(
                     else -> 22f
                 },
                 mode = AlbumTransitionMode.Opening,
+                classicAnimation = settings.useClassicAlbumAnimation,
+                heroPacing = useHeroAlbumPacing(albumLayoutMode, tileBounds.width, transitionRootBoundsInWindow.width),
                 source = albumTransitionSources.get(album.id),
                 previewBitmap = DisplayedBitmapCache.get(album.coverUri),
                 sortMode = albumDetailSortModes[album.id] ?: AlbumDetailSortMode.Newest
@@ -1499,6 +1506,8 @@ fun GalleryApp(
                     else -> 22f
                 },
                 mode = AlbumTransitionMode.Closing,
+                classicAnimation = settings.useClassicAlbumAnimation,
+                heroPacing = useHeroAlbumPacing(albumLayoutMode, closingBounds.width, transitionRootBoundsInWindow.width),
                 source = albumTransitionSources.get(closingAlbum.id),
                 previewBitmap = DisplayedBitmapCache.get(closingAlbum.coverUri),
                 sortMode = albumDetailSortModes[closingAlbum.id] ?: AlbumDetailSortMode.Newest,
@@ -2885,6 +2894,29 @@ fun GalleryApp(
                                             )
                                             GalleryTab.Albums -> AlbumsScreen(
                                                 albums = searchedVisibleAlbums,
+                                                onPreloadAlbums = { albums ->
+                                                    val previews = withContext(Dispatchers.Default) {
+                                                        albums.flatMap { album ->
+                                                            val columns = ((albumDetailGridModes[album.id] ?: defaultAlbumGridMode).columns +
+                                                                adaptivePolicy.albumDetailColumnBoost).coerceIn(1, 10)
+                                                            sortAlbumMedia(
+                                                                mediaForAlbumFast(album, visibleMedia, visibleMediaByAlbum, favoriteMedia),
+                                                                albumDetailSortModes[album.id] ?: AlbumDetailSortMode.Newest
+                                                            ).take((columns * AlbumOpeningWarmRowCount).coerceAtMost(48))
+                                                        }.distinctBy { it.id }.take(96)
+                                                    }
+                                                    coroutineScope {
+                                                        launch {
+                                                            prefetchMediaThumbnails(context.applicationContext, previews,
+                                                                thumbnailSizes = listOf(384), maxItems = previews.size, pinInMemory = true)
+                                                        }
+                                                        launch {
+                                                            previews.filter { it.isVideo }.forEach {
+                                                                loadVideoDurationMillis(context.applicationContext, it)
+                                                            }
+                                                        }
+                                                    }
+                                                },
                                                 layoutMode = albumLayoutMode,
                                                 onLayoutModeChange = { albumLayoutMode = it },
                                                 onOpenHiddenItems = ::openHiddenItems,
@@ -3215,6 +3247,7 @@ fun GalleryApp(
                     rootHeightPx = rootHeightPx,
                     rootBoundsInWindow = transitionRootBoundsInWindow,
                     transitionStyle = settings.folderTransitionStyle,
+                    useClassicAnimation = settings.useClassicAlbumAnimation,
                     onCommitted = { committedTransition ->
                         if (albumTransition?.key == committedTransition.key) {
                             albumTransitionCommittedKey = committedTransition.key
@@ -3229,8 +3262,11 @@ fun GalleryApp(
                                 val warmColumns = (
                                     (albumDetailGridModes[finishedTransition.album.id] ?: defaultAlbumGridMode).columns + adaptivePolicy.albumDetailColumnBoost
                                 ).coerceIn(1, 10)
-                                val warmMedia = mediaForAlbumFast(finishedTransition.album, visibleMedia, visibleMediaByAlbum, favoriteMedia)
-                                    .take((warmColumns * AlbumOpeningWarmRowCount).coerceAtMost(24))
+                                val warmMedia = sortAlbumMedia(
+                                    mediaForAlbumFast(finishedTransition.album, visibleMedia, visibleMediaByAlbum, favoriteMedia),
+                                    albumDetailSortModes[finishedTransition.album.id] ?: AlbumDetailSortMode.Newest
+                                )
+                                    .take((warmColumns * AlbumOpeningWarmRowCount).coerceAtMost(48))
                                     .filterNot(MediaItem::usesDeferredVideoThumbnail)
                                 prefetchScope.launch {
                                     prefetchMediaThumbnails(
@@ -3809,6 +3845,9 @@ internal fun GallerySettingsSheet(
                 }
                 GallerySettingsGroup("Motion") {
                     SettingsSectionTitle("Folders")
+                    SettingsSwitchRow("Spring animation", "Use spring motion when opening and closing albums",
+                        settings.useClassicAlbumAnimation,
+                        { onSettingsChange(settings.copy(useClassicAlbumAnimation = it)) })
                     FolderTransitionStyle.entries.forEach { style ->
                         SettingsChoiceRow(style.label(), style.description(), settings.folderTransitionStyle == style,
                             { onSettingsChange(settings.copy(folderTransitionStyle = style)) })
@@ -4763,7 +4802,7 @@ private fun mediaForAlbum(
 }
 
 @Composable
-private fun PositionAwareAlbumTransitionOverlay(
+internal fun PositionAwareAlbumTransitionOverlay(
     transition: AlbumTransitionSpec?,
     settledAlbum: Album?,
     committed: Boolean,
@@ -4771,6 +4810,7 @@ private fun PositionAwareAlbumTransitionOverlay(
     rootHeightPx: Float,
     rootBoundsInWindow: Rect,
     transitionStyle: FolderTransitionStyle = FolderTransitionStyle.Normal,
+    useClassicAnimation: Boolean = false,
     onCommitted: (AlbumTransitionSpec) -> Unit,
     onFinished: (AlbumTransitionSpec) -> Unit,
     content: @Composable (Album) -> Unit
@@ -4778,11 +4818,14 @@ private fun PositionAwareAlbumTransitionOverlay(
     val pageAlbum = transition?.album ?: settledAlbum ?: return
     if (rootWidthPx <= 0f || rootHeightPx <= 0f) return
 
+    // Keep the chosen path and spring together if a transition reverses direction.
+    val classic = transition?.classicAnimation ?: useClassicAnimation
+
     val sourceBounds = transition?.tileBounds?.relativeToRoot(
         rootBoundsInWindow = rootBoundsInWindow,
         fallbackRootWidth = rootWidthPx,
         fallbackRootHeight = rootHeightPx,
-        clampToViewport = false
+        clampToViewport = classic
     ) ?: Rect(0f, 0f, rootWidthPx, rootHeightPx)
     val moving = transition != null && sourceBounds.isUsableTransitionBounds()
     if (transition != null && !moving) {
@@ -4793,7 +4836,7 @@ private fun PositionAwareAlbumTransitionOverlay(
     }
     val pageReady by rememberAlbumPageReady(
         pageAlbum.id,
-        deferNewPage = moving && transition?.mode == AlbumTransitionMode.Opening &&
+        deferNewPage = !classic && moving && transition?.mode == AlbumTransitionMode.Opening &&
             (transition.source?.available == true || transition.previewBitmap != null)
     )
     LaunchedEffect(transition?.key, pageReady) {
@@ -4832,7 +4875,7 @@ private fun PositionAwareAlbumTransitionOverlay(
             .drawBehind {
                 val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                 val scrimAlpha = GalleryMotion.smoothstep(0.04f, 0.35f, expansion) *
-                    (1f - GalleryMotion.smoothstep(0.65f, 0.95f, expansion)) * 0.08f
+                    (1f - GalleryMotion.smoothstep(0.65f, 0.95f, expansion)) * (if (classic) 0.22f else 0.08f)
                 if (scrimAlpha > 0.001f) {
                     drawRect(Color.Black.copy(alpha = scrimAlpha))
                 }
@@ -4843,34 +4886,49 @@ private fun PositionAwareAlbumTransitionOverlay(
             modifier = Modifier
                 .requiredWidth(rootWidthDp)
                 .requiredHeight(rootHeightDp)
-                .albumPageLayer(
+                .then(if (classic) Modifier.classicAlbumPageLayer(
+                    source = sourceBounds,
+                    width = rootWidthPx,
+                    height = rootHeightPx,
+                    sourceRadius = with(density) { (transition?.sourceCornerRadiusDp ?: 0f).dp.toPx() },
+                    progress = { progress?.value ?: 1f }
+                ) else Modifier.albumPageLayer(
                     source = sourceBounds,
                     width = rootWidthPx,
                     height = rootHeightPx,
                     sourceRadius = with(density) { (transition?.sourceCornerRadiusDp ?: 0f).dp.toPx() },
                     progress = { progress?.value ?: 1f },
                     reveal = { if (pageReady) 1f else 0f }
-                )
+                ))
                 .background(MaterialTheme.colorScheme.background)
         ) {
             if (pageReady) content(pageAlbum)
         }
         // The live miniature page owns the journey; its cover only blends at the
         // source-sized end, matching the slow-motion native reference.
-        if (transition != null && moving) Box(
+        if (transition != null && moving && classic) ClassicAlbumTransitionCover(
+            album = transition.album,
+            sourceBounds = sourceBounds,
+            rootWidth = rootWidthPx,
+            rootHeight = rootHeightPx,
+            sourceRadius = transition.sourceCornerRadiusDp,
+            progress = { progress?.value ?: 1f },
+            source = transition.source,
+            preview = transition.previewBitmap
+        )
+        if (transition != null && moving && !classic) Box(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
                     val expansion = (progress?.value ?: 1f).coerceIn(0f, 1f)
                     val heroBounds = containerFrame().bounds
+                    alpha = if (!pageReady) 1f else albumCoverAlpha(sourceBounds, expansion, rootWidthPx)
+                    compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.ModulateAlpha
                     clip = true
                     shape = MediaHeroShape(heroBounds, lerp(transition.sourceCornerRadiusDp, 0f, expansion).dp.toPx())
                 }
         ) {
             val source = transition.source
-            val coverAlpha = {
-                if (!pageReady) 1f else albumCoverAlpha(sourceBounds, (progress?.value ?: 1f).coerceIn(0f, 1f), rootWidthPx)
-            }
             val capturedCover = source?.available == true
             if (!capturedCover) GalleryImage(
                 imageRes = transition.album.coverRes,
@@ -4889,7 +4947,6 @@ private fun PositionAwareAlbumTransitionOverlay(
                             scaleX = crop.scale
                             scaleY = crop.scale
                         }
-                        alpha = coverAlpha()
                     },
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Crop,
@@ -4914,7 +4971,6 @@ private fun PositionAwareAlbumTransitionOverlay(
                         translationY = crop.translation.y
                         scaleX = crop.scale
                         scaleY = crop.scale
-                        alpha = coverAlpha()
                     }
                     .drawBehind {
                         if (source.available && source.size.width > 0 && source.size.height > 0) {

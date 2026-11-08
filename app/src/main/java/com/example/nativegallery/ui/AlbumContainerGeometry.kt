@@ -20,6 +20,17 @@ internal fun LayoutCoordinates.albumBoundsInWindow(): Rect {
 internal fun albumLargeTileFraction(source: Rect, width: Float): Float =
     GalleryMotion.smoothstep(0.60f, 0.90f, source.width / width.coerceAtLeast(1f))
 
+/** Zero acceleration at the cover handoff, without changing either animation's clock. */
+internal fun albumSmoothFraction(value: Float): Float {
+    val t = value.coerceIn(0f, 1f)
+    return (t * t * t * (t * (t * 6f - 15f) + 10f)).coerceIn(0f, 1f)
+}
+
+private fun albumSpatialFraction(progress: Float, large: Float): Float {
+    val fraction = progress.coerceIn(0f, 1f)
+    return lerp(fraction, albumSmoothFraction(fraction), large)
+}
+
 internal data class AlbumContainerFrame(
     val bounds: Rect,
     val contentScale: Float,
@@ -40,13 +51,16 @@ internal fun albumCoverAlpha(source: Rect, progress: Float, width: Float = Float
     // of the collapse. A large cover must not replace the still-tall shrinking grid.
     val banner = GalleryMotion.smoothstep(1.2f, 2.2f, source.width / source.height.coerceAtLeast(1f))
     val large = albumLargeTileFraction(source, width)
-    return 1f - GalleryMotion.smoothstep(0f, lerp(lerp(0.16f, 0.20f, banner), 0.26f, large), progress)
+    val fraction = albumSpatialFraction(progress, large)
+    val start = lerp(0f, 0.08f, large)
+    val end = lerp(lerp(0.16f, 0.20f, banner), 0.62f, large)
+    return 1f - albumSmoothFraction((fraction - start) / (end - start))
 }
 
 /** Uniform page scaling, with a top anchor for small tiles and a center mask for wide cards. */
 internal fun albumContainerFrame(source: Rect, width: Float, height: Float, progress: Float): AlbumContainerFrame {
-    val fraction = progress.coerceIn(0f, 1f)
     val large = albumLargeTileFraction(source, width)
+    val fraction = albumSpatialFraction(progress, large)
     // A native album is a miniature page for most of its journey. Its height only
     // compresses into the cover near the source, rather than cropping away rows
     // throughout the whole collapse. The same curve makes reversals continuous.

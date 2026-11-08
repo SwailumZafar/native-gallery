@@ -1,6 +1,6 @@
 # Aster App Handoff
 
-Last updated: 2026-11-04
+Last updated: 2026-11-08
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -122,8 +122,8 @@ Remote tracking branch: origin/main
 Previous pushed implementation baseline: c729e02 Introduce Luma Nook palettes and continuous grid preloading
 Previous save point: v0.9.17 / code 20; installed Luma Nook with palettes and continuous grid preloading
 Current source save point: installed Aster v0.9.20 / code 23; resolve its commit with git log -1
-Current workspace: Aster v0.9.31 / code 34; accepted v0.9.16 motion retained with continuous album page/card handoffs
-Installed build: Aster v0.9.31 / code 34 on RMX3852 at 192.168.18.95:39247; accepted motion retained with blinking handoff fix, upgrade/hash verified, opening/closing and quick-back checks completed
+Current workspace: Photo Lane v0.9.51 / code 54; Normal LivingFlow Hero uses its full animation clock, with spring/Enhanced presets and scrolling improvements preserved
+Installed build: Photo Lane v0.9.51 / code 54 optimized ARM64 benchmark variant on RMX3852 at 192.168.18.95:36993; upgrade/hash verified and cold launch succeeds in 343 ms; 16 focused debug phone checks passed across the initial run and one isolated retry
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -153,6 +153,44 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-11-08 Normal Hero pacing correction (v0.9.51)
+
+- User reported that LivingFlow Hero still looked like Fast Enhanced, including in slow motion. The v0.9.50 spatial smoothing was being driven by the existing strongly front-loaded ease-out: about 85% of the visible expansion completed by 100 ms and 99.6% by 200 ms, despite a nominal 400 ms duration.
+- Normal Hero now uses a linear animation clock with the existing smooth spatial curve applied once. Its visible expansion is about 10% / 50% / 90% at 100 / 200 / 300 ms. Full opening/closing clocks remain 400/280 ms. The spring animation, Fast Enhanced, regular grid tiles, scrolling improvements, and stored settings retain their existing behavior.
+- Hero pacing is captured per transition from the actual layout and source/root width, for Hero cards and full-width Big tiles. Reversals share the same motion and keep their current position.
+- Related regression hardening: real frame-clock tests cover the complete visible journey, Normal versus Fast Enhanced separation, closing timing, source classification, and reversal continuity. A controlled Android test renders the actual production overlay using only a generated solid cover and colored test tiles; it never opens the gallery repository, a real photo URI, or MainActivity.
+- Automatic approval review rejected recording the live gallery because that could export private photos. No live-gallery recording was made. The synthetic overlay test passes on both emulator and RMX3852; generated opening frames at 96/192/288 ms were visually inspected.
+- Verification: all 249 JVM tests pass. The 16 focused phone checks cover synthetic Hero timing/rendering, retained layers, return geometry, row activation, first-frame recovered timestamps, page entry, and both animations across repeated visits. The initial run passed 15/16; repeated navigation missed its fixture album after returning, then passed in isolation. Its wait now includes the returned fixture card before the next tap, and the updated test APK compiles. Logs are ignored under `tmp/hero-v051-*.log`.
+- Debug/test/optimized benchmark assembly and debug lint pass. Lint has 0 errors, 11 existing warnings, plus the expected ChromeOS ABI warning for the explicitly phone-only ARM64 build. The optional `-PtargetDeviceAbi=arm64-v8a` reduces the optimized APK to 77,412,336 bytes; default builds remain universal.
+- Installed the optimized benchmark variant in place, preserving app data. Confirmed version 0.9.51/code 54, no DEBUGGABLE flag, installed APK SHA-256 `EA422EB022640DC03A4985FFD46FF2D23EF7F143A1C520847D267829D4A29735`, and successful 343 ms cold launch. No new full-library frame-rate claim is made from the controlled pacing test.
+
+## 2026-11-08 Animation rendering and fast scrolling (v0.9.50)
+
+- User asked to keep both album animations, preserve their speed, smooth the abrupt LivingFlow Hero tile again, simplify the spring toggle wording, and substantially improve normal/fast scrolling. Also requested distinctive feature recommendations.
+- LivingFlow Hero rectangles and their cover handoff use a continuous spatial blend with zero acceleration at the endpoints, keeping the existing 400/280 ms animation clocks and every spring preset unchanged. The cover now fades as one retained layer with modulated alpha. The spring page avoids an unnecessary offscreen alpha buffer, and its transparent cover no longer draws an independent shadow after its handoff.
+- Scrolling no longer reads firstVisibleItemIndex in every album-row composition. Photos reuse row slices and avoid per-row/header fade animations. Speculative album-entry warmup is cancelled during scrolling; moving grid prefetch uses a smaller directional window and restores the larger window after settling. Cached previews remain available immediately.
+- Disk thumbnail reads now share per-key coordination and bounded background decode threads. Larger video posters and duration metadata reads wait for scrolling to settle, retaining already loaded detail. This avoids repeated preview/detail video decodes and metadata work during flings.
+- Related production hardening: the fast-scroll thumb coalesces touch samples to one destination per display frame, calculates its representative row size once per gesture, and requests the true last item so partially visible rows cannot prevent reaching the list end.
+- Settings wording is now **Spring animation**. Existing stored preferences and both animation choices remain compatible. Feature proposals are in `docs/FEATURE_DIRECTION.md`; none are implemented by this performance update.
+- Verification: all 244 JVM tests and 30 focused device tests pass; debug lint has 0 errors and 11 existing warnings. Debug/test APK assembly and optimized benchmark assembly/R8/resource shrinking/vital lint pass. The optimized build is installed in place with matching SHA-256 `0DA7DDF84D2D778DB051D23C1331DE188EBA4DA33C63000D10EB7D1F875C1467`; cold launch succeeds in 398 ms. Actual Settings pointer interactions verified Spring animation on/off, with four Hero cycles in each style and LivingFlow restored.
+- Performance samples: previous v0.9.49 debug Photos rapid flings were 15.02% janky / p95 22 ms; delivered optimized v0.9.50 samples are 4.05% / 14 ms and 1.94% / 12 ms. LivingFlow Hero was 15.76% / 57 ms; optimized samples are 6.45% / 26 ms and 5.14% / 24 ms. Spring Hero on the optimized build is 4.12% / 21 ms. These are phone samples of the combined source/build optimization, not a fixed-FPS guarantee. See `docs/PERFORMANCE_0.9.50.md` for raw-report locations, setup limits, and development-build results.
+- Delivery baseline: use debug for instrumentation, then install the locally signed **benchmark** variant for final user-facing performance updates. It has production optimization and preserves the existing application ID/signing/data. Leaving a debug APK installed again can undo much of the measured scrolling gain.
+
+## 2026-11-07 Previous album timing plus a selectable classic animation (v0.9.49)
+
+- User rejected v0.9.48's animation and requested the pre-update animation plus a Settings toggle for the older animation from a few builds earlier. Normal opening is restored to v0.9.47's 400 ms, with its 280 ms close and existing Fast option. Preloading, compact timestamps, and sort-aware warmup from v0.9.48 remain.
+- Settings > Motion > Folders now has **Use classic album animation**, off by default and persisted independently of the Normal/Fast speed setting. On restores the historical spring-and-zoom path, page scale/fade, cover blend, lift, and scrim from saved pre-container-motion history (`0866b80`, shared with the accepted v0.9.31 lineage). Historical springs are normal open 0.82/300 and close 0.84/320; Fast open 0.84/620 and close 0.86/680 (damping/stiffness).
+- Related production hardening: each transition snapshots its chosen animation so reversal keeps the same path and shared progress. The classic aperture uses a graphics-layer clip to retain its grid display list instead of redrawing the grid on every frame. The setting survives repository reloads and preserves other preferences.
+- Verification: all 240 JVM tests pass, including historical spring traces in both directions and speeds, reversal continuity, the restored 400 ms opening, and classic aperture bounds. Debug APK/test APK assembly and debug lint pass. On RMX3852 at `192.168.18.95:40109`, all 13 focused checks pass: the Settings switch persists on/off without changing other preferences, both classic masks retain their grid draw/measure counts, cached timestamps survive repeat entry, and the main app opens/closes an album three times in each mode after activity recreation. Installed v0.9.49/code 52 in place; SHA-256 `CC8B667EDFDF03A48E7C9CBF6A897C9EE024363DEA944E1B6A426BC1ADF31B7F` matches the device. Cold launch succeeds (1104 ms). The prior animation preference is restored after testing (classic off); temporary install APK and app-owned photo fixture are cleaned.
+
+## 2026-11-07 Preloaded album entries and persistent compact video timestamps (v0.9.48)
+
+- User requested a 420 ms album opening, album contents ready before entry, and smaller video timestamps that remain present after repeated back/forward navigation. Normal opening now uses 420 ms; closing and the Fast preference retain their existing behavior.
+- Visible album cards warm six rows of their entry grid (up to 48 items per album, 96 distinct media per visible batch) at 384 px, with bounded pinned memory. Work follows visible lazy-list keys across every album layout, respects hidden-tab prefetch gating, and cancels when the visible album batch changes.
+- Opening rows now draw the same video badges as interactive rows. Recovered durations initialize synchronously from the existing revision-aware memory cache, with disk/container work on IO and new container reads yielding to navigation/viewer motion. The badge uses 9 sp text, a 13 dp play icon, and tighter padding.
+- Related production hardening: preloading before and during album entry now follows the album's saved Newest/Oldest/Name order, matching the actual grid. Visible-row mapping handles the leading Big tile, custom album order, and stale keys without warming the wrong folder.
+- Verification: 236 JVM tests pass, including the updated 420 ms timing test, visible-album preload mapping, and duration-label cases. Debug APK and Android-test APK assembly pass. Debug lint passes with 0 errors and 12 existing warnings. On RMX3852 at `192.168.18.95:44095`, all 11 album-entry/row/layer/return tests pass, including six fresh compositions with a recovered timestamp visible immediately. Two additional main-app tab/album-close scrolling checks pass. Installed v0.9.48/code 51 in place and cold-launched successfully (1186 ms); installed SHA-256 matches `FE88C2C6884E5EEF65BF2A1C0F6ED21C368AF042A26B236AB0F8D5D1F255E0CB`. Original media and settings retained; app-owned smoke-test media is cleaned by the existing fixture rule.
 
 ## 2026-11-04 Keep accepted album motion and fix endpoint blinking (v0.9.31)
 

@@ -114,12 +114,15 @@ internal object VideoDurationCache {
     }
 
     fun get(context: Context, identity: String): Long {
-        memory[identity]?.takeIf { it > 0L }?.let { return it }
+        peek(identity).takeIf { it > 0L }?.let { return it }
         val persisted = context.getSharedPreferences(PreferencesName, Context.MODE_PRIVATE)
             .getLong(identity, 0L)
         if (persisted > 0L) memory[identity] = persisted
         return persisted.coerceAtLeast(0L)
     }
+
+    /** Safe for the first composition of a returning grid; never reads preferences. */
+    fun peek(identity: String): Long = memory[identity]?.coerceAtLeast(0L) ?: 0L
 
     fun put(context: Context, identity: String, durationMs: Long) {
         if (durationMs <= 0L) return
