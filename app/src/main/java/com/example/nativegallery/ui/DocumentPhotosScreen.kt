@@ -1,295 +1,114 @@
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
 package com.example.nativegallery.ui
 
-import androidx.compose.animation.ExperimentalSharedTransitionApi
-
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.snapshotFlow
-import com.example.nativegallery.data.PhotoAnalysisWork
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.nativegallery.data.DocumentPhotoCategory
 import com.example.nativegallery.data.DocumentPhotoMatch
+import com.example.nativegallery.data.PhotoAnalysisWork
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.SearchPill
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
-private enum class DocumentPhotoFilter(
-    val label: String,
-    val category: DocumentPhotoCategory?
-) {
-    All("All", null),
-    BillsReceipts("Bills & receipts", DocumentPhotoCategory.BillsReceipts),
-    Menus("Menus", DocumentPhotoCategory.Menus),
-    FormsLetters("Forms & letters", DocumentPhotoCategory.FormsLetters),
-    NotesTranscripts("Notes & transcripts", DocumentPhotoCategory.NotesTranscripts),
-    Other("Other", DocumentPhotoCategory.Other)
+internal data class DocumentSection(val category: DocumentPhotoCategory, val matches: List<DocumentPhotoMatch>)
+internal fun documentSections(matches: List<DocumentPhotoMatch>): List<DocumentSection> =
+    DocumentPhotoCategory.entries.mapNotNull { category ->
+        matches.filter { it.category == category }.takeIf { it.isNotEmpty() }?.let { DocumentSection(category, it) }
+    }
+internal fun documentSectionAnchors(sections: List<DocumentSection>): Map<DocumentPhotoCategory, Int> {
+    var index = 0
+    return sections.associate { section -> (section.category to index).also { index += 1 + section.matches.size } }
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
-fun DocumentPhotosScreen(
-    matches: List<DocumentPhotoMatch>,
-    scanning: Boolean,
-    scannedCount: Int,
-    totalCount: Int,
-    errorMessage: String?,
-    onBack: () -> Unit,
-    onRescan: () -> Unit,
-    onOpenMedia: (MediaItem, List<MediaItem>, Rect) -> Unit,
-    gridColumns: Int,
-    maxContentWidth: Dp = Dp.Unspecified,
-    contentPadding: PaddingValues = PaddingValues()
-) {
+fun DocumentPhotosScreen(matches: List<DocumentPhotoMatch>, scanning: Boolean, scannedCount: Int, totalCount: Int,
+    errorMessage: String?, onBack: () -> Unit, onRescan: () -> Unit,
+    onOpenMedia: (MediaItem, List<MediaItem>, Rect) -> Unit, gridColumns: Int, baselineCount: Int = 0,
+    maxContentWidth: Dp = Dp.Unspecified, contentPadding: PaddingValues = PaddingValues()) {
     val gridState = rememberLazyGridState()
-    LaunchedEffect(gridState) {
-        snapshotFlow { gridState.isScrollInProgress }.collect { PhotoAnalysisWork.setDocumentsScrolling(it) }
+    val scope = rememberCoroutineScope()
+    var scrollJob by remember { mutableStateOf<Job?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
+    val visible = remember(matches, query) {
+        matches.filter { query.isBlank() || it.recognizedText.contains(query, true) || it.mediaItem.title.contains(query, true) || it.category.label.contains(query, true) }
     }
-    DisposableEffect(Unit) {
-        onDispose { PhotoAnalysisWork.setDocumentsScrolling(false) }
-    }
-    var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(DocumentPhotoFilter.All) }
-    val visibleMatches = remember(matches, query, filter) {
-        val normalizedQuery = query.trim()
-        matches.filter { match ->
-            (filter.category == null || match.category == filter.category) &&
-                (
-                    normalizedQuery.isBlank() ||
-                        match.mediaItem.title.contains(normalizedQuery, ignoreCase = true) ||
-                        match.recognizedText.contains(normalizedQuery, ignoreCase = true) ||
-                        match.category.label.contains(normalizedQuery, ignoreCase = true)
-                    )
-        }
-    }
-    val visibleMedia = remember(visibleMatches) { visibleMatches.map { it.mediaItem } }
-    val progress = if (totalCount == 0) 0f else {
-        scannedCount.toFloat().div(totalCount).coerceIn(0f, 1f)
-    }
-    val gridWidthModifier = if (maxContentWidth == Dp.Unspecified) {
-        Modifier.fillMaxWidth()
-    } else {
-        Modifier
-            .fillMaxWidth()
-            .widthIn(max = maxContentWidth)
-    }
-
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.TopCenter
-    ) {
-        LazyVerticalGrid(
-            state = gridState,
-            columns = GridCells.Fixed(gridColumns.coerceAtLeast(2)),
-            modifier = Modifier
-                .fillMaxHeight()
-                .then(gridWidthModifier),
-            contentPadding = PaddingValues(
-                start = 8.dp,
-                top = 48.dp,
-                end = 8.dp,
-                bottom = contentPadding.calculateBottomPadding() + 28.dp
-            ),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            item(
-                key = "document-photos-header",
-                span = { GridItemSpan(maxLineSpan) }
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                ) {
-                    GalleryScreenHeader(
-                        title = "Document photos",
-                        subtitle = "Bills, menus, letters, forms and text-heavy pictures",
-                        onBack = onBack,
-                        trailingContent = {
-                            IconButton(
-                                onClick = onRescan,
-                                enabled = !scanning
-                            ) {
-                                Icon(
-                                    Icons.Filled.Refresh,
-                                    contentDescription = "Scan document photos again",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    )
-                    Spacer(Modifier.height(20.dp))
-                    SearchPill(
-                        placeholder = "Search text inside document photos",
-                        query = query,
-                        onQueryChange = { query = it }
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        DocumentPhotoFilter.entries.forEach { option ->
-                            FilterChip(
-                                selected = filter == option,
-                                onClick = { filter = option },
-                                label = { Text(option.label) }
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    if (scanning || scannedCount > 0) {
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(18.dp),
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = if (scanning) {
-                                            "Checking photos on this phone"
-                                        } else {
-                                            "Document-photo index is up to date"
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = scannedCount.toString() + " / " + totalCount,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Spacer(Modifier.height(9.dp))
-                                LinearProgressIndicator(
-                                    progress = { progress },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    color = MaterialTheme.colorScheme.primary,
-                                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(14.dp))
-                    }
-                    Text(
-                        text = when {
-                            query.isNotBlank() || filter != DocumentPhotoFilter.All ->
-                                visibleMatches.size.toString() + " matching photos"
-                            matches.size == 1 -> "1 document photo"
-                            else -> matches.size.toString() + " document photos"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(Modifier.height(10.dp))
+    val sections = remember(visible) { documentSections(visible) }
+    val anchors = remember(sections) { documentSectionAnchors(sections) }
+    LaunchedEffect(gridState) { snapshotFlow { gridState.isScrollInProgress }.collect { PhotoAnalysisWork.setDocumentsScrolling(it) } }
+    DisposableEffect(Unit) { onDispose { PhotoAnalysisWork.setDocumentsScrolling(false) } }
+    val progress by animateFloatAsState(if (totalCount == 0) 0f else scannedCount.toFloat() / totalCount,
+        tween(180, easing = LinearEasing), label = "document-scan-progress")
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
+        Column(Modifier.widthIn(max = if (maxContentWidth == Dp.Unspecified) 840.dp else maxContentWidth)
+            .fillMaxSize().statusBarsPadding().padding(bottom = contentPadding.calculateBottomPadding()).navigationBarsPadding()) {
+            GalleryScreenHeader("Document photos", onBack, subtitle = "Paper documents, receipts, menus and notes",
+                trailingContent = { IconButton(onRescan, enabled = !scanning) {
+                    Icon(Icons.Filled.Refresh, "Scan document photos again")
+                } })
+            Text("App screenshots have their own shelf in Useful screenshots.", Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SearchPill(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), "Search your document photos", query, onQueryChange = { query = it })
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selectedCategory == null, {
+                    selectedCategory = null; scrollJob?.cancel()
+                    scrollJob = scope.launch { gridState.animateScrollToItem(0) }
+                }, { Text("All (${visible.size})") })
+                for (category in DocumentPhotoCategory.entries) {
+                    val count = sections.firstOrNull { it.category == category }?.matches?.size ?: 0
+                    FilterChip(selectedCategory == category.name, {
+                        selectedCategory = category.name; scrollJob?.cancel()
+                        val target = anchors[category] ?: 0
+                        scrollJob = scope.launch { gridState.animateScrollToItem(target) }
+                    }, { Text("${category.label} ($count)") }, enabled = count > 0)
                 }
             }
-
-            if (visibleMatches.isEmpty()) {
-                item(
-                    key = "document-photos-empty",
-                    span = { GridItemSpan(maxLineSpan) }
-                ) {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        shape = RoundedCornerShape(22.dp),
-                        color = MaterialTheme.colorScheme.surface
-                    ) {
-                        Text(
-                            text = when {
-                                errorMessage != null -> errorMessage
-                                scanning -> "Scanning gallery photos for readable document text…"
-                                matches.isNotEmpty() -> "No document photos match this search or filter."
-                                else -> "No document photos were found. Photos need several readable lines of text to appear here."
-                            },
-                            modifier = Modifier.padding(20.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+            if (scanning || scannedCount > 0) ScanProgressCard(
+                if (scanning) "Scanning photos" else "Document scan complete", scanning, scannedCount, totalCount,
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), baselineCount)
+            errorMessage?.let { Text(it, Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error) }
+            LazyVerticalGrid(GridCells.Fixed(gridColumns.coerceAtLeast(2)), Modifier.weight(1f).testTag("document-sections"), state = gridState,
+                contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                if (sections.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                    FeatureEmptyState(if (scanning) "Finding your documents…" else "No document photos here yet",
+                        if (query.isNotBlank()) "Try another word. Categories stay together on this page."
+                        else "Photographed bills, receipts, menus, forms and notes appear in their own sections as scanning finds them.")
                 }
-            } else {
-                items(
-                    items = visibleMatches,
-                    key = { match -> match.mediaItem.id }
-                ) { match ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(1f)
-                    ) {
-                        MediaThumbnail(
-                            mediaItem = match.mediaItem,
-                            modifier = Modifier.fillMaxSize(),
-                            cornerRadius = 8.dp,
-                            onClickWithBounds = { bounds ->
-                                onOpenMedia(match.mediaItem, visibleMedia, bounds)
-                            }
-                        )
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(6.dp),
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.66f)
-                        ) {
-                            Text(
-                                text = match.category.label,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.inverseOnSurface
-                            )
-                        }
+                for (section in sections) {
+                    item(key = "section-${section.category.name}", span = { GridItemSpan(maxLineSpan) }) {
+                        Text("${section.category.label} · ${section.matches.size}", Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 14.dp)
+                            .testTag("document-section-${section.category.name}"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    }
+                    items(section.matches, key = { it.mediaItem.id }, contentType = { "document-photo" }) { match ->
+                        MediaThumbnail(match.mediaItem, Modifier.fillMaxWidth().aspectRatio(1f)
+                            .animateItem(fadeInSpec = tween(160), placementSpec = null, fadeOutSpec = null), cornerRadius = 8.dp,
+                            onClickWithBounds = { onOpenMedia(match.mediaItem, section.matches.map { it.mediaItem }, it) })
                     }
                 }
             }

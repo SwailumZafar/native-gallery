@@ -34,6 +34,8 @@ internal enum class GalleryDestination {
     LockedMedia,
     RecentlyDeleted,
     Documents,
+    UsefulScreenshots,
+    Moments,
     AlbumCreator,
     PhotoEditor,
     Cleanup

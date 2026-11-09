@@ -33,6 +33,7 @@ internal class PeopleState(val repository: PeopleRepository) {
     var scanning by mutableStateOf(false)
     var scanned by mutableIntStateOf(0)
     var total by mutableIntStateOf(0)
+    var baseline by mutableIntStateOf(0)
     var revision by mutableIntStateOf(0)
     var completedRevision = 0
     var error by mutableStateOf<String?>(null)
@@ -62,10 +63,12 @@ internal fun rememberPeopleState(repository: PeopleRepository, media: List<Media
         state.groups = repository.cachedGroups(media)
         state.loaded = true
         if (state.revision <= state.completedRevision) return@LaunchedEffect
-        state.scanned = 0; state.total = media.count { !it.isVideo }; state.scanning = true; state.error = null
+        state.scanned = 0; state.baseline = 0; state.total = media.count { !it.isVideo }; state.scanning = true; state.error = null
+        var initial = true
         try {
             repository.scan(media) { groups, scanned, total ->
                 androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+                    if (initial) { state.baseline = scanned; initial = false }
                     state.publish(groups, scanned, total)
                 }
             }
@@ -94,14 +97,14 @@ internal fun PeopleSection(
             TextButton(onClick = state::scan, enabled = !state.scanning) { Text(if (state.enabled) "Scan" else "Find people") }
         }
         Text(when {
-            state.scanning -> "${state.scanned} of ${state.total} checked · Browse results now. Scanning pauses while you use the gallery."
+            state.scanning -> "Finding faces on this device. You can browse results as they arrive."
             state.error != null -> state.error!!
             !state.enabled -> "Group photos by face, privately on this device. Tap Find people to start."
             groups.isEmpty() -> "Tap Scan to find people in your photos, privately on this device."
             else -> "Tap a face to see their photos. Scan checks for new photos."
         }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (state.scanning && state.scanned < state.total) LinearProgressIndicator(
-            progress = { state.scanned.toFloat() / state.total.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth())
+        if (state.scanning || state.total > 0) ScanProgressCard(if (state.scanning) "Finding people" else "Face scan complete",
+            state.scanning, state.scanned, state.total, Modifier.fillMaxWidth(), state.baseline)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             itemsIndexed(groups, key = { _, person -> person.id }) { index, person ->
                 val album = remember(person, index) { person.album(index) }

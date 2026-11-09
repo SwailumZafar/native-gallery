@@ -4,7 +4,7 @@ Photo Lane is a privacy-focused Android photo and video gallery built with
 Kotlin and Jetpack Compose. It reads the device library through MediaStore and
 keeps its core organization, search, editing, and vault flows on the device.
 
-> Status: version 0.9.53 pre-release. A candidate Play identity and reproducible
+> Status: version 0.9.56 pre-release. A candidate Play identity and reproducible
 > release configuration are in place. Confirm ownership of the final application
 > ID, then complete physical-device, accessibility, and large-library testing
 > before public launch.
@@ -18,7 +18,10 @@ keeps its core organization, search, editing, and vault flows on the device.
 - Photo viewing, video playback, metadata, and basic photo editing
 - PIN/biometric-gated locked media stored with Android Keystore-backed AES-GCM
 - Vault PIN/password/pattern access, escalating lockouts, recovery, and a curated decoy view
-- On-device ML Kit OCR-based document photo discovery and text search
+- On-device document photo discovery with grouped sections, category shortcuts, live scan progress, and text search
+- Private copies in the Share flow, with multi-photo review, metadata removal, face pixelation, and text/manual covers
+- Useful screenshots with optional on-device OCR, categories, pinned/done states, and calendar follow-ups
+- Moments with dismissible photo stories, editable collections, covers, notes, and content-based memory suggestions
 - Duplicate-candidate and large-file cleanup views
 - Light, dark, and system themes plus playback and motion preferences
 - Responsive phone, landscape, tablet, and separating-hinge foldable layouts

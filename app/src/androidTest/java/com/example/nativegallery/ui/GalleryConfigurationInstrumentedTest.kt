@@ -27,6 +27,7 @@ import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.isFocused
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -97,6 +98,30 @@ class GalleryConfigurationInstrumentedTest {
                 }
             }
         } finally { repository.save(previousSettings) }
+    }
+
+    @Test
+    fun newToolsOpenFromMenuAndReturnWithoutChangingTheLibrary() {
+        composeRule.onNodeWithContentDescription("Menu").performClick()
+        composeRule.onNodeWithText("Moments").performScrollTo().performClick()
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithText("Create").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription("Back").performClick()
+        composeRule.onNodeWithText("Useful screenshots").performScrollTo().performClick()
+        composeRule.waitUntil(ConfigurationTimeoutMillis) {
+            composeRule.onAllNodesWithText("Scan screenshots").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription("Back").performClick()
+        composeRule.onNodeWithText("Private sharing").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Albums").performClick()
+        composeRule.onNodeWithText("Search albums").performTextInput(FixtureAlbumName)
+        composeRule.onNodeWithContentDescription(FixtureAlbumName).performClick()
+        composeRule.waitUntil(ConfigurationTimeoutMillis) { composeRule.onAllNodesWithTag(AlbumTransitionOverlayTestTag).fetchSemanticsNodes().isEmpty() }
+        composeRule.onNodeWithContentDescription(fixtureRule.displayName).performClick()
+        composeRule.onNodeWithContentDescription("Share").performClick()
+        composeRule.onNodeWithText("Share originals").assertIsDisplayed()
+        composeRule.onNodeWithText("Private copies").assertIsDisplayed()
     }
 
     @Test

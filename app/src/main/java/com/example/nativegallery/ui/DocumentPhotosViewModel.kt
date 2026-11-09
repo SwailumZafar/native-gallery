@@ -18,7 +18,8 @@ data class DocumentPhotosUiState(
     val scanning: Boolean = false,
     val scannedCount: Int = 0,
     val totalCount: Int = 0,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val baselineCount: Int = 0
 )
 
 class DocumentPhotosViewModel(
@@ -34,7 +35,7 @@ class DocumentPhotosViewModel(
 
     fun updateLibrary(mediaItems: List<MediaItem>) {
         val photos = mediaItems
-            .filterNot { it.isVideo }
+            .filterNot { it.isVideo || com.example.nativegallery.data.isScreenshotMedia(it) }
             .distinctBy { it.id }
             .sortedByDescending { it.sortTimestampMillis }
         val nextKey = photos.joinToString(separator = "|") { item ->
@@ -86,7 +87,8 @@ class DocumentPhotosViewModel(
                         matches = progress.matches,
                         scanning = progress.scanning,
                         scannedCount = progress.scannedCount,
-                        totalCount = progress.totalCount
+                        totalCount = progress.totalCount,
+                        baselineCount = if (progress.initial) progress.scannedCount else mutableUiState.value.baselineCount
                     )
                 }
             } catch (cancellation: CancellationException) {

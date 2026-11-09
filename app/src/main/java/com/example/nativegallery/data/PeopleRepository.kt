@@ -135,7 +135,7 @@ class PeopleRepository(context: Context) {
         if (records.size == photos.size) return@withContext
         PhotoAnalysisWork.awaitPeopleAllowed()
         check(OpenCVLoader.initLocal()) { "Face recognition could not start." }
-        Core.setNumThreads(1)
+        Core.setNumThreads(2)
         fun model(name: String): String {
             val file = File(directory, name)
             if (!file.exists()) {
@@ -216,12 +216,12 @@ class PeopleRepository(context: Context) {
                             changed.clear()
                         }
                         val now = SystemClock.elapsedRealtime()
-                        if (now - lastPublished >= 1500L || (lastGroups.isEmpty() && groupsChanged)) {
+                        if (now - lastPublished >= 250L || (lastGroups.isEmpty() && groupsChanged)) {
                             if (records.size + failed < photos.size) PhotoAnalysisWork.awaitPeopleAllowed()
                             if (groupsChanged) { lastGroups = groupIndex.snapshot(); groupsChanged = false }
                             progress(lastGroups, records.size + failed, photos.size)
                             lastPublished = now
-                        }
+                        } else progress(lastGroups, records.size + failed, photos.size)
                     }
                 } finally { producer.cancel(); decoded.cancel() }
             }

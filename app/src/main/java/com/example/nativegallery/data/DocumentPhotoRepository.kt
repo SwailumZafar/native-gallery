@@ -50,7 +50,8 @@ data class DocumentPhotoScanProgress(
     val matches: List<DocumentPhotoMatch>,
     val scannedCount: Int,
     val totalCount: Int,
-    val scanning: Boolean
+    val scanning: Boolean,
+    val initial: Boolean = false
 )
 
 class DocumentPhotoRepository(context: Context) {
@@ -74,7 +75,7 @@ class DocumentPhotoRepository(context: Context) {
         migrateLegacyStorage()
         val photos = mediaItems
             .asSequence()
-            .filterNot { it.isVideo }
+            .filterNot { it.isVideo || isScreenshotMedia(it) }
             .distinctBy { it.id }
             .sortedByDescending { it.sortTimestampMillis }
             .toList()
@@ -119,7 +120,8 @@ class DocumentPhotoRepository(context: Context) {
                 matches = matches.toList(),
                 scannedCount = scannedCount,
                 totalCount = photos.size,
-                scanning = pending.isNotEmpty()
+                scanning = pending.isNotEmpty(),
+                initial = true
             )
         )
         if (pending.isEmpty()) return@withContext
@@ -133,6 +135,7 @@ class DocumentPhotoRepository(context: Context) {
         }
         val bufferedRecords = mutableListOf<StoredDocumentPhotoRecord>()
         var lastPublished = SystemClock.elapsedRealtime()
+        var publishedMatches = matches.toList()
         var failedCount = 0
         try {
             coroutineScope {
@@ -187,22 +190,16 @@ class DocumentPhotoRepository(context: Context) {
                         )
                     }
                     scannedCount += 1
-                    val shouldPublishProgress =
-                        scannedCount == photos.size ||
-                            SystemClock.elapsedRealtime() - lastPublished >= 1500L ||
-                            (classification != null && matches.size == 1)
-                    if (shouldPublishProgress) {
+                    val shouldPublishMatches = scannedCount == photos.size ||
+                        SystemClock.elapsedRealtime() - lastPublished >= 200L ||
+                        (classification != null && matches.size == 1)
+                    if (shouldPublishMatches) {
                         lastPublished = SystemClock.elapsedRealtime()
                         matches.sortByDescending { it.mediaItem.sortTimestampMillis }
-                        onProgress(
-                            DocumentPhotoScanProgress(
-                                matches = matches.toList(),
-                                scannedCount = scannedCount,
-                                totalCount = photos.size,
-                                scanning = scannedCount < photos.size
-                            )
-                        )
+                        publishedMatches = matches.toList()
                     }
+                    // The counter is cheap and live; only the heavier match snapshots are throttled.
+                    onProgress(DocumentPhotoScanProgress(publishedMatches, scannedCount, photos.size, scannedCount < photos.size))
                 }
             }
         } finally {
@@ -317,7 +314,7 @@ class DocumentPhotoRepository(context: Context) {
         const val LEGACY_FILE_BROWSER_REMOVAL_KEY = "file_browser_removed"
         const val CLASSIFIER_VERSION = 4
         const val MAX_ANALYSIS_EDGE = 1024
-        const val SCAN_PARALLELISM = 2
+        const val SCAN_PARALLELISM = 3
         const val DATABASE_WRITE_BATCH_SIZE = 20
     }
 }
@@ -369,6 +366,7 @@ internal fun hasSameDocumentPhotoSource(
 }
 
 internal fun isDocumentPhotoAnalysisCandidate(item: MediaItem): Boolean {
+    if (item.isVideo || isScreenshotMedia(item)) return false
     val mimeType = item.mimeType.orEmpty().lowercase()
     if (mimeType == "image/gif" || mimeType == "image/vnd.wap.wbmp") return false
     if (item.fileSizeBytes?.let { it in 1 until MIN_ANALYSIS_FILE_BYTES } == true) return false

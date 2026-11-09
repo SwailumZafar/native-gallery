@@ -13,7 +13,7 @@ import java.util.concurrent.Executors
 
 /** Analysis never shares the UI/thumbnail worker pool, and yields at photo boundaries. */
 internal object PhotoAnalysisWork {
-    val dispatcher = Executors.newFixedThreadPool(2) { task ->
+    val dispatcher = Executors.newFixedThreadPool(3) { task ->
         Thread({ Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "photo-analysis")
     }.asCoroutineDispatcher()
     private val peopleAllowed = MutableStateFlow(false)
@@ -21,11 +21,13 @@ internal object PhotoAnalysisWork {
     private val touching = MutableStateFlow(false)
     private val documentsScrolling = MutableStateFlow(false)
     fun setDocumentsScrolling(active: Boolean) {
+        if (documentsScrolling.value == active) return
         quietSince = SystemClock.elapsedRealtime()
         documentsScrolling.value = active
     }
     @Volatile private var quietSince = SystemClock.elapsedRealtime()
     fun setTouching(active: Boolean) {
+        if (touching.value == active) return
         quietSince = SystemClock.elapsedRealtime()
         touching.value = active
     }
@@ -39,13 +41,13 @@ internal object PhotoAnalysisWork {
             currentCoroutineContext().ensureActive()
             // Steady-state scans should not allocate four flow collectors for every face.
             if (idle.value && !touching.value && !documentsScrolling.value && (!needsPeople || peopleAllowed.value) &&
-                SystemClock.elapsedRealtime() - quietSince >= 350L) return
+                SystemClock.elapsedRealtime() - quietSince >= 120L) return
             combine(peopleAllowed, idle, touching, documentsScrolling) { allowed, settled, pressed, scrolling ->
                 (!needsPeople || allowed) && settled && !pressed && !scrolling
             }.first { it }
-            delay((350L - (SystemClock.elapsedRealtime() - quietSince)).coerceAtLeast(0))
+            delay((120L - (SystemClock.elapsedRealtime() - quietSince)).coerceAtLeast(0))
             if (idle.value && !touching.value && !documentsScrolling.value && (!needsPeople || peopleAllowed.value) &&
-                SystemClock.elapsedRealtime() - quietSince >= 350L) return
+                SystemClock.elapsedRealtime() - quietSince >= 120L) return
         }
     }
     suspend fun awaitPeopleAllowed() = awaitQuiet(true)

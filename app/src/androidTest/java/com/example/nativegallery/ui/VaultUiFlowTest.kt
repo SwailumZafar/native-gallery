@@ -48,6 +48,20 @@ class VaultUiFlowTest {
         rule.runOnIdle { assertEquals("123456" to "123456", created) }
     }
 
+    @Test fun alternatePinIsNotShownAsAnInactiveUnlockMethod() {
+        rule.setContent { GalleryTheme {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                LockedMediaAuthCard(true, false, null, false, { _, _ -> }, {}, {}, VaultCredentialKind.Password,
+                    false, true, "", 0L, { _, _ -> }, {}, false, hasDecoyPin = true)
+            }
+        } }
+        rule.onNodeWithText("Password").assertIsDisplayed()
+        rule.onNodeWithText("Use PIN").assertDoesNotExist()
+        rule.onNodeWithContentDescription("Vault lock").performTouchInput { longClick() }
+        rule.onNodeWithText("PIN").assertIsDisplayed()
+        rule.onNodeWithText("Use Password").assertDoesNotExist()
+    }
+
     @Test fun recoveryDoesNotShowTwoUnlockMethodsAtOnce() {
         showAuth(recoveryRequired = true)
         rule.onNodeWithTag("vault-pattern-Pattern").assertDoesNotExist()

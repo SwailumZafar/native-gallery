@@ -224,7 +224,7 @@ internal fun VaultSettingsSheet(
                 else -> {
                     Text(if (confirming) "Enter it again to confirm." else when {
                         recovery -> "Use a phrase of 12–128 characters. Keep a private copy outside this phone. It is required with your vault credential after repeated incorrect attempts."
-                        decoy -> "A separate PIN opens only the items you add to the decoy view. Your other private media stays hidden."
+                        decoy -> "A separate PIN opens only the items you add to the decoy view. With a saved pattern or password, hold the lock icon on the unlock screen to enter this PIN. Your other private media stays hidden."
                         else -> fieldKind.requirements()
                     }, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     val label = when {

@@ -1,6 +1,7 @@
 @file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
 
 package com.example.nativegallery.ui
+import androidx.compose.animation.core.FastOutSlowInEasing
 
 import android.app.Activity
 import android.graphics.Bitmap
@@ -273,6 +274,7 @@ fun PhotoViewerOverlay(
     favoriteMediaIds: Set<String> = emptySet(),
     onFavoriteChange: (MediaItem, Boolean) -> Unit = { _, _ -> },
     onEdit: (MediaItem) -> Unit = {},
+    onShareRequested: ((MediaItem) -> Unit)? = null,
     onMove: (MediaItem) -> Unit = {},
     onCurrentMediaChanged: (MediaItem) -> Unit = {},
     albumNameForMedia: (MediaItem) -> String? = { null },
@@ -554,6 +556,10 @@ fun PhotoViewerOverlay(
     }
 
     fun shareCurrentMedia() {
+        if (actionMode == ViewerActionMode.Normal && onShareRequested != null) {
+            onShareRequested(currentItem)
+            return
+        }
         val uri = currentItem.contentUri ?: return
         val shareIntent = Intent(Intent.ACTION_SEND).apply {
             type = if (currentItem.isVideo) "video/*" else "image/*"
@@ -1767,12 +1773,22 @@ private fun ZoomableViewerMedia(
     }
 
     if (mediaItem.isVideo && mediaItem.contentUri != null) {
+        // Resolve adjacent pages before they settle. Poster and player share the same
+        // display geometry and bitmap, so activation does not replace a fitted image
+        // with a cropped one or briefly show an empty player surface.
+        var videoItem by remember(mediaItem.id, mediaItem.dateModifiedMillis) { mutableStateOf(mediaItem) }
+        LaunchedEffect(mediaItem.id, mediaItem.dateModifiedMillis) {
+            videoItem = VideoPresentationGeometry.resolve(geometryContext, mediaItem)
+        }
+        val retainedPoster = remember(mediaItem.id, isActive) {
+            DisplayedBitmapCache.get(mediaItem.contentUri) ?: initialPreview
+        }
         if (isActive) {
             ViewerVideoPlayer(
-                initialPreview = initialPreview,
+                initialPreview = retainedPoster,
                 dismissPreview = dismissPreview,
                 onPresentationAspectChanged = onVideoPresentationAspectChanged,
-                mediaItem = mediaItem,
+                mediaItem = videoItem,
                 isActive = true,
                 isViewerDragging = isViewerDragging,
                 dismissCornerRadius = dismissCornerRadius,
@@ -1797,7 +1813,7 @@ private fun ZoomableViewerMedia(
             )
         } else {
             ViewerVideoPoster(
-                mediaItem = mediaItem,
+                mediaItem = videoItem,
                 dismissCornerRadius = dismissCornerRadius,
                 dismissElevation = dismissElevation
             )
@@ -2345,6 +2361,7 @@ private fun ViewerVideoPlayer(
     var hasPlaybackError by remember(uri) { mutableStateOf(false) }
     var hasRenderedFirstFrame by remember(uri) { mutableStateOf(false) }
     var presentationReady by remember(uri) { mutableStateOf(false) }
+    var entranceComplete by remember(uri) { mutableStateOf(false) }
     var hasRuntimeVideoSize by remember(uri) { mutableStateOf(false) }
     var playerView by remember(uri) { mutableStateOf<PlayerView?>(null) }
     var cachedPlayerFrame by remember(uri) {
@@ -2624,6 +2641,10 @@ private fun ViewerVideoPlayer(
             onVideoTextureViewAvailable(null)
         }
     }
+    LaunchedEffect(presentationReady) {
+        if (presentationReady) { delay(180); entranceComplete = true }
+        else entranceComplete = false
+    }
     LaunchedEffect(presentationReady, playerView, uri, cachedPlayerFrame) {
         if (!presentationReady || cachedPlayerFrame) return@LaunchedEffect
         val textureView = playerView?.videoSurfaceView as? TextureView ?: return@LaunchedEffect
@@ -2711,6 +2732,7 @@ private fun ViewerVideoPlayer(
         isActive,
         isViewerDragging,
         isPrepared,
+        entranceComplete,
         foregroundPlaybackAllowed,
         lifecycleOwner.lifecycle.currentState
     ) {
@@ -2718,7 +2740,7 @@ private fun ViewerVideoPlayer(
 
         val shouldPlay = shouldVideoPlaybackRun(
             isActive = isActive && !isViewerDragging,
-            isPrepared = isPrepared,
+            isPrepared = isPrepared && entranceComplete,
             foregroundPlaybackAllowed = foregroundPlaybackAllowed,
             lifecycleResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         )
@@ -2776,7 +2798,7 @@ private fun ViewerVideoPlayer(
 
     val playerAlpha by animateFloatAsState(
         targetValue = if (presentationReady) 1f else 0f,
-        animationSpec = tween(120),
+        animationSpec = tween(180, easing = FastOutSlowInEasing),
         label = "playerAlpha"
     )
     val thumbnailAlpha by animateFloatAsState(
@@ -2840,7 +2862,7 @@ private fun ViewerVideoPlayer(
                     )
                     .graphicsLayer { alpha = thumbnailAlpha },
                 cornerRadius = 0.dp,
-                contentScale = ContentScale.Crop,
+                contentScale = if (videoFillFrame) ContentScale.Crop else ContentScale.Fit,
                 thumbnailSize = 512,
                 loadQuality = ImageLoadQuality.Thumbnail,
                 backgroundColor = Color.Black,

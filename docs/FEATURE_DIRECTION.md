@@ -1,10 +1,12 @@
 # Photo Lane feature direction
 
-Updated: 2026-11-08
+Updated: 2026-11-09
 
 The proposed identity is a fast, private gallery that makes everyday photos useful. Existing foundations include local OCR, People, a vault, smart albums, burst support, video playback, and duplicate cleanup.
 
 These are proposed additions, not features included in v0.9.50.
+
+Implementation update: v0.9.54 adds Private sharing, Useful screenshots, and date-based trip Moments with manual curation. See `FEATURES_0.9.54.md` for the delivered scope. Before/after Progress stories and searching scenes inside videos remain proposals.
 
 | Priority | Feature | What the user can do | Why it fits |
 | --- | --- | --- | --- |

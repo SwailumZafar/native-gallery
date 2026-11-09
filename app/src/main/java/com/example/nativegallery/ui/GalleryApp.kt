@@ -177,6 +177,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
@@ -466,7 +467,7 @@ fun GalleryApp(
     val latestDestination by rememberUpdatedState(destination)
 
 
-    val biometricAvailable = remember(context) { context.supportsBiometricPrompt() }
+    var biometricAvailable by remember(context) { mutableStateOf(context.supportsBiometricPrompt()) }
     var favoriteMediaIds by remember { mutableStateOf(favoritesRepository.initialFavoriteIds()) }
     var recentlyDeletedMedia by remember { mutableStateOf(recentlyDeletedRepository.initialDeletedMedia()) }
     var optimisticRemovedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -497,6 +498,10 @@ fun GalleryApp(
     var pendingLockedRestoreConfirmation by remember { mutableStateOf<PendingLockedRestoreConfirmation?>(null) }
     var pendingTrashViewerRestore by remember { mutableStateOf<Pair<MediaItem, Int>?>(null) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
+    var privateSharingVisible by rememberSaveable { mutableStateOf(false) }
+    var privateSharingIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    var privateSharingSession by rememberSaveable { mutableStateOf("") }
+    var pendingShareItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var showMediaManagementExplanation by rememberSaveable { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingMoveMediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
@@ -578,6 +583,9 @@ fun GalleryApp(
     }
     val analysisLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     val analysisLifecycleState by analysisLifecycle.currentStateFlow.collectAsStateWithLifecycle()
+    LaunchedEffect(analysisLifecycleState) {
+        if (analysisLifecycleState.isAtLeast(Lifecycle.State.RESUMED)) biometricAvailable = context.supportsBiometricPrompt()
+    }
     LaunchedEffect(anyTransitionActive, viewerVisible, destination, selectedTab, analysisLifecycleState, mainPagerState, photosListState, albumsListState, albumDetailListState) {
         snapshotFlow {
             val moving = anyTransitionActive || mainPagerState.isScrollInProgress
@@ -1258,7 +1266,7 @@ fun GalleryApp(
         val prompt = BiometricPrompt.Builder(activity)
             .setTitle("Unlock locked media")
             .setSubtitle("Use face, fingerprint, or another available biometric")
-            .setNegativeButton("Use PIN", activity.mainExecutor) { _, _ ->
+            .setNegativeButton("Use ${lockedSecurityUiState.credentialKind.label()}", activity.mainExecutor) { _, _ ->
                 if (hiddenBiometricCancellation === cancellationSignal) {
                     hiddenBiometricCancellation = null
                     lockedSecurityViewModel.clearMessage()
@@ -2445,28 +2453,8 @@ fun GalleryApp(
         )
     }
 
-    fun shareSelectedMedia() {
-        val shareUris = selectedMediaItems.mapNotNull { it.contentUri }
-        if (shareUris.isEmpty()) return
-
-        val shareIntent = if (shareUris.size == 1) {
-            Intent(Intent.ACTION_SEND).apply {
-                type = selectedMediaItems.firstOrNull()?.let { if (it.isVideo) "video/*" else "image/*" } ?: "*/*"
-                putExtra(Intent.EXTRA_STREAM, shareUris.first())
-            }
-        } else {
-            Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                type = if (selectedMediaItems.any { it.isVideo }) "*/*" else "image/*"
-                putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(shareUris))
-            }
-        }.apply {
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-
-        runCatching {
-            context.startActivity(Intent.createChooser(shareIntent, "Share"))
-        }
-    }
+    fun requestShare(items: List<MediaItem>) { pendingShareItems = items.filter { it.contentUri != null }.distinctBy { it.id } }
+    fun shareSelectedMedia() { requestShare(selectedMediaItems) }
 
     fun editPhoto(mediaItem: MediaItem) {
         if (mediaItem.isVideo || mediaItem.contentUri == null) return
@@ -2738,6 +2726,7 @@ fun GalleryApp(
                                         smoothPacing = !closing.classicAnimation).bounds.bottom
                                     1f - GalleryMotion.smoothstep(barRevealStart, barRevealEnd, bottom)
                                 } },
+                                onAlbumsLongPress = ::openLockedMedia,
                                 onTabSelected = { tab -> if (closingAlbum == null) selectMainTab(tab) }
                             )
                         }
@@ -2985,6 +2974,8 @@ fun GalleryApp(
                                                 onOpenLockedMedia = ::openLockedMedia,
                                                 onOpenRecentlyDeleted = ::openRecentlyDeleted,
                                                 onOpenDocuments = ::openDocuments,
+                                                onOpenMoments = { navigationViewModel.openOverlay(GalleryDestination.Moments) },
+                                                onOpenUsefulScreenshots = { navigationViewModel.openOverlay(GalleryDestination.UsefulScreenshots) },
                                                 onOpenSettings = { showSettingsDialog = true },
                                                 onOpenCleanup = ::openCleanup
                                             )
@@ -3128,10 +3119,25 @@ fun GalleryApp(
                                     }
                                 }
                             )
+                            GalleryDestination.Moments -> MomentsScreen(
+                                media = visibleMedia,
+                                favorites = favoriteMediaIds,
+                                viewerOpen = viewerVisible || pendingMediaOpenKey != null || mediaOpenTransition != null || mediaCloseTransition != null,
+                                onBack = { returnFromOverlay(GalleryTab.Menu) },
+                                onOpenMedia = { item, items, bounds -> startViewerOpen(item, items, bounds,
+                                    sourceGridColumns = adaptivePolicy.utilityGridColumns) }
+                            )
+                            GalleryDestination.UsefulScreenshots -> UsefulScreenshotsScreen(
+                                media = visibleMedia,
+                                onBack = { returnFromOverlay(GalleryTab.Menu) },
+                                onOpenMedia = { item, items, bounds -> startViewerOpen(item, items, bounds,
+                                    sourceGridColumns = adaptivePolicy.utilityGridColumns) }
+                            )
                             GalleryDestination.Documents -> DocumentPhotosScreen(
                                 matches = documentPhotosUiState.matches,
                                 scanning = documentPhotosUiState.scanning,
                                 scannedCount = documentPhotosUiState.scannedCount,
+                                baselineCount = documentPhotosUiState.baselineCount,
                                 totalCount = documentPhotosUiState.totalCount,
                                 errorMessage = documentPhotosUiState.errorMessage,
                                 onBack = { returnFromOverlay(GalleryTab.Menu) },
@@ -3378,6 +3384,7 @@ fun GalleryApp(
                     favoriteMediaIds = favoriteMediaIds,
                     onFavoriteChange = ::setMediaFavorite,
                     onEdit = ::editPhoto,
+                    onShareRequested = { item -> requestShare(listOf(item)) },
                     onMove = { mediaItem -> pendingMoveMediaItems = listOf(mediaItem) },
                     onCurrentMediaChanged = { currentItem ->
                         if (viewerMediaItem?.id != currentItem.id) {
@@ -3419,6 +3426,28 @@ fun GalleryApp(
             if (pendingMediaOpenKey != null || mediaOpenTransition != null) {
                 MediaOpeningInputBarrier()
             }
+
+            if (pendingShareItems.isNotEmpty()) ShareOptionsSheet(
+                items = pendingShareItems,
+                onDismiss = { pendingShareItems = emptyList() },
+                onOriginals = {
+                    val items = pendingShareItems
+                    pendingShareItems = emptyList()
+                    runCatching { context.startActivity(Intent.createChooser(originalMediaShareIntent(items), "Share")) }
+                },
+                onPrivate = {
+                    privateSharingIds = pendingShareItems.map { it.id }
+                    privateSharingSession = java.util.UUID.randomUUID().toString()
+                    pendingShareItems = emptyList()
+                    privateSharingVisible = true
+                }
+            )
+            if (privateSharingVisible) PrivateSharingDialog(
+                sessionId = privateSharingSession,
+                selectedIds = privateSharingIds,
+                media = visibleMedia,
+                onDismiss = { privateSharingVisible = false }
+            )
 
             pendingDeleteConfirmation?.let { pending ->
                 val itemCount = pending.mediaItems.size
@@ -4148,6 +4177,8 @@ private fun GalleryMenuScreen(
     onOpenLockedMedia: () -> Unit,
     onOpenRecentlyDeleted: () -> Unit,
     onOpenDocuments: () -> Unit,
+    onOpenMoments: () -> Unit,
+    onOpenUsefulScreenshots: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenCleanup: () -> Unit
 ) {
@@ -4199,6 +4230,20 @@ private fun GalleryMenuScreen(
             shadowElevation = 1.dp
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
+                GalleryMenuRow(
+                    icon = Icons.Filled.Collections,
+                    label = "Moments",
+                    description = "Keep trips and favorite days together",
+                    onClick = onOpenMoments,
+                    showDivider = true
+                )
+                GalleryMenuRow(
+                    icon = Icons.Filled.Image,
+                    label = "Useful screenshots",
+                    description = "Search tickets, receipts, orders and follow-ups",
+                    onClick = onOpenUsefulScreenshots,
+                    showDivider = true
+                )
                 GalleryMenuRow(
                     icon = Icons.Filled.Security,
                     label = "Hidden albums",
@@ -4655,10 +4700,20 @@ private tailrec fun Context.findActivity(): Activity? {
     }
 }
 
+@Suppress("DEPRECATION") // API 28/29 compatibility; newer devices use the authenticator-specific check.
 private fun Context.supportsBiometricPrompt(): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
-    val keyguardManager = getSystemService(KeyguardManager::class.java)
-    return keyguardManager?.isDeviceSecure != false
+    return runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val manager = getSystemService(android.hardware.biometrics.BiometricManager::class.java)
+            val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) manager?.canAuthenticate(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_WEAK)
+                else manager?.canAuthenticate()
+            result == android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS
+        } else {
+            val manager = getSystemService(android.hardware.fingerprint.FingerprintManager::class.java)
+            manager?.isHardwareDetected == true && manager.hasEnrolledFingerprints()
+        }
+    }.getOrDefault(false)
 }
 private fun visibleMedia(
     mediaItems: List<MediaItem>,
@@ -5349,10 +5404,11 @@ private fun scaledRectAroundCenter(rect: Rect, scale: Float, offset: Offset): Re
 }
 
 @Composable
-private fun GalleryBottomBar(
+internal fun GalleryBottomBar(
     selectedTab: GalleryTab,
     visible: Boolean,
     albumReturnVisibility: (() -> Float)? = null,
+    onAlbumsLongPress: () -> Unit = {},
     onTabSelected: (GalleryTab) -> Unit
 ) {
     val containerShape = RoundedCornerShape(50.dp)
@@ -5378,6 +5434,7 @@ private fun GalleryBottomBar(
 
     val currentSelectedTab by rememberUpdatedState(selectedTab)
     val currentOnTabSelected by rememberUpdatedState(onTabSelected)
+    val currentOnAlbumsLongPress by rememberUpdatedState(onAlbumsLongPress)
 
     val visibilityProgress by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
@@ -5456,7 +5513,7 @@ private fun GalleryBottomBar(
                         fun pageForX(x: Float): Float =
                             galleryBottomBarPageForX(x, halfTabWidthPx, tabStepPx, (tabs.size - 1).toFloat())
 
-                        awaitEachGesture {
+                        coroutineScope { awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val startX = down.position.x
                             val pointerId = down.id
@@ -5464,7 +5521,16 @@ private fun GalleryBottomBar(
                             var lastX = startX
                             var lastHoverTab = tabForX(startX)
                             isPressed = true
-
+                            var longPressFired = false
+                            val hold = if (lastHoverTab == GalleryTab.Albums) launch {
+                                delay(viewConfiguration.longPressTimeoutMillis)
+                                if (!hasDragged && isPressed) {
+                                    longPressFired = true
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    currentOnAlbumsLongPress()
+                                }
+                            } else null
+                            try {
                             while (true) {
                                 val event = awaitPointerEvent()
                                 val change = event.changes.find { it.id == pointerId } ?: event.changes.firstOrNull()
@@ -5473,12 +5539,13 @@ private fun GalleryBottomBar(
                                 }
                                 val currentX = change.position.x
                                 lastX = currentX
-                                val dragDist = kotlin.math.abs(currentX - startX)
+                                val dragDist = (change.position - down.position).getDistance()
                                 if (!hasDragged && dragDist > viewConfiguration.touchSlop) {
+                                    hold?.cancel()
                                     hasDragged = true
                                     isDragging = true
                                 }
-                                if (hasDragged) {
+                                if (hasDragged && !longPressFired) {
                                     dragPage = pageForX(currentX)
                                     val hoverTab = tabForX(currentX)
                                     if (hoverTab != lastHoverTab) {
@@ -5490,13 +5557,17 @@ private fun GalleryBottomBar(
                             }
 
                             val chosenTab = if (hasDragged) tabForX(lastX) else tabForX(startX)
-                            currentOnTabSelected(chosenTab)
-                            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-
+                            if (!longPressFired) {
+                                currentOnTabSelected(chosenTab)
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+                            } finally {
+                            hold?.cancel()
                             isDragging = false
                             dragPage = null
                             isPressed = false
-                        }
+                            }
+                        } }
                     }
             ) {
                 val baseTabWidthPx = with(density) { tabWidth.toPx() }
@@ -5529,6 +5600,13 @@ private fun GalleryBottomBar(
                                 .semantics {
                                     this.selected = selectedTab == tab
                                     this.role = Role.Tab
+                                    if (tab == GalleryTab.Albums) {
+                                        this.onLongClick("Open locked media") {
+                                            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            currentOnAlbumsLongPress()
+                                            true
+                                        }
+                                    }
                                     this.onClick {
                                         currentOnTabSelected(tab)
                                         true

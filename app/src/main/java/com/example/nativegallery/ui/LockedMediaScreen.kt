@@ -3,6 +3,7 @@
 package com.example.nativegallery.ui
 
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.combinedClickable
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -468,6 +469,7 @@ private fun LockedMediaHeader(
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 internal fun LockedMediaAuthCard(
     hasPin: Boolean, biometricAvailable: Boolean, authMessage: String?, authInProgress: Boolean,
     onPinCreated: (String, String) -> Unit, onPinUnlock: (String) -> Unit, onBiometricUnlock: () -> Unit,
@@ -487,7 +489,9 @@ internal fun LockedMediaAuthCard(
     val validEntry = com.example.nativegallery.data.validVaultCredential(if (hasPin) entryKind else pinKind, secret)
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
         Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Icon(Icons.Filled.Lock, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
+            Icon(Icons.Filled.Lock, "Vault lock", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp)
+                .combinedClickable(enabled = hasPin && hasDecoyPin && credentialKind != pinKind && ready,
+                    onClick = {}, onLongClick = { entryKind = if (entryKind == pinKind) credentialKind else pinKind; secret = "" }))
             Text(if (requiresRecovery) "Recover vault access" else if (hasPin) "Unlock locked media"
                 else if (confirmingPin) "Confirm your PIN" else "Protect your media", style = MaterialTheme.typography.headlineSmall)
             if (requiresRecovery) {
@@ -541,9 +545,6 @@ internal fun LockedMediaAuthCard(
                 }
                 if (confirmingPin) TextButton(onClick = { confirmingPin = false; firstPin = ""; secret = "" }, enabled = ready) { Text("Choose a different PIN") }
                 if (hasPin && biometricAvailable) TextButton(onClick = onBiometricUnlock, enabled = ready) { Text("Use biometrics") }
-                if (hasPin && hasDecoyPin && credentialKind != pinKind) TextButton(onClick = {
-                    entryKind = if (entryKind == pinKind) credentialKind else pinKind; secret = ""
-                }, enabled = ready) { Text(if (entryKind == pinKind) "Use ${credentialKind.label()}" else "Use PIN") }
             }
             if (remainingMillis > 0) Text("Try again in ${kotlin.math.ceil(remainingMillis / 1000.0).toInt()}s", color = MaterialTheme.colorScheme.error)
             authMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }

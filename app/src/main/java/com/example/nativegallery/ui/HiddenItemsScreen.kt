@@ -27,6 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import com.example.nativegallery.model.Album
 import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.ResourceImage
@@ -192,10 +194,17 @@ private fun HiddenAlbumRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
+    val haptics = LocalHapticFeedback.current
+    val toggle: (Boolean) -> Unit = { next ->
+        if (next != checked) {
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            onCheckedChange(next)
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .bouncyClickable { onCheckedChange(!checked) }
+            .bouncyClickable { toggle(!checked) }
             .padding(horizontal = 22.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -226,7 +235,7 @@ private fun HiddenAlbumRow(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = toggle,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = MaterialTheme.colorScheme.surface,
                 checkedTrackColor = MaterialTheme.colorScheme.primary,

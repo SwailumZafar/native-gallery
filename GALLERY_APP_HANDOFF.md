@@ -1,6 +1,6 @@
 # Aster App Handoff
 
-Last updated: 2026-11-09
+Last updated: 2026-11-10
 
 This file is the source-of-truth handoff for the native Android gallery app. Read it before continuing work in this repo.
 
@@ -18,6 +18,7 @@ For every normal implementation task:
 6. Report the requested change and additional hardening change separately, including what to check on the device.
 7. Update this handoff when an item is completed, reprioritized, or a durable issue is discovered.
 8. When the user asks to commit completed work, also push the commit to the current GitHub tracking branch unless they explicitly request a local-only commit.
+9. The user requested physical-phone checks only on 2026-11-09. Do not run emulator checks unless the user explicitly changes this preference.
 
 Infer routine implementation details from the repository. Ask the user only when different product or design choices would materially change the app and the intended choice cannot be discovered locally.
 
@@ -121,9 +122,9 @@ Branch: main
 Remote tracking branch: origin/main
 Previous pushed implementation baseline: 3875b40 Save Photo Lane 0.9.51 with smooth Hero pacing and optimized scrolling
 Previous save point: v0.9.51 / code 54; accepted smooth Hero, pushed before extending the motion to other tiles
-Current source save point: installed Photo Lane v0.9.53 / code 56; resolve its commit with git log -1
-Current workspace: Photo Lane v0.9.53 / code 56; refined Enhanced LivingFlow with accepted Normal retained; 252 JVM tests and 24 phone checks pass
-Installed build: Photo Lane v0.9.53 / code 56 optimized ARM64 benchmark variant on RMX3852 at 192.168.18.95:43369; upgrade/hash verified and cold launch succeeds in 345 ms
+Current source save point: Photo Lane v0.9.56 GitHub checkpoint requested 2026-11-10 (see git log -1 for commit ID)
+Current workspace: Photo Lane v0.9.56 / code 59; consistent crisp scan progress, faster analysis, Moment stories, clearer screenshot organization, adaptive private review, and active-method unlock UI
+Installed build: Photo Lane v0.9.56 / code 59 optimized ARM64 benchmark variant on RMX3852 at 192.168.18.95:39411; upgrade/hash verified and cold launch succeeds in 426 ms; task-local ADB server port 5038 avoids interrupted default-server transfers
 GitHub tracking branch: origin/main; use git status --short --branch for current sync state
 Repository visibility: private
 ```
@@ -131,6 +132,7 @@ Repository visibility: private
 Recent saved work:
 
 ```text
+21e9ea3 Refine Photo Lane 0.9.53 album pacing across Normal and Enhanced
 3875b40 Save Photo Lane 0.9.51 with smooth Hero pacing and optimized scrolling
 d43a2f5 Release Photo Lane 0.9.47 with smoother album transitions
 c729e02 Introduce Luma Nook palettes and continuous grid preloading
@@ -155,6 +157,52 @@ project workflows. Machine-local/generated files such as local.properties,
 .gradle/, build/, APK/AAB outputs, Android Studio metadata, audit captures,
 temporary video frames, and Codex working data must remain uncommitted.
 ```
+
+## 2026-11-10 GitHub checkpoint (v0.9.56)
+
+- User requested committing the completed version to GitHub. This checkpoint includes the v0.9.54–0.9.56 implementation, tests and release notes on `main`; `origin/main` is the push target.
+- Existing validation remains applicable: 266 JVM tests, 30 unique physical-phone checks, zero lint errors, and the verified optimized v0.9.56/code 59 phone installation. No runtime code changed for this save point. Generated APKs, captures, temporary files and machine-local configuration remain ignored.
+
+## 2026-11-09 Crisp scans, Moment stories and private review (v0.9.56)
+
+- User requested sharp/non-vibrating counters and matching progress animation for every analysis tool, faster scanning across People/Documents/Moments/screenshots, dismissible Moment stories, clearer Useful screenshots, visible multi-photo private navigation, removal of privacy-control lines/layout shifts, haptics/full-screen access, and active unlock methods only. See `docs/FEATURES_0.9.56.md`.
+- All four analysis tools share `ScanProgressCard`: rounded gradient track with live marker and a counter that advances per frame from the cached baseline. Numeric characters use measured, fixed individual cells. Phone tests caught figure-space/whole-string width differences in the OEM font, so counters no longer depend on the font's claimed monospacing or overlapping slide/fade layers.
+- Scanning keeps interaction/thumbnail isolation. Documents uses three bounded OCR workers at unchanged resolution; screenshots uses two workers with reusable OCR clients; Moments decodes ahead, reuses OCR, avoids unnecessary OCR passes and batches evidence writes; People uses two native inference threads and publishes each photo count independently of throttled group snapshots. The idle grace is 120 ms and unchanged interaction notifications do not restart it.
+- Same 16 generated text-photo workload on RMX3852, debug v0.9.55 vs v0.9.56, respectively: Documents 1713→1354 ms; screenshots 2779→1347 ms; Moments 5129→1492 ms; People 1081→531 ms; cached People 4→2 ms. These are controlled synthetic timings, including no-face images, rather than a whole-library or face-heavy benchmark. All original analysis criteria and source-resolution limits are retained.
+- Opening a moment plays a cover-first, five-second-per-photo story with segmented progress, pause/hold, previous/next and View all photos/Close. Dismissing or finishing stays in the same moment's grid; Play story is available there. Stories pause in the background and only reference the latest visible/authorized media. Returning waits for the previous scan's cache commit before resuming analysis.
+- Useful screenshots now explains its purpose, opens on useful/pinned content, groups cards by category, and keeps unclassified captures in Other. Details centralizes Pin/Done/follow-ups. Manual categorization enters Useful before OCR, preserving the user's choice during later scans.
+- Private review has a visible selected-photo strip plus Next/Previous, per-photo retained masks, fitted previews, wrapping/scrollable controls, compact side-by-side layout, safe insets/footer space and haptics. Rendering uses a reserved small spinner instead of inserting a line. Only active drag outlines remain. Selected thumbnails clip their overlays to their rounded shape.
+- Unlock shows the saved credential; biometric availability checks real enrollment/authentication and refreshes on resume. System prompts name the saved method instead of always saying PIN. A configured decoy PIN remains accessible by holding the lock icon, documented in Decoy settings, without presenting an inactive primary PIN choice. Real vault credentials/media are never used in UI tests.
+- Related hardening: story media is re-filtered against the current allowed library; cancelled/restarted analysis joins cache commits; OCR/label clients close even on cache-write failures; private selection IDs use immutable state. Benchmark fixtures use UUID-isolated caches/preferences/databases and clean abandoned generated workloads after system kills. User requested no emulator checks; future validation must use the phone unless explicitly changed.
+- Verification: 266 JVM tests pass and final lint reports 0 errors/12 existing warnings. All 30 unique physical-phone checks pass across the initial suite and focused reruns: scanner completion/cache behavior, eight repository/export checks, eleven generated feature UI checks, five mock vault UI checks, repeated playback/paging, immediate video gestures, and real Menu/Share navigation. Initial phone runs exposed OEM numeric width differences and a test selector matching both an Orders heading and chip. Fixed per-digit measured cells and scoped the chip matcher; final two phone regressions passed in 6.284 seconds. Manual classification before OCR and real 1.4× text scaling were checked. Generated-only story, screenshot, document and privacy captures were visually reviewed; no live-gallery capture/export was made.
+- Builds: final debug/test/lint/unit work passed (4m 51s), and final optimized ARM64 benchmark packaging passed (3m 46s after recovering from a local tool-service restart). Wireless whole-file transfers dropped; a task-local ADB server on port 5038 and verified 8 MB chunks successfully installed the completed debug APK. Temporary transfer scripts/binaries/logs are ignored under `tmp/`.
+- Final optimized APK installed in place with data/settings retained. Confirmed v0.9.56/code 59, no DEBUGGABLE flag, size 90,708,523 bytes, matching installed SHA-256 `0ECBA1664D01B9218B591172D6C3A8FDA2168485941B2E56665A9BE96CD67204`, and successful 426 ms cold launch. Removed the temporary test helper and exactly the six generated feature PNGs, three mock vault PNGs and benchmark report from the phone. The benchmark cleanup also removes only UUID-named abandoned generated workloads. This source is included in the v0.9.56 GitHub checkpoint requested 2026-11-10.
+
+## 2026-11-09 Share, meaningful Moments and grouped document photos (v0.9.55)
+
+- Implemented the user's follow-up changes to the v0.9.54 tools, including the later request for clean document thumbnails and category sections on one continuous page. See `docs/FEATURES_0.9.55.md` for behavior and analysis boundaries.
+- Viewer and multi-selection Share open Originals/Private copies choices. Removed the separate Menu/overflow Private sharing entry. Batch review preserves masks while moving among exactly the selected photos; all photos require review, exports are sequential, and every generated URI receives read-only ClipData/stream access.
+- Related production hardening: unavailable or changed sources invalidate the private review, including after another mask control is changed; partial failed/cancelled batches discard their newly created copies. Originals remain unchanged.
+- Replaced date-only Moment suggestions with bundled on-device image labels, OCR-based text rejection, simple quality checks, coherent subjects/time boundaries, and burst/perceptual duplicate suppression. At least four distinct qualifying photos are required; unanalysed photos cannot enter suggestions. Compact evidence is revision-cached locally; scans yield during interaction and stop in the viewer/background. Saved collections retain their existing behavior.
+- Added Moments list/detail/card animation, gated its Back handler while the viewer is open, and retained separate list/detail scroll positions. Back from a photo stays inside the same moment at the same position.
+- Document photos excludes recognizable screenshots and groups bills/receipts, menus, forms/letters, and notes under full-width section headings. Thumbnails have no text badges. Top chips animate to section anchors rather than filtering the page. The counter publishes every completed photo separately from result-list snapshots and walks numbers per frame, with an animated bar/pulse. UI copy distinguishes photographed paper from saved app screenshots.
+- Video pages pre-resolve geometry while adjacent, retain the visible poster through activation, use consistent Fit presentation, and wait for the rendered first frame/reveal before autoplay. Normal/Enhanced/Spring album timing and motion code is unchanged.
+- Holding Albums opens the existing Locked media gate, supports accessibility long-click, and gives a long-press haptic; drag selection cancels the hold. Hidden-album row/switch actions give one haptic per value change.
+- Verification: 266 JVM tests pass; final lint has 0 errors/13 warnings (the prior 12 plus a mutable-collection warning on saveable selected IDs, which are replaced atomically and never mutated in place). Debug/test/optimized ARM64 builds passed in 8m 14s. All 22 targeted physical-phone tests passed in 49.075 seconds: eight isolated repository/export/analysis checks, nine generated feature UI checks, two repeated video checks (including photo/video paging), two immediate video-dismiss checks, and actual Menu/viewer Share navigation. Generated document/private screens were visually inspected. No live-gallery capture or private-photo export was performed. Logs and generated PNGs are ignored in `tmp/v55-*`.
+- Final optimized APK installed in place, retaining data/settings; confirmed v0.9.55/code 58, no DEBUGGABLE flag, matching installed SHA-256 `63B8EBB37E65112296F4B8D3BF9B4A721CBC55BE8E8CAB44771FE90019A378DB`, size 90,692,103 bytes, and successful 283 ms cold launch. R8 retains the Application/SavedState ViewModel constructors. Removed the temporary test helper and precisely the four generated feature PNGs from the phone. Source remains uncommitted after the v0.9.53 GitHub checkpoint.
+
+## 2026-11-09 Private sharing, Useful screenshots and Moments (v0.9.54)
+
+- User requested Private sharing and Useful screenshots from the feature proposals, plus Moments that bring good trip pictures together, using Google Photos as a reference. Reviewed Google's official editable Memories and screenshot/document organization descriptions; source links and behavior are documented in `docs/FEATURES_0.9.54.md`.
+- Menu now opens all three tools. Private share is also in the normal photo viewer's overflow menu. The accepted Normal/Enhanced album animation code and timings are unchanged.
+- Private sharing detects faces with bundled YuNet and text with bundled ML Kit, previews selectable masks, supports manual areas/undo, and exports a fresh up-to-2048 px JPEG with no copied EXIF/location or motion payload. Text/manual covers are opaque; faces can be pixelated or covered. Originals are never edited, and only the new narrowly scoped FileProvider URI is granted read access through the Android chooser.
+- Useful screenshots has optional on-device OCR, search, detected/manual categories, Pin, Done/Restore, persisted follow-up dates, Copy text, and an explicit calendar-editor handoff. It indexes only screenshot candidates, yields during browsing, pauses off-screen, continues after individual read failures, and can clear text while retaining organization.
+- Moments supports saved trip collections across albums, editable names/notes/covers/membership, Highlights/All photos, date-based suggestions and hiding/restoring suggestions. Ranking uses favorites, resolution and capture-time/burst variety; it does not claim aesthetic AI or destination inference. Collection changes never move or delete media.
+- Related hardening: solid masks are drawn after pixelation to prevent overlap leaks; screenshot annotation writes cannot be overwritten by OCR; rapid UI actions apply to the latest entry; source revisions invalidate OCR; unavailable/hidden members stay out of views without silently erasing saved Moment references. New state and business logic live in separate repositories and ViewModels.
+- Verification: all 263 JVM tests pass. Twenty unique phone checks have passed across the initial suite and final UI rerun: six isolated repository/export checks, three generated feature UI flows, eight Normal/Enhanced overlay cases, two repeated-album checks, and actual Menu navigation through all three new tools. The first suite passed 18/19; the screenshot test needed to scroll the Done chip before tapping it. The corrected three UI flows plus Menu navigation then passed together (`OK (4 tests)`, 13.854 seconds).
+- Generated-only captures of all three feature screens were inspected. This caught and corrected Moments' loading-state default and missing standalone theme background. The screenshot filter now publishes an explicit remembered state from a cancellable background job, avoiding a ProduceState lint error. No live-gallery recording or private-photo export was made.
+- Final debug/test/optimized benchmark builds and lint pass; lint has 0 errors and 12 warnings (11 existing plus the expected ARM64-only/ChromeOS warning). The final build completed in 7m 11s. R8 retains the new application/SavedState ViewModel constructors and removes the isolated test-namespace constructors.
+- Installed the optimized ARM64 benchmark APK in place, retaining app data/settings. Confirmed v0.9.54/code 57, no DEBUGGABLE flag, 442 ms cold launch, and matching installed SHA-256 `9F7A197C81EB3BA564F72D2E3CEE2D9338E77C59F446CE341169D2377FD379A2`. Removed only the temporary test helper and exactly the generated feature/animation fixture PNGs. Tests use isolated preferences/databases/cache files and leave no sample Moments in the user's library. Source remains uncommitted after the requested v0.9.53 checkpoint. Logs/captures remain ignored under `tmp/features-v054-*` and `tmp/feature-ui-*-fixture.png`.
 
 ## 2026-11-09 Enhanced LivingFlow refinement (v0.9.53)
 
