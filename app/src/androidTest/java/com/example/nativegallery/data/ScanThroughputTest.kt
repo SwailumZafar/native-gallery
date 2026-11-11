@@ -20,6 +20,12 @@ import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.model.MediaType
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
+import androidx.lifecycle.ViewModelStore
+import com.example.nativegallery.ui.DocumentPhotosViewModel
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.Rule
@@ -37,9 +43,9 @@ class ScanThroughputTest {
     @After fun cleanAbandonedGeneratedWorkloads() {
         val app = InstrumentationRegistry.getInstrumentation().targetContext
         val cache = app.cacheDir.canonicalFile
-        val pattern = Regex("scan-throughput-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        val pattern = Regex("(?:scan-throughput|scan-comparison)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
         cache.listFiles()?.filter { pattern.matches(it.name) && it.canonicalFile.parentFile == cache }?.forEach { directory ->
-            val prefix = "scan-throughput-${directory.name}-"
+            val prefix = if (directory.name.startsWith("scan-comparison-")) "${directory.name}-" else "scan-throughput-${directory.name}-"
             File(app.applicationInfo.dataDir, "shared_prefs").listFiles()?.filter { it.name.startsWith(prefix) && it.extension == "xml" }
                 ?.forEach { app.deleteSharedPreferences(it.name.removeSuffix(".xml")) }
             check(directory.deleteRecursively())
@@ -66,6 +72,8 @@ class ScanThroughputTest {
             override fun openOrCreateDatabase(name: String, mode: Int, factory: SQLiteDatabase.CursorFactory?, errorHandler: DatabaseErrorHandler?) =
                 SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name).absolutePath, factory, errorHandler)
         }
+        context.getSharedPreferences("native_gallery_document_photo_migrations", Context.MODE_PRIVATE).edit()
+            .putBoolean("sqlite_index_migrated", true).putBoolean("file_browser_removed", true).commit()
         val photos = (0 until 16).map { index ->
             val bitmap = Bitmap.createBitmap(640, 960, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap); canvas.drawColor(Color.rgb(245, 245, 235 + index))
@@ -118,6 +126,60 @@ class ScanThroughputTest {
                 record("SCAN_BENCH people_cached_ms=${SystemClock.elapsedRealtime() - start}")
                 assertEquals(1, cachedCallbacks); assertEquals(16, count)
                 File(app.getExternalFilesDir(null), "feature-scan-benchmark.txt").writeText(measurements.joinToString("\n"))
+
+                suspend fun assertIncremental(name: String, source: List<MediaItem>, createScan: suspend (List<MediaItem>, (Int) -> Unit) -> Unit) {
+                    val cached = mutableListOf<Int>()
+                    createScan(source) { cached += it }
+                    assertEquals("$name must immediately reuse all saved results", listOf(16), cached.distinct())
+                    val added = source + source.first().copy(id = "${source.first().id}-added")
+                    val newCounts = mutableListOf<Int>()
+                    createScan(added) { newCounts += it }
+                    assertEquals("$name must only process the added photo", listOf(16, 17), newCounts.distinct())
+                    val changed = source.mapIndexed { index, item -> if (index == 0) item.copy(dateModifiedMillis = 42) else item }
+                    val editedCounts = mutableListOf<Int>()
+                    createScan(changed) { editedCounts += it }
+                    assertEquals("$name must only process the edited photo", listOf(15, 16), editedCounts.distinct())
+                    val fresh = source.map { it.copy(id = "paused-${it.id}") }
+                    val paused = runCatching {
+                        createScan(fresh) { if (it == 4) throw CancellationException("Generated scan pause") }
+                    }
+                    assertTrue("$name pause should cancel this scan", paused.exceptionOrNull() is CancellationException)
+                    val resumed = mutableListOf<Int>()
+                    createScan(fresh) { resumed += it }
+                    assertEquals("$name must retain completed work when paused", 4, resumed.first())
+                    assertEquals(16, resumed.last())
+                    record("INCREMENTAL $name cached=16 added=1 edited=1 resumed=${resumed.first()}")
+                }
+                assertIncremental("documents", photos) { items, progress ->
+                    DocumentPhotoRepository(context).scan(items) { progress(it.scannedCount) }
+                }
+                assertIncremental("screenshots", captures) { items, progress ->
+                    val reopened = ScreenshotRepository(context)
+                    try { reopened.scan(items) { _, checked, _, _ -> progress(checked) } }
+                    finally { reopened.close() }
+                }
+                assertIncremental("moments", photos) { items, progress ->
+                    MomentAnalysisRepository(context).scan(items) { progress(it.scanned) }
+                }
+                assertIncremental("people", photos) { items, progress ->
+                    PeopleRepository(context).scan(items) { _, checked, _ -> progress(checked) }
+                }
+                // Exercise the real refresh action, which previously invalidated every document.
+                val completedPhotos = photos.map { it.copy(id = "paused-${it.id}") }
+                val store = ViewModelStore()
+                try {
+                    val model = withContext(Dispatchers.Main) {
+                        DocumentPhotosViewModel(DocumentPhotoRepository(context)).also {
+                            store.put("documents", it); it.updateLibrary(completedPhotos)
+                        }
+                    }
+                    model.uiState.first { !it.scanning && it.scannedCount == 16 }
+                    withContext(Dispatchers.Main) { model.rescan() }
+                    val refreshed = model.uiState.first { !it.scanning }
+                    assertNull(refreshed.errorMessage)
+                    assertEquals("The Scan button must retain the cached baseline", 16, refreshed.baselineCount)
+                    record("INCREMENTAL documents_scan_button baseline=${refreshed.baselineCount}")
+                } finally { withContext(Dispatchers.Main) { store.clear() } }
             }
         } finally {
             val gates = listOf("idle", "touching", "documentsScrolling", "peopleAllowed").joinToString { name ->

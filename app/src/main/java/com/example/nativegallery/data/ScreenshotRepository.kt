@@ -6,16 +6,10 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.os.SystemClock
 import com.example.nativegallery.model.MediaItem
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.joinAll
-import kotlinx.coroutines.channels.Channel
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.time.LocalDate
 import kotlin.coroutines.coroutineContext
 
@@ -45,37 +39,27 @@ class ScreenshotRepository(context: Context, databaseName: String = "useful_scre
         var failed = 0
         var lastPublished = SystemClock.elapsedRealtime()
         publish(entries.toList(), checked, entries.size, failed)
-        coroutineScope {
-            val inputs = Channel<Int>(2)
-            val results = Channel<Pair<Int, ScreenshotEntry?>>(2)
-            launch { try { entries.indices.filterNot { entries[it].indexed }.forEach { inputs.send(it) } } finally { inputs.close() } }
-            val workers = List(2) { launch {
-                val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-                try { for (index in inputs) {
-                    PhotoAnalysisWork.awaitIdle()
-                    val entry = entries[index]
-                    val next = try {
-                        val bitmap = decodeUsefulPhoto(context, requireNotNull(entry.media.contentUri), 1280)
-                        val text = try { recognizeUsefulPhoto(bitmap, recognizer).text } finally { bitmap.recycle() }
-                        coroutineContext.ensureActive()
-                        entry.copy(text = text, category = screenshotCategory(text), indexed = true)
-                    } catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { null }
-                    results.send(index to next)
-                } } finally { recognizer.close() }
-            } }
-            launch { workers.joinAll(); results.close() }
+        if (checked == entries.size) return@withContext
+        val writes = mutableListOf<Pair<ScreenshotEntry, String>>()
+        fun flush() { database.write(writes); writes.clear() }
+        try {
             var published = entries.toList()
-            for ((index, next) in results) {
+            scanPhotoText(entries.indices.filterNot { entries[it].indexed }, { index ->
+                decodeUsefulPhoto(context, requireNotNull(entries[index].media.contentUri), 1280)
+            }) { index, result ->
                 coroutineContext.ensureActive()
-                if (next != null) { database.write(next, fingerprint(next.media)); entries[index] = next } else failed++
+                val next = result.getOrNull()?.let { text -> entries[index].copy(text = text.text, category = screenshotCategory(text.text), indexed = true) }
+                if (next != null) {
+                    writes += next to fingerprint(next.media); entries[index] = next
+                    if (writes.size >= 16) flush()
+                } else failed++
                 checked++
                 if (SystemClock.elapsedRealtime() - lastPublished >= 150 || checked == entries.size) {
                     published = entries.toList(); lastPublished = SystemClock.elapsedRealtime()
                 }
                 publish(published, checked, entries.size, failed)
             }
-        }
+        } finally { withContext(NonCancellable) { flush() } }
         publish(entries.toList(), checked, entries.size, failed)
     }
 
@@ -110,15 +94,18 @@ private class ScreenshotDatabase(context: Context, name: String) : SQLiteOpenHel
             }
         }
     }
-    fun write(entry: ScreenshotEntry, fingerprint: String) {
+    fun write(records: List<Pair<ScreenshotEntry, String>>) {
+        if (records.isEmpty()) return
         val db = writableDatabase
         db.beginTransaction()
         try {
+            records.forEach { (entry, fingerprint) ->
             // Update OCR columns only; an annotation edited while scanning must survive.
             db.insertWithOnConflict("screenshots", null, ContentValues().apply { put("id", entry.media.id) }, SQLiteDatabase.CONFLICT_IGNORE)
             db.update("screenshots", ContentValues().apply {
                 put("fingerprint", fingerprint); put("text", entry.text); put("category", entry.category.name)
             }, "id=?", arrayOf(entry.media.id))
+            }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }

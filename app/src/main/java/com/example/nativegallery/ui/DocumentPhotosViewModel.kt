@@ -31,7 +31,7 @@ class DocumentPhotosViewModel(
     private var activeMedia: List<MediaItem> = emptyList()
     private var libraryKey: String = ""
     private var scanJob: Job? = null
-    private var scanGeneration: Long = 0L
+    @Volatile private var scanGeneration: Long = 0L
 
     fun updateLibrary(mediaItems: List<MediaItem>) {
         val photos = mediaItems
@@ -39,7 +39,7 @@ class DocumentPhotosViewModel(
             .distinctBy { it.id }
             .sortedByDescending { it.sortTimestampMillis }
         val nextKey = photos.joinToString(separator = "|") { item ->
-            item.id + ":" + item.sortTimestampMillis + ":" + (item.fileSizeBytes ?: 0L)
+            "${item.id}:${item.contentUri}:${item.dateModifiedMillis}:${item.sortTimestampMillis}:${item.fileSizeBytes}:${item.width}:${item.height}"
         }
         activeMedia = photos
 
@@ -52,7 +52,7 @@ class DocumentPhotosViewModel(
             return
         }
         libraryKey = nextKey
-        launchScan(invalidateFirst = false)
+        launchScan()
     }
 
     fun stopScanning() {
@@ -63,10 +63,10 @@ class DocumentPhotosViewModel(
     }
 
     fun rescan() {
-        launchScan(invalidateFirst = mutableUiState.value.errorMessage == null)
+        launchScan()
     }
 
-    private fun launchScan(invalidateFirst: Boolean) {
+    private fun launchScan() {
         val previous = scanJob
         previous?.cancel()
         scanGeneration += 1
@@ -80,7 +80,6 @@ class DocumentPhotosViewModel(
         scanJob = viewModelScope.launch {
             try {
                 previous?.join()
-                if (invalidateFirst) repository.invalidate(media.map { it.id })
                 repository.scan(media) { progress ->
                     if (generation != scanGeneration) return@scan
                     mutableUiState.value = DocumentPhotosUiState(

@@ -2,6 +2,7 @@
 
 package com.example.nativegallery.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -13,8 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.MediaThumbnail
@@ -22,9 +21,8 @@ import com.example.nativegallery.ui.components.SearchPill
 
 @Composable
 internal fun UsefulFeatureDialog(onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Surface(Modifier.fillMaxSize().testTag("useful-feature-dialog"), color = MaterialTheme.colorScheme.background) { content() }
-    }
+    BackHandler(onBack = onDismiss)
+    Surface(Modifier.fillMaxSize().testTag("useful-feature-dialog"), color = MaterialTheme.colorScheme.background) { content() }
 }
 
 @Composable

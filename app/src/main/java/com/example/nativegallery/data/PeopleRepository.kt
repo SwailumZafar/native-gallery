@@ -19,7 +19,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Semaphore
 import android.os.SystemClock
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -145,10 +147,10 @@ class PeopleRepository(context: Context) {
             }
             return file.absolutePath
         }
-        val detector = FaceDetectorYN.create(model("yunet.onnx"), "", Size(640.0, 640.0), 0.9f)
-        // Most gallery images contain no face. Load the larger embedding model only when
-        // detection finds one, rather than paying its setup cost for document-only batches.
-        val recognizer by lazy { FaceRecognizerSF.create(model("sface.onnx"), "") }
+        val detectorModel = model("yunet.onnx")
+        // Prepare the embedding file once; individual workers load it only if they find a face.
+        // Model preparation is synchronized because several workers may find their first face together.
+        val embeddingModel by lazy { model("sface.onnx") }
         var failed = 0
         val changed = linkedMapOf<String, IndexedPhoto>()
         var lastGroups = groupIndex.snapshot()
@@ -156,26 +158,27 @@ class PeopleRepository(context: Context) {
         var lastPublished = SystemClock.elapsedRealtime()
         try {
             coroutineScope {
-                // Decode the next photo while native inference handles this one. Capacity one bounds
-                // memory and prevents disk work from running far ahead of an interaction pause.
-                val decoded = Channel<Pair<MediaItem, Result<Bitmap>>>(1,
-                    onUndeliveredElement = { it.second.getOrNull()?.recycle() })
                 val pending = photos.filterNot { it.id in records }
-                val producer = launch {
-                    try {
-                        for (photo in pending) {
-                            PhotoAnalysisWork.awaitPeopleAllowed()
-                            val result = try { Result.success(decode(photo)) }
-                            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                            catch (error: Exception) { Result.failure(error) }
-                            decoded.send(photo to result)
-                        }
-                    } finally { decoded.close() }
+                val parallelism = minOf(3, pending.size)
+                val window = Semaphore(parallelism)
+                val inputs = Channel<IndexedValue<MediaItem>>(parallelism)
+                fun discard(result: Pair<Int, Result<IndexedPhoto>>) {
+                    result.second.getOrNull()?.faces?.forEach { File(directory, "${it.key}.jpg").delete() }
                 }
-                try {
-                    for ((photo, decodedBitmap) in decoded) {
-                        try {
-                            val bitmap = decodedBitmap.getOrThrow()
+                val results = Channel<Pair<Int, Result<IndexedPhoto>>>(parallelism, onUndeliveredElement = ::discard)
+                val producer = launch {
+                    try { pending.withIndex().forEach { inputs.send(it) } }
+                    finally { inputs.close() }
+                }
+                val workers = List(parallelism) { launch(PhotoAnalysisWork.inferenceDispatcher) {
+                    val detector = FaceDetectorYN.create(detectorModel, "", Size(640.0, 640.0), 0.9f)
+                    val recognizer by lazy { FaceRecognizerSF.create(embeddingModel, "") }
+                    for ((position, photo) in inputs) {
+                        window.acquire()
+                        PhotoAnalysisWork.awaitPeopleAllowed()
+                        val found = mutableListOf<IndexedFace>()
+                        val result = try {
+                            val bitmap = decode(photo)
                             val rgba = Mat(); val image = Mat(); val faces = Mat()
                             try {
                                 PhotoAnalysisWork.awaitPeopleAllowed()
@@ -183,7 +186,6 @@ class PeopleRepository(context: Context) {
                                 Imgproc.cvtColor(rgba, image, Imgproc.COLOR_RGBA2BGR)
                                 detector.setInputSize(image.size())
                                 detector.detect(image, faces)
-                                val found = mutableListOf<IndexedFace>()
                                 for (row in 0 until faces.rows()) {
                                     coroutineContext.ensureActive()
                                     PhotoAnalysisWork.awaitPeopleAllowed()
@@ -194,6 +196,8 @@ class PeopleRepository(context: Context) {
                                         val vector = FloatArray(feature.total().toInt())
                                         feature.get(0, 0, vector)
                                         val key = UUID.randomUUID().toString()
+                                        // Track ownership before writing, including a failed/cancelled crop.
+                                        found += IndexedFace(key, vector)
                                         val crop = Bitmap.createBitmap(aligned.cols(), aligned.rows(), Bitmap.Config.ARGB_8888)
                                         val rgb = Mat()
                                         try {
@@ -201,16 +205,34 @@ class PeopleRepository(context: Context) {
                                             Utils.matToBitmap(rgb, crop)
                                             File(directory, "$key.jpg").outputStream().use { crop.compress(Bitmap.CompressFormat.JPEG, 90, it) }
                                         } finally { crop.recycle(); rgb.release() }
-                                        found += IndexedFace(key, vector)
                                     } finally { box.release(); aligned.release(); feature.release() }
                                 }
-                                records[photo.id] = IndexedPhoto(fingerprint(photo), found)
-                                changed[photo.id] = records.getValue(photo.id)
-                                groupIndex.add(photo, found)
-                                groupsChanged = groupsChanged || found.isNotEmpty()
+                                Result.success(IndexedPhoto(fingerprint(photo), found.toList()))
                             } finally { bitmap.recycle(); rgba.release(); image.release(); faces.release() }
-                        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                        catch (_: Exception) { failed++ }
+                        } catch (error: Exception) {
+                            found.forEach { File(directory, "${it.key}.jpg").delete() }
+                            if (error is kotlinx.coroutines.CancellationException) throw error
+                            Result.failure(error)
+                        }
+                        results.send(position to result)
+                    }
+                } }
+                launch { workers.joinAll(); results.close() }
+                val ready = mutableMapOf<Int, Result<IndexedPhoto>>()
+                var next = 0
+                try {
+                    for ((position, result) in results) {
+                        ready[position] = result
+                        // Preserve the existing photo order and therefore deterministic face grouping.
+                        while (ready.containsKey(next)) {
+                        val photo = pending[next]
+                        val indexed = ready.remove(next)!!.getOrNull()
+                        if (indexed == null) failed++ else {
+                            records[photo.id] = indexed; changed[photo.id] = indexed
+                            groupIndex.add(photo, indexed.faces)
+                            groupsChanged = groupsChanged || indexed.faces.isNotEmpty()
+                        }
+                        next++; window.release()
                         if ((records.size + failed) % 20 == 0) {
                             database.upsert(changed)
                             changed.clear()
@@ -222,8 +244,12 @@ class PeopleRepository(context: Context) {
                             progress(lastGroups, records.size + failed, photos.size)
                             lastPublished = now
                         } else progress(lastGroups, records.size + failed, photos.size)
+                        }
                     }
-                } finally { producer.cancel(); decoded.cancel() }
+                } finally {
+                    producer.cancel(); workers.forEach { it.cancel() }; results.cancel()
+                    ready.forEach { (position, result) -> discard(position to result) }
+                }
             }
         } finally {
             // Preserve completed work even when a library refresh cancels the remaining scan.
@@ -236,7 +262,7 @@ class PeopleRepository(context: Context) {
 
     private fun fingerprint(photo: MediaItem) = "${photo.contentUri}:${photo.dateModifiedMillis}:${photo.fileSizeBytes}"
 
-    private fun decode(photo: MediaItem): Bitmap {
+    private suspend fun decode(photo: MediaItem): Bitmap {
         val uri = requireNotNull(photo.contentUri)
         val resolver = context.contentResolver
         val width = photo.width ?: 0
@@ -246,6 +272,9 @@ class PeopleRepository(context: Context) {
             val size = AndroidSize((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1))
             runCatching { resolver.loadThumbnail(uri, size, null) }.getOrNull()?.let { return it }
         }
+        // ImageDecoder samples and applies EXIF in one pass instead of opening, decoding,
+        // reading EXIF and allocating a second full bitmap for imported/file-backed photos.
+        if (Build.VERSION.SDK_INT >= 28) return decodeUsefulPhoto(context, uri, 640)
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         resolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, options) }
         options.inSampleSize = 1

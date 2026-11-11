@@ -62,9 +62,23 @@ class ScreenshotsViewModel private constructor(application: Application, private
         if (current != generation) return
         mutable.update { it.copy(scanning = true, error = null) }
         try {
+            var initial = true
+            var previousEntries: List<ScreenshotEntry>? = null
+            var previousEdits: Map<String, ScreenshotEntry>? = null
+            var merged = emptyList<ScreenshotEntry>()
             repository.scan(snapshot) { entries, checked, total, failed ->
-                if (current == generation) mutable.update { it.copy(entries = mergeEdits(entries), checked = checked, total = total,
-                    error = if (failed > 0) "$failed screenshots could not be read. You can retry after scanning." else null) }
+                if (current == generation) {
+                    mutable.update {
+                        val latest = edits.value
+                        if (entries !== previousEntries || latest !== previousEdits) {
+                            merged = mergeEdits(entries, latest); previousEntries = entries; previousEdits = latest
+                        }
+                        it.copy(entries = merged, checked = checked, total = total,
+                        baseline = if (initial) checked else it.baseline,
+                        error = if (failed > 0) "$failed screenshots could not be read. You can retry after scanning." else null)
+                    }
+                    initial = false
+                }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { if (current == generation) mutable.update { it.copy(error = "Some screenshots could not be read. You can try scanning again.") } }
@@ -97,8 +111,7 @@ class ScreenshotsViewModel private constructor(application: Application, private
             catch (_: Exception) { mutable.update { it.copy(error = "The text index could not be cleared.") } }
         }
     }
-    private fun mergeEdits(entries: List<ScreenshotEntry>): List<ScreenshotEntry> {
-        val latest = edits.value
+    private fun mergeEdits(entries: List<ScreenshotEntry>, latest: Map<String, ScreenshotEntry> = edits.value): List<ScreenshotEntry> {
         return entries.map { entry -> latest[entry.media.id]?.let { entry.copy(pinned = it.pinned, done = it.done, followUp = it.followUp,
             manualCategory = it.manualCategory) } ?: entry }
     }

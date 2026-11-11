@@ -2,16 +2,28 @@
 package com.example.nativegallery.ui
 
 import android.content.Intent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Draw
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -55,54 +67,76 @@ internal fun PrivateSharingDialog(sessionId: String, selectedIds: List<String>, 
     }
     val dismiss = { model.clear(); onDismiss() }
     UsefulFeatureDialog(dismiss) {
-        BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            Column(Modifier.fillMaxSize().padding(bottom = 16.dp)) {
-                GalleryScreenHeader("Private copies", dismiss,
-                    subtitle = if (state.total > 1) "Photo ${state.index + 1} of ${state.total} · Tap a thumbnail to switch" else "Review the copy before sharing")
-                if (state.photo == null) {
-                    FeatureEmptyState("Selected photos unavailable", state.error ?: "Close this preview and select your photos again.")
-                    TextButton(dismiss, Modifier.padding(16.dp)) { Text("Close") }
-                } else {
-                    val enabled = !state.loading && !state.exporting
-                    if (photos.size > 1) {
-                        val strip = rememberLazyListState()
-                        LaunchedEffect(state.index) { strip.animateScrollToItem(state.index) }
-                        LazyRow(Modifier.fillMaxWidth().testTag("private-selected-photos"), state = strip,
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            itemsIndexed(photos, key = { _, photo -> photo.id }) { index, photo ->
-                                Box {
-                                    MediaThumbnail(photo.copy(title = "Selected photo ${index + 1} of ${photos.size}"), Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)), cornerRadius = 12.dp,
-                                        selected = state.index == index, onClick = { if (enabled && !state.rendering && index != state.index) act { model.move(index - state.index) } })
-                                    Surface(Modifier.align(Alignment.BottomEnd), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), shape = MaterialTheme.shapes.small) {
-                                        Text("${index + 1}", Modifier.padding(horizontal = 4.dp), style = MaterialTheme.typography.labelSmall)
-                                    }
+        Column(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(bottom = 12.dp)
+        ) {
+            GalleryScreenHeader("Private copies", dismiss,
+                subtitle = if (state.total > 1) "Photo ${state.index + 1} of ${state.total} · Tap a thumbnail to switch" else "Review the copy before sharing")
+            if (state.photo == null) {
+                FeatureEmptyState("Selected photos unavailable", state.error ?: "Close this preview and select your photos again.")
+                TextButton(dismiss, Modifier.padding(16.dp)) { Text("Close") }
+            } else {
+                val enabled = !state.loading && !state.exporting
+                if (photos.size > 1) {
+                    val strip = rememberLazyListState()
+                    LaunchedEffect(state.index) { strip.animateScrollToItem(state.index) }
+                    LazyRow(Modifier.fillMaxWidth().testTag("private-selected-photos"), state = strip,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        itemsIndexed(photos, key = { _, photo -> photo.id }) { index, photo ->
+                            Box {
+                                MediaThumbnail(photo.copy(title = "Selected photo ${index + 1} of ${photos.size}"), Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)), cornerRadius = 12.dp,
+                                    selected = state.index == index, onClick = { if (enabled && !state.rendering && index != state.index) act { model.move(index - state.index) } })
+                                Surface(Modifier.align(Alignment.BottomEnd), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), shape = MaterialTheme.shapes.small) {
+                                    Text("${index + 1}", Modifier.padding(horizontal = 4.dp), style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
                     }
-                    state.error?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                        if (maxWidth > maxHeight * 1.35f) {
-                            Row(Modifier.fillMaxSize()) {
-                                PrivatePreview(state, model, enabled, { act(it) }, Modifier.weight(1.15f).fillMaxHeight())
-                                PrivateControls(state, model, enabled, { act(it) }, Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()))
+                }
+                state.error?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                    if (maxWidth > maxHeight * 1.35f) {
+                        Row(Modifier.fillMaxSize()) {
+                            PrivatePreview(state, model, enabled, { act(it) }, Modifier.weight(1.15f).fillMaxHeight())
+                            Column(
+                                Modifier.weight(1f).fillMaxHeight().padding(horizontal = 8.dp),
+                                verticalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                PrivateControls(state, model, enabled, { act(it) }, Modifier.weight(1f).verticalScroll(rememberScrollState()))
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                    shape = RoundedCornerShape(16.dp),
+                                    tonalElevation = 2.dp,
+                                    shadowElevation = 4.dp
+                                ) {
+                                    PrivateBottomActions(state, model, enabled, { act(it) }, Modifier.padding(10.dp))
+                                }
                             }
-                        } else Column(Modifier.fillMaxSize()) {
-                            PrivatePreview(state, model, enabled, { act(it) }, Modifier.weight(1f).fillMaxWidth())
-                            PrivateControls(state, model, enabled, { act(it) }, Modifier.fillMaxWidth().heightIn(max = 176.dp).verticalScroll(rememberScrollState()))
                         }
-                    }
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Copies remove metadata. Originals stay untouched.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Box(Modifier.size(20.dp)) {
-                                if (state.rendering || state.exporting) CircularProgressIndicator(Modifier.fillMaxSize(), strokeWidth = 2.dp)
-                            }
-                            Text(if (state.exporting) "Preparing ${state.exportedCount}/${state.total}" else "${state.index + 1} / ${state.total}", Modifier.widthIn(min = 32.dp), style = MaterialTheme.typography.labelMedium)
-                            if (state.index > 0) TextButton({ act { model.move(-1) } }, enabled = enabled && !state.rendering) { Text("Previous") }
-                            Button({ act { if (state.index < state.total - 1) model.move(1) else model.share() } }, Modifier.weight(1f),
-                                enabled = state.preview != null && enabled && !state.rendering && state.error == null) {
-                                Text(when { state.exporting -> "Preparing…"; state.index < state.total - 1 -> "Next"; state.total > 1 -> "Share ${state.total} copies"; else -> "Share copy" })
+                    } else Column(Modifier.fillMaxSize()) {
+                        PrivatePreview(state, model, enabled, { act(it) }, Modifier.weight(1f).fillMaxWidth())
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            shape = RoundedCornerShape(22.dp),
+                            tonalElevation = 2.dp,
+                            shadowElevation = 6.dp,
+                            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+                        ) {
+                            Column(
+                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                PrivateControls(state, model, enabled, { act(it) }, Modifier.fillMaxWidth().heightIn(max = 150.dp).verticalScroll(rememberScrollState()))
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f), thickness = 0.5.dp)
+                                PrivateBottomActions(state, model, enabled, { act(it) })
                             }
                         }
                     }
@@ -113,23 +147,163 @@ internal fun PrivateSharingDialog(sessionId: String, selectedIds: List<String>, 
 }
 
 @Composable
-private fun PrivateControls(state: PrivateSharingUiState, model: PrivateSharingViewModel, enabled: Boolean,
-    act: (() -> Unit) -> Unit, modifier: Modifier) {
-    Column(modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for ((kind, label) in listOf(PrivacyMaskKind.Face to "Faces", PrivacyMaskKind.SensitiveText to "Sensitive text", PrivacyMaskKind.Text to "All text")) {
-                val ids = state.regions.filter { it.kind == kind || (kind == PrivacyMaskKind.Text && it.kind == PrivacyMaskKind.SensitiveText) }.map { it.id }
-                FilterChip(ids.isNotEmpty() && state.selected.containsAll(ids), { act { model.toggleGroup(kind) } }, { Text("$label (${ids.size})") },
-                    enabled = enabled && ids.isNotEmpty(), border = null)
+private fun PrivateBottomActions(
+    state: PrivateSharingUiState,
+    model: PrivateSharingViewModel,
+    enabled: Boolean,
+    act: (() -> Unit) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+            if (state.rendering || state.exporting) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
             }
         }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(!state.solid, { act { model.setSolid(false) } }, { Text("Pixelate faces") }, enabled = enabled, border = null)
-            FilterChip(state.solid, { act { model.setSolid(true) } }, { Text("Solid covers") }, enabled = enabled, border = null)
-            TextButton({ act(model::undo) }, enabled = enabled && state.regions.any { it.kind == PrivacyMaskKind.Manual }) { Text("Undo area") }
+        Text(
+            if (state.exporting) "Preparing ${state.exportedCount}/${state.total}" else "${state.index + 1} / ${state.total}",
+            Modifier.widthIn(min = 32.dp),
+            style = MaterialTheme.typography.labelMedium
+        )
+        if (state.index > 0) {
+            TextButton(
+                onClick = { act { model.move(-1) } },
+                enabled = enabled && !state.rendering,
+                modifier = Modifier.heightIn(min = 44.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Previous")
+            }
         }
-        Text("Tap an area to toggle it. Drag on the photo to cover something else.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        state.warning?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        Button(
+            onClick = { act { if (state.index < state.total - 1) model.move(1) else model.share() } },
+            modifier = Modifier.weight(1f).heightIn(min = 46.dp),
+            shape = RoundedCornerShape(14.dp),
+            enabled = state.preview != null && enabled && !state.rendering && state.error == null
+        ) {
+            if (state.index == state.total - 1 && !state.exporting) {
+                Icon(Icons.Filled.Share, null, Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                when {
+                    state.exporting -> "Preparing…"
+                    state.index < state.total - 1 -> "Next"
+                    state.total > 1 -> "Share ${state.total} copies"
+                    else -> "Share copy"
+                },
+                style = MaterialTheme.typography.labelLarge
+            )
+            if (state.index < state.total - 1 && !state.exporting) {
+                Spacer(Modifier.width(6.dp))
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrivateControls(
+    state: PrivateSharingUiState,
+    model: PrivateSharingViewModel,
+    enabled: Boolean,
+    act: (() -> Unit) -> Unit,
+    modifier: Modifier
+) {
+    Column(modifier.padding(horizontal = 4.dp, vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            for ((kind, label) in listOf(PrivacyMaskKind.Face to "Faces", PrivacyMaskKind.SensitiveText to "Sensitive text", PrivacyMaskKind.Text to "All text")) {
+                val ids = state.regions.filter { it.kind == kind || (kind == PrivacyMaskKind.Text && it.kind == PrivacyMaskKind.SensitiveText) }.map { it.id }
+                val icon = when (kind) {
+                    PrivacyMaskKind.Face -> Icons.Filled.Face
+                    PrivacyMaskKind.SensitiveText -> Icons.Filled.VisibilityOff
+                    else -> Icons.Filled.TextFields
+                }
+                FilterChip(
+                    selected = ids.isNotEmpty() && state.selected.containsAll(ids),
+                    onClick = { act { model.toggleGroup(kind) } },
+                    label = { Text("$label (${ids.size})", style = MaterialTheme.typography.labelMedium) },
+                    leadingIcon = { Icon(icon, null, Modifier.size(15.dp)) },
+                    shape = RoundedCornerShape(10.dp),
+                    enabled = enabled && ids.isNotEmpty(),
+                    border = null
+                )
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilterChip(
+                selected = !state.solid,
+                onClick = { act { model.setSolid(false) } },
+                label = { Text("Pixelate faces", style = MaterialTheme.typography.labelMedium) },
+                shape = RoundedCornerShape(10.dp),
+                enabled = enabled,
+                border = null
+            )
+            FilterChip(
+                selected = state.solid,
+                onClick = { act { model.setSolid(true) } },
+                label = { Text("Solid covers", style = MaterialTheme.typography.labelMedium) },
+                shape = RoundedCornerShape(10.dp),
+                enabled = enabled,
+                border = null
+            )
+            Spacer(Modifier.weight(1f))
+            TextButton(
+                onClick = { act(model::undo) },
+                enabled = enabled && state.regions.any { it.kind == PrivacyMaskKind.Manual },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Undo, null, Modifier.size(15.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Undo area", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f)
+        ) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Filled.Draw, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text(
+                        "Tap an area to toggle it. Drag on the photo to cover something else.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Filled.Security, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text(
+                        "Copies remove metadata. Originals stay untouched.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+                    )
+                }
+            }
+        }
+        state.warning?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         if (state.error != null) TextButton(model::retry) { Text("Try again") }
     }
 }

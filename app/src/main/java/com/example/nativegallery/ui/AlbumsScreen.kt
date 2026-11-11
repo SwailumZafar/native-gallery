@@ -144,6 +144,10 @@ import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.VideoBadge
 import com.example.nativegallery.ui.components.MediaSelectionActionBar
 import com.example.nativegallery.ui.components.MediaSelectionTopBar
+import com.example.nativegallery.ui.components.SelectionBarSpringEnter
+import com.example.nativegallery.ui.components.SelectionBarSpringExit
+import com.example.nativegallery.ui.components.SelectionTopBarSpringEnter
+import com.example.nativegallery.ui.components.SelectionTopBarSpringExit
 import com.example.nativegallery.ui.components.MotionSpecs
 import com.example.nativegallery.ui.components.bouncyClickable
 import com.example.nativegallery.ui.components.ResourceImage
@@ -1718,6 +1722,8 @@ fun AlbumDetailScreen(
     onShareSelected: () -> Unit = {},
     onHideSelected: () -> Unit = {},
     onMoveSelected: () -> Unit = {},
+    onCompareSelected: (() -> Unit)? = null,
+    onCollageSelected: (() -> Unit)? = null,
     onHideAlbum: (() -> Unit)? = null,
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit = { _, _ -> },
     onMediaClick: (MediaItem, Rect, String, String) -> Unit
@@ -1957,11 +1963,8 @@ fun AlbumDetailScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .zIndex(4f),
-            enter = fadeIn(tween(140)) + slideInVertically(
-                animationSpec = tween(180),
-                initialOffsetY = { -it / 2 }
-            ),
-            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { -it / 2 })
+            enter = SelectionTopBarSpringEnter,
+            exit = SelectionTopBarSpringExit
         ) {
             MediaSelectionTopBar(
                 selectedCount = selectedMediaIds.size,
@@ -1978,17 +1981,17 @@ fun AlbumDetailScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(4f),
-            enter = fadeIn(tween(140)) + slideInVertically(
-                animationSpec = tween(190),
-                initialOffsetY = { it / 2 + 24 }
-            ),
-            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { it / 2 + 24 })
+            enter = SelectionBarSpringEnter,
+            exit = SelectionBarSpringExit
         ) {
             AlbumSelectionToolbar(
+                selectedCount = selectedMediaIds.size,
                 onShare = onShareSelected,
                 onMove = onMoveSelected,
                 onDelete = onDeleteSelected,
                 onHide = onHideSelected,
+                onCompare = onCompareSelected,
+                onCollage = onCollageSelected,
                 modifier = Modifier.navigationBarsPadding().padding(
                     start = 12.dp,
                     end = 12.dp,
@@ -2130,10 +2133,13 @@ private fun AlbumDetailHeader(
 
 @Composable
 private fun AlbumSelectionToolbar(
+    selectedCount: Int,
     onShare: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
     onHide: () -> Unit,
+    onCompare: (() -> Unit)? = null,
+    onCollage: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     MediaSelectionActionBar(
@@ -2141,6 +2147,9 @@ private fun AlbumSelectionToolbar(
         onLock = onHide,
         onMove = onMove,
         onDelete = onDelete,
+        selectedCount = selectedCount,
+        onCompare = onCompare,
+        onCollage = onCollage,
         modifier = modifier
     )
 }

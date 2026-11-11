@@ -63,7 +63,10 @@ internal fun rememberPeopleState(repository: PeopleRepository, media: List<Media
         state.groups = repository.cachedGroups(media)
         state.loaded = true
         if (state.revision <= state.completedRevision) return@LaunchedEffect
-        state.scanned = 0; state.baseline = 0; state.total = media.count { !it.isVideo }; state.scanning = true; state.error = null
+        state.total = media.count { !it.isVideo && it.contentUri != null }
+        state.scanned = state.scanned.coerceAtMost(state.total)
+        state.baseline = state.scanned
+        state.scanning = true; state.error = null
         var initial = true
         try {
             repository.scan(media) { groups, scanned, total ->

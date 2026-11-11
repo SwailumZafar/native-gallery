@@ -20,22 +20,21 @@ import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
-import kotlin.coroutines.suspendCoroutine
-import java.util.concurrent.Executor
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.suspendCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import java.util.concurrent.Executor
 
 @Immutable
 data class DocumentPhotoMatch(
@@ -93,6 +92,7 @@ class DocumentPhotoRepository(context: Context) {
             val expectedFingerprint = fingerprint(item)
             val usableRecord = when {
                 record == null -> null
+                record.sourceModifiedMillis != null && record.sourceModifiedMillis != item.dateModifiedMillis -> null
                 record.fingerprint == expectedFingerprint -> record
                 hasSameDocumentPhotoSource(record.fingerprint, expectedFingerprint) -> {
                     record.upgradeClassifierPolicy(expectedFingerprint).also(upgradedRecords::add)
@@ -100,6 +100,10 @@ class DocumentPhotoRepository(context: Context) {
                 else -> null
             }
             if (usableRecord != null) {
+                // Add revision metadata to older indexes without discarding their OCR results.
+                if (usableRecord.sourceModifiedMillis == null) {
+                    upgradedRecords += usableRecord.copy(sourceModifiedMillis = item.dateModifiedMillis)
+                }
                 scannedCount += 1
                 usableRecord.category?.let { category ->
                     matches += DocumentPhotoMatch(
@@ -174,7 +178,8 @@ class DocumentPhotoRepository(context: Context) {
                         fingerprint = fingerprint(item),
                         category = classification?.category,
                         recognizedText = classification?.recognizedText.orEmpty(),
-                        lineCount = classification?.lineCount ?: 0
+                        lineCount = classification?.lineCount ?: 0,
+                        sourceModifiedMillis = item.dateModifiedMillis
                     )
                     if (bufferedRecords.size >= DATABASE_WRITE_BATCH_SIZE) {
                         database.upsert(bufferedRecords)
@@ -191,25 +196,22 @@ class DocumentPhotoRepository(context: Context) {
                     }
                     scannedCount += 1
                     val shouldPublishMatches = scannedCount == photos.size ||
-                        SystemClock.elapsedRealtime() - lastPublished >= 200L ||
+                        SystemClock.elapsedRealtime() - lastPublished >= 100L ||
                         (classification != null && matches.size == 1)
                     if (shouldPublishMatches) {
                         lastPublished = SystemClock.elapsedRealtime()
                         matches.sortByDescending { it.mediaItem.sortTimestampMillis }
                         publishedMatches = matches.toList()
                     }
-                    // The counter is cheap and live; only the heavier match snapshots are throttled.
                     onProgress(DocumentPhotoScanProgress(publishedMatches, scannedCount, photos.size, scannedCount < photos.size))
                 }
             }
         } finally {
             withContext(NonCancellable) { database.upsert(bufferedRecords) }
-            recognizers.forEach(TextRecognizer::close)
+            recognizers.forEach { it.close() }
         }
         check(failedCount == 0) { "$failedCount photos were unavailable; retry to check them." }
-    }
-
-    }
+    } }
 
     suspend fun invalidate(mediaIds: Collection<String>) = scanMutex.withLock { withContext(PhotoAnalysisWork.dispatcher) {
         database.remove(mediaIds.toSet())
@@ -319,18 +321,13 @@ class DocumentPhotoRepository(context: Context) {
     }
 }
 
-private data class ScannedDocumentPhoto(
-    val mediaItem: MediaItem,
-    val classification: DocumentPhotoClassification?,
-    val failed: Boolean = false
-)
-
 private data class StoredDocumentPhotoRecord(
     val mediaId: String,
     val fingerprint: String,
     val category: DocumentPhotoCategory?,
     val recognizedText: String,
-    val lineCount: Int
+    val lineCount: Int,
+    val sourceModifiedMillis: Long? = null
 )
 
 private fun StoredDocumentPhotoRecord.upgradeClassifierPolicy(
@@ -400,7 +397,8 @@ private class DocumentPhotoIndexDatabase(
                 fingerprint TEXT NOT NULL,
                 category TEXT NOT NULL,
                 recognized_text TEXT NOT NULL,
-                line_count INTEGER NOT NULL
+                line_count INTEGER NOT NULL,
+                source_modified INTEGER
             )
             """.trimIndent()
         )
@@ -411,8 +409,7 @@ private class DocumentPhotoIndexDatabase(
         oldVersion: Int,
         newVersion: Int
     ) {
-        database.execSQL("DROP TABLE IF EXISTS $TABLE_NAME")
-        onCreate(database)
+        if (oldVersion < 2) database.execSQL("ALTER TABLE $TABLE_NAME ADD COLUMN source_modified INTEGER")
     }
 
     fun loadAll(): Map<String, StoredDocumentPhotoRecord> {
@@ -431,6 +428,7 @@ private class DocumentPhotoIndexDatabase(
             val categoryIndex = cursor.getColumnIndexOrThrow("category")
             val textIndex = cursor.getColumnIndexOrThrow("recognized_text")
             val lineCountIndex = cursor.getColumnIndexOrThrow("line_count")
+            val modifiedIndex = cursor.getColumnIndexOrThrow("source_modified")
             while (cursor.moveToNext()) {
                 val category = cursor.getString(categoryIndex)
                     .takeIf { it.isNotBlank() }
@@ -440,7 +438,8 @@ private class DocumentPhotoIndexDatabase(
                     fingerprint = cursor.getString(fingerprintIndex),
                     category = category,
                     recognizedText = cursor.getString(textIndex),
-                    lineCount = cursor.getInt(lineCountIndex)
+                    lineCount = cursor.getInt(lineCountIndex),
+                    sourceModifiedMillis = if (cursor.isNull(modifiedIndex)) null else cursor.getLong(modifiedIndex)
                 )
                 records[record.mediaId] = record
             }
@@ -460,6 +459,7 @@ private class DocumentPhotoIndexDatabase(
                     put("category", record.category?.name.orEmpty())
                     put("recognized_text", record.recognizedText)
                     put("line_count", record.lineCount)
+                    put("source_modified", record.sourceModifiedMillis)
                 }
                 database.insertWithOnConflict(
                     TABLE_NAME,
@@ -490,14 +490,15 @@ private class DocumentPhotoIndexDatabase(
 
     private companion object {
         const val DATABASE_NAME = "document_photos.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
         const val TABLE_NAME = "document_photos"
         val COLUMNS = arrayOf(
             "media_id",
             "fingerprint",
             "category",
             "recognized_text",
-            "line_count"
+            "line_count",
+            "source_modified"
         )
     }
 }
@@ -526,11 +527,17 @@ private fun decodeSampledBitmap(
     }
 }
 
-// ML Kit tasks cannot be cancelled. Wait for completion before recycling the input bitmap;
-// deliver callbacks directly rather than queueing every result on the main/UI thread.
+private data class ScannedDocumentPhoto(
+    val mediaItem: MediaItem,
+    val classification: DocumentPhotoClassification?,
+    val failed: Boolean = false
+)
+
 private val documentResultExecutor = Executor { it.run() }
 private suspend fun <T> Task<T>.awaitResult(): T = suspendCoroutine { continuation ->
     addOnSuccessListener(documentResultExecutor) { continuation.resume(it) }
     addOnFailureListener(documentResultExecutor) { continuation.resumeWithException(it) }
     addOnCanceledListener(documentResultExecutor) { continuation.resumeWithException(CancellationException("OCR cancelled")) }
 }
+
+

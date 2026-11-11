@@ -464,10 +464,7 @@ class MediaStoreGalleryRepository(
             hasVideoBadge = allCover.isVideo,
             isAllPhotos = true
         )
-        val nonClutterRows = rows.filterNot { row ->
-            isBurstClutterAlbum(row.albumName, row.mediaItem.relativePath)
-        }
-        val regularAlbums = nonClutterRows
+        val regularAlbums = rows
             .groupBy { it.mediaItem.albumId }
             .map { (albumId, albumRows) ->
                 val cover = albumRows.first().mediaItem
@@ -480,6 +477,9 @@ class MediaStoreGalleryRepository(
                     coverMediaItem = cover,
                     hasVideoBadge = cover.isVideo
                 )
+            }
+            .filterNot { album ->
+                isBurstClutterAlbum(album.name)
             }
         return listOf(allPhotos) + regularAlbums
     }
@@ -501,11 +501,7 @@ class MediaStoreGalleryRepository(
             hasVideoBadge = allCover.isVideo,
             isAllPhotos = true
         )
-        val nonClutterMedia = mediaItems.filterNot { item ->
-            val name = albumNames[item.albumId].orEmpty()
-            isBurstClutterAlbum(name, item.relativePath)
-        }
-        val regularAlbums = nonClutterMedia
+        val regularAlbums = mediaItems
             .groupBy { it.albumId }
             .map { (albumId, albumMedia) ->
                 val cover = albumMedia.first()
@@ -518,6 +514,9 @@ class MediaStoreGalleryRepository(
                     coverMediaItem = cover,
                     hasVideoBadge = cover.isVideo
                 )
+            }
+            .filterNot { album ->
+                isBurstClutterAlbum(album.name)
             }
         return listOf(allPhotos) + regularAlbums
     }
@@ -596,16 +595,35 @@ class MediaStoreGalleryRepository(
 internal fun extractBurstGroupKey(item: MediaItem, albumName: String): String? {
     if (item.isVideo) return null
     val title = item.title
-    val path = item.relativePath.orEmpty()
-    val burstRegex = Regex("""^(.*?(?:BURST|burst)[0-9_]*?)(?:_COVER|_\d+|\d+)?(?:\.[a-zA-Z0-9]+)?$""", RegexOption.IGNORE_CASE)
-    val match = burstRegex.find(title)
-    if (match != null && match.groupValues[1].length >= 4) {
-        return "burst-${match.groupValues[1].lowercase(Locale.US)}"
+    val path = item.relativePath.orEmpty().replace('\\', '/')
+    val cshotFolderMatch = Regex("""[/\\]?Cshot/([^/]+)(?:/|$)""", RegexOption.IGNORE_CASE).find(path)
+    if (cshotFolderMatch != null) {
+        return "cshot-${cshotFolderMatch.groupValues[1]}"
+    }
+    val base = title
+        .replace(Regex("""\.[a-zA-Z0-9]+$"""), "")
+        .replace(Regex("""_COVER$""", RegexOption.IGNORE_CASE), "")
+    val prefixBurstMatch = Regex("""^(.+?_burst)_?\d{1,5}$""", RegexOption.IGNORE_CASE).find(base)
+    if (prefixBurstMatch != null) {
+        return "burst-${prefixBurstMatch.groupValues[1].lowercase(Locale.US)}"
+    }
+    val indexedBurstMatch = Regex("""^(.*?burst[0-9]+)_\d+$""", RegexOption.IGNORE_CASE).find(base)
+    if (indexedBurstMatch != null) {
+        return "burst-${indexedBurstMatch.groupValues[1].lowercase(Locale.US)}"
+    }
+    val directBurstMatch = Regex("""^(.*?burst[0-9]+)$""", RegexOption.IGNORE_CASE).find(base)
+    if (directBurstMatch != null) {
+        return "burst-${directBurstMatch.groupValues[1].lowercase(Locale.US)}"
     }
     if (title.contains("BURST", ignoreCase = true)) {
         val idx = title.indexOf("BURST", ignoreCase = true)
         val prefix = title.substring(0, (idx + 5).coerceAtMost(title.length))
         return "burst-${prefix.lowercase(Locale.US)}"
+    }
+    if (title.contains("CSHOT", ignoreCase = true)) {
+        val idx = title.indexOf("CSHOT", ignoreCase = true)
+        val prefix = title.substring(0, (idx + 5).coerceAtMost(title.length))
+        return "cshot-${prefix.lowercase(Locale.US)}"
     }
     if (isBurstClutterAlbum(albumName, path)) {
         val timeCluster = item.sortTimestampMillis / 4000L
@@ -614,23 +632,74 @@ internal fun extractBurstGroupKey(item: MediaItem, albumName: String): String? {
     return null
 }
 
-internal fun isBurstClutterAlbum(albumName: String, relativePath: String?): Boolean {
-    return albumName.contains("Burst", ignoreCase = true) ||
-        relativePath?.contains("Burst", ignoreCase = true) == true
+internal fun isBurstClutterAlbum(albumName: String, relativePath: String? = null): Boolean {
+    val normName = albumName.trim().lowercase(Locale.ROOT)
+    if (normName.contains("burst") || normName.contains("cshot")) return true
+    if (normName.matches(Regex("""^\d{10,}$"""))) return true
+    val normPath = relativePath?.trimEnd('/', '\\')?.replace('\\', '/')?.lowercase(Locale.ROOT).orEmpty()
+    if (normPath.isNotEmpty()) {
+        if (normPath.contains("burst") || normPath.contains("cshot")) return true
+    }
+    return false
 }
 
 /** OEM burst subfolders belong to their camera album, rather than one album per sequence. */
 internal fun normalizeBurstAlbumRows(rows: List<MediaStoreGalleryRepository.MediaStoreRow>): List<MediaStoreGalleryRepository.MediaStoreRow> {
-    val folders = rows.associateBy { it.mediaItem.relativePath.orEmpty().trimEnd('/').lowercase(Locale.ROOT) }
+    val folders = rows.associateBy { it.mediaItem.relativePath.orEmpty().trimEnd('/', '\\').replace('\\', '/').lowercase(Locale.ROOT) }
+    val cameraParent = folders["dcim/camera"] ?: folders.values.firstOrNull {
+        val p = it.mediaItem.relativePath.orEmpty().trimEnd('/', '\\').replace('\\', '/').lowercase(Locale.ROOT)
+        p == "dcim/camera" || it.albumName.equals("Camera", ignoreCase = true)
+    }
+
     return rows.map { row ->
         val path = row.mediaItem.relativePath ?: return@map row
-        val parts = path.trim('/').split('/')
-        val burstIndex = parts.indexOfFirst { it.startsWith("BURST", true) || it.startsWith(".BURST", true) }
-        if (burstIndex < 2 || !parts.first().equals("DCIM", true)) return@map row
-        val parentPath = parts.take(burstIndex).joinToString("/", postfix = "/")
-        val parent = folders[parentPath.trimEnd('/').lowercase(Locale.ROOT)]
-        row.copy(mediaItem = row.mediaItem.copy(albumId = parent?.mediaItem?.albumId ?: "burst-parent:$parentPath"),
-            albumName = parent?.albumName ?: parts[burstIndex - 1])
+        val normalizedPath = path.trimEnd('/', '\\').replace('\\', '/')
+        val parts = normalizedPath.split('/')
+        if (parts.isEmpty()) return@map row
+
+        // Case 1: Any subfolder under DCIM/Camera/ (e.g. DCIM/Camera/Cshot/..., DCIM/Camera/BURST.../...)
+        if (parts.size >= 3 && parts[0].equals("DCIM", ignoreCase = true) && parts[1].equals("Camera", ignoreCase = true)) {
+            val cameraAlbumId = cameraParent?.mediaItem?.albumId ?: "camera-album"
+            val cameraAlbumName = cameraParent?.albumName ?: "Camera"
+            return@map row.copy(
+                mediaItem = row.mediaItem.copy(albumId = cameraAlbumId),
+                albumName = cameraAlbumName
+            )
+        }
+
+        // Case 2: Explicit burst or continuous shot folder anywhere in path
+        val burstIndex = parts.indexOfFirst { part ->
+            part.startsWith("BURST", ignoreCase = true) ||
+                part.startsWith(".BURST", ignoreCase = true) ||
+                part.startsWith("Cshot", ignoreCase = true) ||
+                part.contains("burst", ignoreCase = true) ||
+                part.startsWith("continuous", ignoreCase = true)
+        }
+        if (burstIndex >= 1) {
+            val parentPath = parts.take(burstIndex).joinToString("/", postfix = "/")
+            val parent = folders[parentPath.trimEnd('/').lowercase(Locale.ROOT)]
+            val targetAlbumId = parent?.mediaItem?.albumId ?: "parent:$parentPath"
+            val targetAlbumName = parent?.albumName ?: parts[burstIndex - 1]
+            return@map row.copy(
+                mediaItem = row.mediaItem.copy(albumId = targetAlbumId),
+                albumName = targetAlbumName
+            )
+        }
+
+        // Case 3: Timestamp session folder under DCIM or Pictures (e.g. DCIM/.../1750051379994)
+        if (parts.size >= 3 && parts.last().matches(Regex("""^\d{10,}$""")) &&
+            (parts[0].equals("DCIM", ignoreCase = true) || parts[0].equals("Pictures", ignoreCase = true))) {
+            val parentPath = parts.dropLast(1).joinToString("/", postfix = "/")
+            val parent = folders[parentPath.trimEnd('/').lowercase(Locale.ROOT)]
+            val targetAlbumId = parent?.mediaItem?.albumId ?: "parent:$parentPath"
+            val targetAlbumName = parent?.albumName ?: parts[parts.size - 2]
+            return@map row.copy(
+                mediaItem = row.mediaItem.copy(albumId = targetAlbumId),
+                albumName = targetAlbumName
+            )
+        }
+
+        row
     }
 }
 

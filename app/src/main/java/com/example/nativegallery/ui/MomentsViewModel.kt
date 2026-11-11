@@ -23,13 +23,32 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+data class FlashbackGroup(
+    val yearsAgo: Int,
+    val year: Int,
+    val title: String,
+    val subtitle: String,
+    val media: List<MediaItem>,
+    val cover: MediaItem,
+    val card: MomentCard
+)
+
 data class MomentCard(val id: String, val name: String, val media: List<MediaItem>, val highlights: List<MediaItem>,
     val cover: MediaItem, val saved: Boolean, val note: String = "")
-data class MomentsUiState(val cards: List<MomentCard> = emptyList(), val loading: Boolean = true, val error: String? = null,
-    val scanning: Boolean = false, val scanned: Int = 0, val total: Int = 0, val baseline: Int = 0)
+data class MomentsUiState(
+    val cards: List<MomentCard> = emptyList(),
+    val flashbacks: List<FlashbackGroup> = emptyList(),
+    val loading: Boolean = true,
+    val error: String? = null,
+    val scanning: Boolean = false,
+    val scanned: Int = 0,
+    val total: Int = 0,
+    val baseline: Int = 0
+)
 
 class MomentsViewModel private constructor(application: Application, private val repository: MomentRepository) : AndroidViewModel(application) {
     constructor(application: Application) : this(application, MomentRepository(application))
@@ -77,7 +96,7 @@ class MomentsViewModel private constructor(application: Application, private val
     private fun resumeAnalysis() {
         if (!resumed || !scanEnabled) return
         val photos = media.filter { isMemoryCandidate(it, it.id in favorites) }.sortedByDescending { it.sortTimestampMillis }
-        val key = photos.map { "${it.id}:${it.contentUri}:${it.dateModifiedMillis}:${it.fileSizeBytes}" }
+        val key = photos.map { "${it.id}:${it.contentUri}:${it.dateModifiedMillis}:${it.fileSizeBytes}:${it.width}:${it.height}" }
         if (key == scanKey && scanKey.isNotEmpty()) return
         val previous = scan
         previous?.cancel(); scanKey = key
@@ -110,7 +129,7 @@ class MomentsViewModel private constructor(application: Application, private val
         refresh = viewModelScope.launch {
             loaded.await()
             val snapshot = mutex.withLock { library }
-            val cards = withContext(Dispatchers.Default) {
+            val (cards, flashbacks) = withContext(Dispatchers.Default) {
                 val byId = photos.associateBy { it.id }
                 val saved = snapshot.moments.mapNotNull { moment ->
                     val members = moment.mediaIds.mapNotNull(byId::get).sortedBy { it.sortTimestampMillis }
@@ -129,9 +148,10 @@ class MomentsViewModel private constructor(application: Application, private val
                         val dates = if (start == end) start else "$start – $end"
                         MomentCard(suggestion.id, "${suggestion.title} · $dates", members, highlights, cover, false)
                     }
-                saved + suggested
+                val computedFlashbacks = computeFlashbacks(photos, favoriteIds)
+                (saved + suggested) to computedFlashbacks
             }
-            mutable.value = mutable.value.copy(cards = cards, loading = false)
+            mutable.value = mutable.value.copy(cards = cards, flashbacks = flashbacks, loading = false)
         }
     }
 
@@ -164,4 +184,74 @@ class MomentsViewModel private constructor(application: Application, private val
             catch (error: Exception) { mutable.value = mutable.value.copy(error = error.message ?: "Could not save this moment") }
         }
     }
+}
+
+internal fun computeFlashbacks(
+    photos: List<MediaItem>,
+    favoriteIds: Set<String>,
+    today: LocalDate = LocalDate.now()
+): List<FlashbackGroup> {
+    if (photos.isEmpty()) return emptyList()
+    val zone = ZoneId.systemDefault()
+    val photosWithDate = photos.mapNotNull { item ->
+        if (item.sortTimestampMillis <= 0L) return@mapNotNull null
+        val date = Instant.ofEpochMilli(item.sortTimestampMillis).atZone(zone).toLocalDate()
+        item to date
+    }
+
+    val pastPhotos = photosWithDate.filter { (_, date) -> date.year < today.year }
+    if (pastPhotos.isEmpty()) return emptyList()
+
+    val byYear = pastPhotos.groupBy { (_, date) -> date.year }
+    val result = mutableListOf<FlashbackGroup>()
+
+    for ((year, itemsWithDate) in byYear.entries.sortedByDescending { it.key }) {
+        val yearsAgo = today.year - year
+        val exactMatches = itemsWithDate.filter { (_, date) ->
+            date.monthValue == today.monthValue && date.dayOfMonth == today.dayOfMonth
+        }.map { it.first }
+
+        val targetItems = if (exactMatches.isNotEmpty()) {
+            exactMatches
+        } else {
+            itemsWithDate.filter { (_, date) ->
+                val monthDiff = kotlin.math.abs(date.monthValue - today.monthValue)
+                if (monthDiff == 0) {
+                    kotlin.math.abs(date.dayOfMonth - today.dayOfMonth) <= 2
+                } else false
+            }.map { it.first }
+        }
+
+        if (targetItems.isNotEmpty()) {
+            val title = if (exactMatches.isNotEmpty()) {
+                if (yearsAgo == 1) "1 Year Ago Today" else "$yearsAgo Years Ago Today"
+            } else {
+                if (yearsAgo == 1) "Around This Day · 1 Year Ago" else "Around This Day · $yearsAgo Years Ago"
+            }
+            val subtitle = "$year · ${targetItems.size} ${if (targetItems.size == 1) "memory" else "memories"}"
+            val highlights = momentHighlights(targetItems, favoriteIds)
+            val cover = highlights.firstOrNull() ?: targetItems.first()
+            val card = MomentCard(
+                id = "flashback:$year",
+                name = title,
+                media = targetItems,
+                highlights = highlights,
+                cover = cover,
+                saved = false,
+                note = subtitle
+            )
+            result.add(
+                FlashbackGroup(
+                    yearsAgo = yearsAgo,
+                    year = year,
+                    title = title,
+                    subtitle = subtitle,
+                    media = targetItems,
+                    cover = cover,
+                    card = card
+                )
+            )
+        }
+    }
+    return result
 }

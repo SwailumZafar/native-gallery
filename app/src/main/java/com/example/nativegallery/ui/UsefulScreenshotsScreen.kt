@@ -18,6 +18,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -102,16 +107,28 @@ internal fun UsefulScreenshotsScreen(media: List<MediaItem>, onBack: () -> Unit,
                     items(members, key = { it.media.id }) { entry ->
                         Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
                             Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                                MediaThumbnail(entry.media, Modifier.width(102.dp).height(126.dp), cornerRadius = 12.dp,
-                                    onClickWithBounds = { bounds -> onOpenMedia(entry.media, entries.map { it.media }, bounds) })
-                                Column(Modifier.weight(1f)) {
+                                Box {
+                                    MediaThumbnail(entry.media, Modifier.width(102.dp).height(126.dp), cornerRadius = 12.dp,
+                                        onClickWithBounds = { bounds -> onOpenMedia(entry.media, entries.map { it.media }, bounds) })
+                                    if (entry.pinned && filter != "Done") {
+                                        Surface(Modifier.padding(6.dp).align(Alignment.TopStart), shape = RoundedCornerShape(8.dp),
+                                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.94f)) {
+                                            Icon(Icons.Filled.PushPin, "Pinned", Modifier.padding(4.dp).size(12.dp),
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                                        }
+                                    }
+                                }
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(entry.text.lineSequence().firstOrNull { it.isNotBlank() } ?: "Saved screenshot",
                                         style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Text(if (entry.indexed || entry.manualCategory != null) entry.displayCategory.label else "Ready to scan",
-                                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                    Surface(shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)) {
+                                        Text(if (entry.indexed || entry.manualCategory != null) entry.displayCategory.label else "Ready to scan",
+                                            Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium)
+                                    }
                                     if (entry.media.dateLabel.isNotBlank()) Text(entry.media.dateLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    entry.followUp?.let { Text("Follow-up ${it.format(DateTimeFormatter.ofPattern("d MMM yyyy"))}", style = MaterialTheme.typography.labelSmall) }
-                                    TextButton({ detailId = entry.media.id }, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)) { Text("Details") }
+                                    entry.followUp?.let { Text("Follow-up ${it.format(DateTimeFormatter.ofPattern("d MMM yyyy"))}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary) }
+                                    TextButton({ detailId = entry.media.id }, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)) { Text("Details") }
                                 }
                             }
                         }
@@ -140,7 +157,7 @@ private fun ScreenshotDetails(entry: ScreenshotEntry, onDismiss: () -> Unit, onC
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             GalleryScreenHeader(entry.displayCategory.label, onDismiss, subtitle = entry.media.title,
                 trailingContent = { TextButton({ onChange { it.copy(pinned = !it.pinned) } }) { Text(if (entry.pinned) "Unpin" else "Pin") } })
-            MediaThumbnail(entry.media, Modifier.fillMaxWidth().height(170.dp).padding(horizontal = 16.dp), cornerRadius = 18.dp,
+            MediaThumbnail(entry.media, Modifier.fillMaxWidth().heightIn(min = 200.dp, max = 300.dp).padding(horizontal = 16.dp), cornerRadius = 18.dp,
                 onClickWithBounds = { onOpen(entry.media, it) })
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -169,12 +186,20 @@ private fun ScreenshotDetails(entry: ScreenshotEntry, onDismiss: () -> Unit, onC
             SelectionContainer(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp)) {
                 Text(entry.text.ifBlank { "Scan this screenshot to read and search its text." }, style = MaterialTheme.typography.bodyLarge)
             }
-            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(enabled = entry.text.isNotBlank(), onClick = {
                     (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Screenshot text", entry.text))
                     message = "Text copied"
-                }) { Text("Copy text") }
-                Button({ onChange { it.copy(done = !it.done) }; onDismiss() }) { Text(if (entry.done) "Restore to shelf" else "Mark done") }
+                }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) {
+                    Icon(Icons.Filled.ContentCopy, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Copy text")
+                }
+                Button({ onChange { it.copy(done = !it.done) }; onDismiss() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) {
+                    Icon(if (entry.done) Icons.Filled.Refresh else Icons.Filled.Check, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (entry.done) "Restore to shelf" else "Mark done")
+                }
             }
         }
     }

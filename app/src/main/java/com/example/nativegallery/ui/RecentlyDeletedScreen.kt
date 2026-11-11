@@ -78,6 +78,10 @@ import com.example.nativegallery.model.RecentlyDeletedMedia
 import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.MediaSelectionTopBar
+import com.example.nativegallery.ui.components.SelectionBarSpringEnter
+import com.example.nativegallery.ui.components.SelectionBarSpringExit
+import com.example.nativegallery.ui.components.SelectionTopBarSpringEnter
+import com.example.nativegallery.ui.components.SelectionTopBarSpringExit
 import com.example.nativegallery.ui.components.mediaSelectionAccentColor
 
 private class RecentlyDeletedBoundsRef(var value: Rect = Rect.Zero)
@@ -327,11 +331,8 @@ fun RecentlyDeletedScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .zIndex(4f),
-            enter = fadeIn(tween(140)) + slideInVertically(
-                animationSpec = tween(180),
-                initialOffsetY = { -it / 2 }
-            ),
-            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { -it / 2 })
+            enter = SelectionTopBarSpringEnter,
+            exit = SelectionTopBarSpringExit
         ) {
             MediaSelectionTopBar(
                 selectedCount = selectedMediaIds.size,
@@ -348,11 +349,8 @@ fun RecentlyDeletedScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(4f),
-            enter = fadeIn(tween(140)) + slideInVertically(
-                animationSpec = tween(190),
-                initialOffsetY = { it / 2 + 24 }
-            ),
-            exit = fadeOut(tween(100)) + slideOutVertically(targetOffsetY = { it / 2 + 24 })
+            enter = SelectionBarSpringEnter,
+            exit = SelectionBarSpringExit
         ) {
             RecentlyDeletedSelectionToolbar(
                 onRestore = {

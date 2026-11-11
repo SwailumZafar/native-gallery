@@ -21,10 +21,21 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
-internal suspend fun decodeUsefulPhoto(context: Context, uri: Uri, maxEdge: Int): Bitmap = withContext(Dispatchers.IO) {
+internal suspend fun decodeUsefulPhoto(context: Context, uri: Uri, maxEdge: Int): Bitmap {
+    var owned: Bitmap? = null
+    try {
+        withContext(Dispatchers.IO) { owned = decodeUsefulPhotoBlocking(context, uri, maxEdge) }
+        return requireNotNull(owned).also { owned = null }
+    } finally {
+        // A cancelled dispatcher handoff must not abandon a successfully decoded bitmap.
+        owned?.recycle()
+    }
+}
+
+private fun decodeUsefulPhotoBlocking(context: Context, uri: Uri, maxEdge: Int): Bitmap {
     val resolver = context.contentResolver
     if (Build.VERSION.SDK_INT >= 28) {
-        ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri)) { decoder, info, _ ->
+        return ImageDecoder.decodeBitmap(ImageDecoder.createSource(resolver, uri)) { decoder, info, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             val scale = minOf(1f, maxEdge.toFloat() / maxOf(info.size.width, info.size.height))
             decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1), (info.size.height * scale).toInt().coerceAtLeast(1))
@@ -37,18 +48,20 @@ internal suspend fun decodeUsefulPhoto(context: Context, uri: Uri, maxEdge: Int)
         while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > maxEdge) options.inSampleSize *= 2
         options.inJustDecodeBounds = false
         val bitmap = resolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, options) } ?: error("Photo unavailable")
+        try {
         val exif = resolver.openInputStream(uri).use { it?.let(::ExifInterface) }
         val matrix = Matrix()
         if (exif?.isFlipped == true) matrix.postScale(-1f, 1f)
         matrix.postRotate((exif?.rotationDegrees ?: 0).toFloat())
         val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
         if (rotated !== bitmap) bitmap.recycle()
-        rotated
+        return rotated
+        } catch (error: Throwable) { bitmap.recycle(); throw error }
     }
 }
 
 internal data class LocalTextLine(val text: String, val left: Float, val top: Float, val right: Float, val bottom: Float)
-internal data class LocalTextResult(val text: String, val lines: List<LocalTextLine>)
+internal data class LocalTextResult(val text: String, val lines: List<LocalTextLine>, val blockCount: Int = 0)
 
 internal suspend fun recognizeUsefulPhoto(bitmap: Bitmap): LocalTextResult {
     val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
@@ -62,7 +75,7 @@ internal suspend fun recognizeUsefulPhoto(bitmap: Bitmap, recognizer: TextRecogn
         return LocalTextResult(result.text.take(12_000), result.textBlocks.flatMap { it.lines }.mapNotNull { line ->
             line.boundingBox?.let { box -> LocalTextLine(line.text, box.left.toFloat() / bitmap.width, box.top.toFloat() / bitmap.height,
                 box.right.toFloat() / bitmap.width, box.bottom.toFloat() / bitmap.height) }
-        })
+        }, result.textBlocks.size)
 }
 
 // ML Kit may still read the bitmap after coroutine cancellation. Resume only when

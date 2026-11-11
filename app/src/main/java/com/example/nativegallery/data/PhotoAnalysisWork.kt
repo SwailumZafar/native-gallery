@@ -10,12 +10,28 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import java.util.concurrent.Executors
+import java.util.concurrent.Executor
 
 /** Analysis never shares the UI/thumbnail worker pool, and yields at photo boundaries. */
 internal object PhotoAnalysisWork {
-    val dispatcher = Executors.newFixedThreadPool(3) { task ->
+    private val workers = Executors.newFixedThreadPool(3) { task ->
         Thread({ Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "photo-analysis")
-    }.asCoroutineDispatcher()
+    }
+    val dispatcher = workers.asCoroutineDispatcher()
+    private val inferenceWorkers = Executors.newFixedThreadPool(3) { task ->
+        Thread({
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+            task.run()
+        }, "photo-inference")
+    }
+    val inferenceDispatcher = inferenceWorkers.asCoroutineDispatcher()
+    // Image Labeler keys its native model queues by options, including executor identity. Distinct,
+    // stable lanes allow actual parallel inference instead of three clients sharing one queue.
+    // Inference runs at background priority to keep UI and RenderThread scrolling perfectly smooth.
+    private val inferenceLanes = List(3) {
+        object : Executor { override fun execute(command: Runnable) = inferenceWorkers.execute(command) }
+    }
+    fun inferenceExecutor(slot: Int): Executor = inferenceLanes[slot]
     private val peopleAllowed = MutableStateFlow(false)
     private val idle = MutableStateFlow(true)
     private val touching = MutableStateFlow(false)
@@ -33,7 +49,7 @@ internal object PhotoAnalysisWork {
     }
     fun setPeopleAllowed(allowed: Boolean) { peopleAllowed.value = allowed }
     fun setInteractionBusy(busy: Boolean) {
-        if (idle.value == busy) quietSince = SystemClock.elapsedRealtime()
+        quietSince = SystemClock.elapsedRealtime()
         idle.value = !busy
     }
     private suspend fun awaitQuiet(needsPeople: Boolean) {

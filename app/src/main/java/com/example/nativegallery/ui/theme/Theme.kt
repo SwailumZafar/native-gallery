@@ -80,11 +80,42 @@ private val SunsetDark = IrisDark.copy(
     surfaceContainerHighest = Color(0xFF4E392E), surfaceVariant = Color(0xFF513B30),
     onSurfaceVariant = Color(0xFFDFC4B5), outline = Color(0xFFB99B88), outlineVariant = Color(0xFF614A3D)
 )
+private val CrimsonLight = IrisLight.copy(
+    primary = Color(0xFFD0001F), onPrimary = Color.White,
+    primaryContainer = Color(0xFFFFDAD9), onPrimaryContainer = Color(0xFF410008),
+    secondary = Color(0xFF6E464A), onSecondary = Color.White,
+    secondaryContainer = Color(0xFFFFD9DB), onSecondaryContainer = Color(0xFF2A1114),
+    tertiary = Color(0xFF9E1025), tertiaryContainer = Color(0xFFFFDADA), onTertiaryContainer = Color(0xFF3B0711),
+    background = Color(0xFFF1F5F9), onBackground = Color(0xFF090A0E), surface = Color(0xFFFFFFFF), onSurface = Color(0xFF090A0E),
+    surfaceDim = Color(0xFFDCE3EB), surfaceBright = Color(0xFFFFFFFF),
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFE9F0F6), surfaceContainer = Color(0xFFE1E9F1),
+    surfaceContainerHigh = Color(0xFFD6E0EA), surfaceContainerHighest = Color(0xFFCCD6E2),
+    surfaceVariant = Color(0xFFDCE4EE), onSurfaceVariant = Color(0xFF2C323E),
+    outline = Color(0xFF6E7887), outlineVariant = Color(0xFFBAC5D2)
+)
+private val CrimsonDark = IrisDark.copy(
+    primary = Color(0xFFFF2E40), onPrimary = Color(0xFF080102),
+    primaryContainer = Color(0xFF4C0812), onPrimaryContainer = Color(0xFFFFD1D6),
+    secondary = Color(0xFFE2BFC2), onSecondary = Color(0xFF442528),
+    secondaryContainer = Color(0xFF381B20), onSecondaryContainer = Color(0xFFFFD8DC),
+    tertiary = Color(0xFFFF4D5E), onTertiary = Color(0xFF080102),
+    tertiaryContainer = Color(0xFF5E0B18), onTertiaryContainer = Color(0xFFFFD8DC),
+    background = Color(0xFF090A0E), onBackground = Color(0xFFEDF2F7),
+    surface = Color(0xFF101217), onSurface = Color(0xFFEDF2F7),
+    surfaceDim = Color(0xFF090A0E), surfaceBright = Color(0xFF333844),
+    surfaceContainerLowest = Color(0xFF050608),
+    surfaceContainerLow = Color(0xFF151820), surfaceContainer = Color(0xFF1B1E28),
+    surfaceContainerHigh = Color(0xFF242936), surfaceContainerHighest = Color(0xFF2D3342),
+    surfaceVariant = Color(0xFF282D3B),
+    onSurfaceVariant = Color(0xFFCBD5E1), outline = Color(0xFF8B9BB0), outlineVariant = Color(0xFF3E4756)
+)
 
 internal fun galleryColorScheme(palette: GalleryPalette, dark: Boolean): ColorScheme = when (palette) {
     GalleryPalette.Iris -> if (dark) IrisDark else IrisLight
     GalleryPalette.Lagoon -> if (dark) LagoonDark else LagoonLight
     GalleryPalette.Sunset -> if (dark) SunsetDark else SunsetLight
+    GalleryPalette.Crimson -> if (dark) CrimsonDark else CrimsonLight
 }
 
 @Composable

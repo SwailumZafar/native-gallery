@@ -111,6 +111,10 @@ import androidx.compose.ui.unit.sp
 import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.MediaSelectionActionBar
 import com.example.nativegallery.ui.components.MediaSelectionTopBar
+import com.example.nativegallery.ui.components.SelectionBarSpringEnter
+import com.example.nativegallery.ui.components.SelectionBarSpringExit
+import com.example.nativegallery.ui.components.SelectionTopBarSpringEnter
+import com.example.nativegallery.ui.components.SelectionTopBarSpringExit
 import com.example.nativegallery.ui.components.GalleryMotion
 import com.example.nativegallery.ui.components.GalleryFastScroller
 import com.example.nativegallery.ui.components.MediaThumbnail
@@ -164,6 +168,8 @@ fun PhotosScreen(
     onShareSelected: () -> Unit = {},
     onHideSelected: () -> Unit = {},
     onMoveSelected: () -> Unit = {},
+    onCompareSelected: (() -> Unit)? = null,
+    onCollageSelected: (() -> Unit)? = null,
     onRefresh: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onMediaBoundsChanged: (MediaItem, Rect) -> Unit = { _, _ -> },
@@ -450,14 +456,8 @@ fun PhotosScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .zIndex(4f),
-            enter = fadeIn(MotionSpecs.AppleSpringSnappy) + slideInVertically(
-                animationSpec = MotionSpecs.AppleSpringSheetOffset,
-                initialOffsetY = { -it / 2 }
-            ),
-            exit = fadeOut(tween(100)) + slideOutVertically(
-                animationSpec = MotionSpecs.AppleSpringSheetOffset,
-                targetOffsetY = { -it / 2 }
-            )
+            enter = SelectionTopBarSpringEnter,
+            exit = SelectionTopBarSpringExit
         ) {
             MediaSelectionTopBar(
                 selectedCount = selectedMediaIds.size,
@@ -478,10 +478,13 @@ fun PhotosScreen(
 
         SelectionBottomActionBar(
             visible = isSelectionMode,
+            selectedCount = selectedMediaIds.size,
             onShare = onShareSelected,
             onHide = onHideSelected,
             onMove = onMoveSelected,
             onDelete = onDeleteSelected,
+            onCompare = onCompareSelected,
+            onCollage = onCollageSelected,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(3f)
@@ -780,29 +783,29 @@ private fun SearchAction(
 @Composable
 private fun SelectionBottomActionBar(
     visible: Boolean,
+    selectedCount: Int,
     onShare: () -> Unit,
     onHide: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
+    onCompare: (() -> Unit)? = null,
+    onCollage: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
         visible = visible,
         modifier = modifier,
-        enter = fadeIn(animationSpec = MotionSpecs.AppleSpringSnappy) + slideInVertically(
-            animationSpec = MotionSpecs.AppleSpringSheetOffset,
-            initialOffsetY = { it / 2 + 24 }
-        ),
-        exit = fadeOut(animationSpec = tween(100)) + slideOutVertically(
-            animationSpec = MotionSpecs.AppleSpringSheetOffset,
-            targetOffsetY = { it / 2 + 24 }
-        )
+        enter = SelectionBarSpringEnter,
+        exit = SelectionBarSpringExit
     ) {
         MediaSelectionActionBar(
             onShare = onShare,
             onLock = onHide,
             onMove = onMove,
             onDelete = onDelete,
+            selectedCount = selectedCount,
+            onCompare = onCompare,
+            onCollage = onCollage,
             modifier = Modifier
                 .navigationBarsPadding()
                 .padding(start = 12.dp, end = 12.dp, bottom = 2.dp)

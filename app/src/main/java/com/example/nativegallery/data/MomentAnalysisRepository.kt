@@ -15,8 +15,10 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import android.os.SystemClock
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlin.math.sqrt
@@ -45,8 +47,11 @@ internal class MomentAnalysisRepository(private val context: Context, private va
             var count = evidence.size
             var snapshot = evidence.toMap()
             onProgress(MemoryScanProgress(snapshot, count, photos.size))
-            val labeler = ImageLabeling.getClient(ImageLabelerOptions.Builder().setConfidenceThreshold(0.60f).build())
-            val textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            val pending = photos.distinctBy { it.id }.filterNot { it.id in evidence }
+            if (pending.isEmpty()) return@use
+            var failed = 0
+            var lastSnapshot = SystemClock.elapsedRealtime()
+            var hasPublishedMemory = snapshot.values.any { it.theme != null }
             val writes = mutableListOf<Pair<MediaItem, MemoryEvidence>>()
             fun flush() {
                 if (writes.isEmpty()) return
@@ -62,53 +67,62 @@ internal class MomentAnalysisRepository(private val context: Context, private va
             }
             try {
                 coroutineScope {
-                val decoded = Channel<Pair<MediaItem, Result<Bitmap>>>(1, onUndeliveredElement = { it.second.getOrNull()?.recycle() })
-                val pending = photos.filterNot { it.id in evidence }
-                val producer = launch {
-                    try { for (photo in pending) {
-                        PhotoAnalysisWork.awaitIdle()
-                        val result = try { Result.success(decodeUsefulPhoto(context, requireNotNull(photo.contentUri), 640)) }
-                        catch (cancelled: CancellationException) { throw cancelled }
-                        catch (error: Exception) { Result.failure(error) }
-                        decoded.send(photo to result)
-                    } } finally { decoded.close() }
-                }
-                try { for ((photo, decodedPhoto) in decoded) {
-                    val result = try {
-                        val bitmap = decodedPhoto.getOrThrow()
-                        try {
+                    val parallelism = minOf(3, pending.size)
+                    val inputs = Channel<MediaItem>(parallelism)
+                    val results = Channel<Pair<MediaItem, Result<MemoryEvidence>>>(parallelism)
+                    launch { try { pending.forEach { inputs.send(it) } } finally { inputs.close() } }
+                    val workers = List(parallelism) { slot -> launch {
+                        val executor = PhotoAnalysisWork.inferenceExecutor(slot)
+                        val labeler = ImageLabeling.getClient(ImageLabelerOptions.Builder().setConfidenceThreshold(0.60f).setExecutor(executor).build())
+                        val textRecognizer = TextRecognition.getClient(TextRecognizerOptions.Builder().setExecutor(executor).build())
+                        try { for (photo in inputs) {
                             PhotoAnalysisWork.awaitIdle()
-                            currentCoroutineContext().ensureActive()
-                            val metrics = memoryImageMetrics(bitmap)
-                            if (metrics.quality <= 0f) MemoryEvidence(null, 0f, metrics.fingerprint)
-                            else {
-                                val labels = labeler.process(InputImage.fromBitmap(bitmap, 0)).awaitPhotoTask().associate { it.text to it.confidence }
-                                // Avoid a second ML pass for subjects that cannot become a memory.
-                                val subject = memoryTheme(labels, 0f, 0)
-                                if (subject == null) MemoryEvidence(null, metrics.quality, metrics.fingerprint)
-                                else {
-                                    val text = recognizeUsefulPhoto(bitmap, textRecognizer)
-                                    val coverage = text.lines.sumOf { ((it.right - it.left) * (it.bottom - it.top)).coerceAtLeast(0f).toDouble() }.toFloat()
-                                    MemoryEvidence(memoryTheme(labels, coverage, text.text.length), metrics.quality, metrics.fingerprint)
-                                }
-                            }
-                        } finally { bitmap.recycle() }
-                    } catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { count++; onProgress(MemoryScanProgress(snapshot, count, photos.size)); continue }
-                    currentCoroutineContext().ensureActive()
-                    writes += photo to result
-                    if (writes.size >= 16) flush()
-                    evidence[photo.id] = result
-                    count++
-                    // Expensive grouping receives snapshots only as useful evidence arrives.
-                    if (result.theme != null || count == photos.size) snapshot = evidence.toMap()
-                    onProgress(MemoryScanProgress(snapshot, count, photos.size))
-                } } finally { producer.cancel(); decoded.cancel() }
+                            val result = try {
+                                val bitmap = decodeUsefulPhoto(context, requireNotNull(photo.contentUri), 640)
+                                val evidence = try {
+                                    PhotoAnalysisWork.awaitIdle()
+                                    currentCoroutineContext().ensureActive()
+                                    val metrics = memoryImageMetrics(bitmap)
+                                    if (metrics.quality <= 0f) MemoryEvidence(null, 0f, metrics.fingerprint)
+                                    else {
+                                        val labels = labeler.process(InputImage.fromBitmap(bitmap, 0)).awaitPhotoTask().associate { it.text to it.confidence }
+                                        val subject = memoryTheme(labels, 0f, 0)
+                                        if (subject == null) MemoryEvidence(null, metrics.quality, metrics.fingerprint)
+                                        else {
+                                            val text = recognizeUsefulPhoto(bitmap, textRecognizer)
+                                            val coverage = text.lines.sumOf { ((it.right - it.left) * (it.bottom - it.top)).coerceAtLeast(0f).toDouble() }.toFloat()
+                                            MemoryEvidence(memoryTheme(labels, coverage, text.text.length), metrics.quality, metrics.fingerprint)
+                                        }
+                                    }
+                                } finally { bitmap.recycle() }
+                                Result.success(evidence)
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (error: Exception) { Result.failure(error) }
+                            results.send(photo to result)
+                        } } finally { labeler.close(); textRecognizer.close() }
+                    } }
+                    launch { workers.joinAll(); results.close() }
+                    for ((photo, analysis) in results) {
+                        currentCoroutineContext().ensureActive()
+                        val result = analysis.getOrNull()
+                        if (result == null) failed++ else {
+                            writes += photo to result
+                            if (writes.size >= 16) flush()
+                            evidence[photo.id] = result
+                        }
+                        count++
+                        if (count == photos.size ||
+                            (result?.theme != null && (!hasPublishedMemory || SystemClock.elapsedRealtime() - lastSnapshot >= 150))) {
+                            snapshot = evidence.toMap(); lastSnapshot = SystemClock.elapsedRealtime()
+                            hasPublishedMemory = hasPublishedMemory || result?.theme != null
+                        }
+                        onProgress(MemoryScanProgress(snapshot, count, photos.size))
+                    }
                 }
             } finally {
-                try { withContext(NonCancellable) { flush() } }
-                finally { labeler.close(); textRecognizer.close() }
+                withContext(NonCancellable) { flush() }
             }
+            check(failed == 0) { "$failed photos were unavailable; retry to check them." }
         }
     }
 }

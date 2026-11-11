@@ -38,7 +38,8 @@ internal enum class GalleryDestination {
     Moments,
     AlbumCreator,
     PhotoEditor,
-    Cleanup
+    Cleanup,
+    Places
 }
 
 @Immutable

@@ -35,7 +35,8 @@ enum class GalleryGridDensity(
 enum class GalleryPalette(val label: String, val description: String) {
     Iris("Iris", "Violet & lilac"),
     Lagoon("Lagoon", "Teal & sea glass"),
-    Sunset("Sunset", "Coral & apricot")
+    Sunset("Sunset", "Coral & apricot"),
+    Crimson("Crimson", "Obsidian, ice grey & racing red")
 }
 
 enum class FolderTransitionStyle(val label: String, val description: String) {

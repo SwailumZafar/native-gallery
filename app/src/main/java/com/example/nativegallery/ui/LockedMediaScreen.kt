@@ -89,6 +89,10 @@ import com.example.nativegallery.model.MediaItem
 import com.example.nativegallery.ui.components.GalleryScreenHeader
 import com.example.nativegallery.ui.components.MediaThumbnail
 import com.example.nativegallery.ui.components.MediaSelectionTopBar
+import com.example.nativegallery.ui.components.SelectionBarSpringEnter
+import com.example.nativegallery.ui.components.SelectionBarSpringExit
+import com.example.nativegallery.ui.components.SelectionTopBarSpringEnter
+import com.example.nativegallery.ui.components.SelectionTopBarSpringExit
 import com.example.nativegallery.ui.components.mediaSelectionAccentColor
 
 private class LockedMediaBoundsRef(var value: Rect = Rect.Zero)
@@ -389,14 +393,8 @@ fun LockedMediaScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .zIndex(4f),
-            enter = fadeIn(MotionSpecs.AppleSpringSnappy) + slideInVertically(
-                animationSpec = MotionSpecs.AppleSpringSheetOffset,
-                initialOffsetY = { -it / 2 }
-            ),
-            exit = fadeOut(tween(100)) + slideOutVertically(
-                animationSpec = MotionSpecs.AppleSpringSheetOffset,
-                targetOffsetY = { -it / 2 }
-            )
+            enter = SelectionTopBarSpringEnter,
+            exit = SelectionTopBarSpringExit
         ) {
             MediaSelectionTopBar(
                 selectedCount = selectedMediaIds.size,
@@ -413,14 +411,8 @@ fun LockedMediaScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .zIndex(4f),
-            enter = fadeIn(MotionSpecs.AppleSpringSnappy) + slideInVertically(
-                animationSpec = MotionSpecs.AppleSpringSheetOffset,
-                initialOffsetY = { it / 2 + 24 }
-            ),
-            exit = fadeOut(tween(100)) + slideOutVertically(
-                animationSpec = MotionSpecs.AppleSpringSheetOffset,
-                targetOffsetY = { it / 2 + 24 }
-            )
+            enter = SelectionBarSpringEnter,
+            exit = SelectionBarSpringExit
         ) {
             LockedMediaSelectionToolbar(
                 onUnhide = {

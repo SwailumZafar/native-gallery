@@ -149,9 +149,35 @@ class BurstAndMotionPhotoPolicyTest {
         assertTrue(isBurstClutterAlbum("burst_shots", "Pictures/"))
         assertTrue(isBurstClutterAlbum("Camera", "DCIM/Burst/"))
         assertTrue(isBurstClutterAlbum("Camera", "DCIM/burst_shots/"))
+        assertTrue(isBurstClutterAlbum("1750051379994", "DCIM/Camera/Cshot/1750051379994/"))
+        assertTrue(isBurstClutterAlbum("Cshot", "DCIM/Camera/Cshot/"))
 
         assertFalse(isBurstClutterAlbum("Camera", "DCIM/Camera/"))
         assertFalse(isBurstClutterAlbum("Screenshots", "Pictures/Screenshots/"))
         assertFalse(isBurstClutterAlbum("Downloads", "Download/"))
+    }
+
+    @Test
+    fun normalizeBurstAlbumRows_consolidatesCshotSubfoldersIntoCamera() {
+        fun row(id: String, albumId: String, albumName: String, path: String, title: String) =
+            MediaStoreGalleryRepository.MediaStoreRow(
+                MediaItem(id, albumId, MediaType.Photo, title, "Today", relativePath = path),
+                albumName
+            )
+
+        val camera = row("1", "cam-bucket", "Camera", "DCIM/Camera/", "IMG20250616.jpg")
+        val cshot1 = row("2", "cshot-1", "1750051379994", "DCIM/Camera/Cshot/1750051379994/", "IMG20250616102259_BURST000_COVER.jpg")
+        val cshot2 = row("3", "cshot-1", "1750051379994", "DCIM/Camera/Cshot/1750051379994/", "IMG20250616102259_BURST001.jpg")
+        val normalized = normalizeBurstAlbumRows(listOf(camera, cshot1, cshot2))
+
+        assertEquals("cam-bucket", normalized[1].mediaItem.albumId)
+        assertEquals("Camera", normalized[1].albumName)
+        assertEquals("cam-bucket", normalized[2].mediaItem.albumId)
+        assertEquals("Camera", normalized[2].albumName)
+
+        val grouped = groupBurstRows(normalized)
+        assertEquals(2, grouped.size)
+        assertEquals(2, grouped[1].mediaItem.burstCount)
+        assertTrue(grouped[1].mediaItem.isBurst)
     }
 }

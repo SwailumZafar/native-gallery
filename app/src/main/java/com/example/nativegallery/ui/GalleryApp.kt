@@ -98,8 +98,10 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.foundation.layout.WindowInsets
@@ -125,6 +127,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateMapOf
@@ -501,6 +504,9 @@ fun GalleryApp(
     var privateSharingVisible by rememberSaveable { mutableStateOf(false) }
     var privateSharingIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var privateSharingSession by rememberSaveable { mutableStateOf("") }
+    var comparisonPair by remember { mutableStateOf<Pair<MediaItem, MediaItem>?>(null) }
+    var collageVisible by rememberSaveable { mutableStateOf(false) }
+    var collageInitialIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var pendingShareItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var showMediaManagementExplanation by rememberSaveable { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -620,19 +626,34 @@ fun GalleryApp(
         }
         val listState = if (selectedTab == GalleryTab.Photos) photosListState else albumsListState
         bottomNavigationVisible = true
-        var previousIndex = listState.firstVisibleItemIndex
-        var previousOffset = listState.firstVisibleItemScrollOffset
+        var anchorIndex = listState.firstVisibleItemIndex
+        var anchorOffset = listState.firstVisibleItemScrollOffset
         snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
             .collect { (index, offset) ->
-                when {
-                    index == 0 && offset < 24 -> bottomNavigationVisible = true
-                    index > previousIndex -> bottomNavigationVisible = false
-                    index < previousIndex -> bottomNavigationVisible = true
-                    offset > previousOffset + 8 -> bottomNavigationVisible = false
-                    offset < previousOffset - 4 -> bottomNavigationVisible = true
+                if (index == 0 && offset < 48) {
+                    bottomNavigationVisible = true
+                    anchorIndex = 0
+                    anchorOffset = offset
+                } else if (index > anchorIndex + 1) {
+                    bottomNavigationVisible = false
+                    anchorIndex = index
+                    anchorOffset = offset
+                } else if (index < anchorIndex - 1) {
+                    bottomNavigationVisible = true
+                    anchorIndex = index
+                    anchorOffset = offset
+                } else {
+                    val delta = (index - anchorIndex) * 200 + (offset - anchorOffset)
+                    if (delta > 80) {
+                        bottomNavigationVisible = false
+                        anchorIndex = index
+                        anchorOffset = offset
+                    } else if (delta < -60) {
+                        bottomNavigationVisible = true
+                        anchorIndex = index
+                        anchorOffset = offset
+                    }
                 }
-                previousIndex = index
-                previousOffset = offset
             }
     }
 
@@ -1088,6 +1109,11 @@ fun GalleryApp(
     fun openDocuments() {
         selectedMediaIds = emptySet()
         navigationViewModel.openOverlay(GalleryDestination.Documents)
+    }
+
+    fun openPlaces() {
+        selectedMediaIds = emptySet()
+        navigationViewModel.openOverlay(GalleryDestination.Places)
     }
 
 
@@ -2456,6 +2482,20 @@ fun GalleryApp(
     fun requestShare(items: List<MediaItem>) { pendingShareItems = items.filter { it.contentUri != null }.distinctBy { it.id } }
     fun shareSelectedMedia() { requestShare(selectedMediaItems) }
 
+    fun compareSelectedMedia() {
+        if (selectedMediaItems.size == 2) {
+            comparisonPair = selectedMediaItems[0] to selectedMediaItems[1]
+        }
+    }
+
+    fun collageSelectedMedia() {
+        val photos = selectedMediaItems.filter { !it.isVideo }.take(6)
+        if (photos.size >= 2) {
+            collageInitialIds = photos.map { it.id }
+            collageVisible = true
+        }
+    }
+
     fun editPhoto(mediaItem: MediaItem) {
         if (mediaItem.isVideo || mediaItem.contentUri == null) return
         navigationViewModel.openEditor()
@@ -2714,6 +2754,9 @@ fun GalleryApp(
                                 (mainNavigationChromeReady || closingAlbum != null) &&
                                 selectedMediaIds.isEmpty() &&
                                 !viewerVisible &&
+                                !privateSharingVisible &&
+                                !collageVisible &&
+                                comparisonPair == null &&
                                 (navigationTransitionIdle || closingAlbum != null || mediaCloseTransition?.mediaItem?.isVideo == true)
                             val barRevealStart = rootHeightPx - with(density) { 110.dp.toPx() }
                             val barRevealEnd = rootHeightPx - with(density) { 24.dp.toPx() }
@@ -2845,6 +2888,8 @@ fun GalleryApp(
                                                 onShareSelected = ::shareSelectedMedia,
                                                 onHideSelected = ::hideSelectedMedia,
                                                 onMoveSelected = ::chooseAlbumForSelectedMedia,
+                                                onCompareSelected = ::compareSelectedMedia,
+                                                onCollageSelected = ::collageSelectedMedia,
                                                 onRefresh = mediaViewModel::requestQuickRefresh,
                                                 onOpenSettings = { showSettingsDialog = true },
                                                 onMediaBoundsChanged = { mediaItem, bounds ->
@@ -2975,6 +3020,8 @@ fun GalleryApp(
                                                 onOpenRecentlyDeleted = ::openRecentlyDeleted,
                                                 onOpenDocuments = ::openDocuments,
                                                 onOpenMoments = { navigationViewModel.openOverlay(GalleryDestination.Moments) },
+                                                onOpenPlaces = ::openPlaces,
+                                                onOpenCollage = { collageInitialIds = emptyList(); collageVisible = true },
                                                 onOpenUsefulScreenshots = { navigationViewModel.openOverlay(GalleryDestination.UsefulScreenshots) },
                                                 onOpenSettings = { showSettingsDialog = true },
                                                 onOpenCleanup = ::openCleanup
@@ -3234,6 +3281,19 @@ fun GalleryApp(
                                     )
                                 }
                             )
+                            GalleryDestination.Places -> PlacesScreen(
+                                mediaItems = visibleMedia,
+                                viewerOpen = viewerVisible || pendingMediaOpenKey != null || mediaOpenTransition != null || mediaCloseTransition != null,
+                                onBack = { returnFromOverlay(GalleryTab.Menu) },
+                                onOpenMedia = { mediaItem, mediaItems, bounds ->
+                                    startViewerOpen(
+                                        mediaItem = mediaItem,
+                                        mediaItems = mediaItems,
+                                        bounds = bounds,
+                                        sourceGridColumns = 4
+                                    )
+                                }
+                            )
                         }
                             }
                     }
@@ -3318,6 +3378,8 @@ fun GalleryApp(
                             onShareSelected = ::shareSelectedMedia,
                             onHideSelected = ::hideSelectedMedia,
                             onMoveSelected = ::chooseAlbumForSelectedMedia,
+                            onCompareSelected = ::compareSelectedMedia,
+                            onCollageSelected = ::collageSelectedMedia,
                             onHideAlbum = { hideAlbumAndReturn(pageAlbum) },
                             onMediaBoundsChanged = { mediaItem, bounds ->
                                 if (destination == GalleryDestination.AlbumDetail && bounds.isUsableTransitionBounds()) {
@@ -3448,6 +3510,38 @@ fun GalleryApp(
                 media = visibleMedia,
                 onDismiss = { privateSharingVisible = false }
             )
+
+            comparisonPair?.let { (photoA, photoB) ->
+                PhotoComparisonDialog(
+                    photoA = photoA,
+                    photoB = photoB,
+                    onDismiss = { comparisonPair = null },
+                    onKeepBest = { _, trashItem ->
+                        comparisonPair = null
+                        selectedMediaIds = emptySet()
+                        requestMediaStoreDeleteConfirmation(
+                            PendingMediaStoreWriteAction(MediaStoreWriteMode.Trash, listOf(trashItem))
+                        )
+                    }
+                )
+            }
+
+            if (collageVisible) {
+                val initialSelection = remember(visibleMedia, collageInitialIds) {
+                    val byId = visibleMedia.associateBy { it.id }
+                    collageInitialIds.mapNotNull(byId::get)
+                }
+                CollageMakerScreen(
+                    availableMedia = visibleMedia,
+                    initialSelection = initialSelection,
+                    onDismiss = { collageVisible = false },
+                    onSaved = {
+                        collageVisible = false
+                        selectedMediaIds = emptySet()
+                        mediaViewModel.requestQuickRefresh()
+                    }
+                )
+            }
 
             pendingDeleteConfirmation?.let { pending ->
                 val itemCount = pending.mediaItems.size
@@ -4178,6 +4272,8 @@ private fun GalleryMenuScreen(
     onOpenRecentlyDeleted: () -> Unit,
     onOpenDocuments: () -> Unit,
     onOpenMoments: () -> Unit,
+    onOpenPlaces: () -> Unit,
+    onOpenCollage: () -> Unit,
     onOpenUsefulScreenshots: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenCleanup: () -> Unit
@@ -4222,19 +4318,39 @@ private fun GalleryMenuScreen(
             ),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(20.dp))
+        Text(
+            text = "Tools & Organization",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+        )
         Surface(
             modifier = Modifier.fillMaxWidth(),
             color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(28.dp),
+            shape = RoundedCornerShape(24.dp),
             shadowElevation = 1.dp
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 GalleryMenuRow(
                     icon = Icons.Filled.Collections,
                     label = "Moments",
-                    description = "Keep trips and favorite days together",
+                    description = "Keep trips, flashbacks and favorite days together",
                     onClick = onOpenMoments,
+                    showDivider = true
+                )
+                GalleryMenuRow(
+                    icon = Icons.Filled.Public,
+                    label = "Places",
+                    description = "Explore geotagged photos on an interactive map",
+                    onClick = onOpenPlaces,
+                    showDivider = true
+                )
+                GalleryMenuRow(
+                    icon = Icons.Filled.GridView,
+                    label = "Collage studio",
+                    description = "Craft modern bento, filmstrip & polaroid layouts",
+                    onClick = onOpenCollage,
                     showDivider = true
                 )
                 GalleryMenuRow(
@@ -4245,17 +4361,40 @@ private fun GalleryMenuScreen(
                     showDivider = true
                 )
                 GalleryMenuRow(
-                    icon = Icons.Filled.Security,
-                    label = "Hidden albums",
-                    description = "Choose albums hidden from the gallery",
-                    onClick = onOpenHiddenItems,
-                    showDivider = true
+                    icon = Icons.Filled.Description,
+                    label = "Document photos",
+                    description = "Find bills, menus, letters, forms and text-heavy pictures",
+                    onClick = onOpenDocuments,
+                    showDivider = false
                 )
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        Text(
+            text = "Privacy & Storage",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+        )
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(24.dp),
+            shadowElevation = 1.dp
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 GalleryMenuRow(
                     icon = Icons.Filled.Lock,
                     label = "Locked media",
                     description = "PIN, face, or fingerprint protected items",
                     onClick = onOpenLockedMedia,
+                    showDivider = true
+                )
+                GalleryMenuRow(
+                    icon = Icons.Filled.Security,
+                    label = "Hidden albums",
+                    description = "Choose albums hidden from the gallery",
+                    onClick = onOpenHiddenItems,
                     showDivider = true
                 )
                 GalleryMenuRow(
@@ -4266,19 +4405,28 @@ private fun GalleryMenuScreen(
                     showDivider = true
                 )
                 GalleryMenuRow(
-                    icon = Icons.Filled.Description,
-                    label = "Document photos",
-                    description = "Find bills, menus, letters, forms and text-heavy pictures",
-                    onClick = onOpenDocuments,
-                    showDivider = true
-                )
-                GalleryMenuRow(
                     icon = Icons.Filled.CleaningServices,
                     label = "Cleanup",
                     description = "Review duplicate candidates and large files",
                     onClick = onOpenCleanup,
-                    showDivider = true
+                    showDivider = false
                 )
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        Text(
+            text = "Preferences",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+        )
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(24.dp),
+            shadowElevation = 1.dp
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 GalleryMenuRow(
                     icon = Icons.Filled.Palette,
                     label = "Appearance",
@@ -5451,6 +5599,41 @@ internal fun GalleryBottomBar(
     var dragPage by remember { mutableStateOf<Float?>(null) }
     val effectiveTarget = dragPage ?: targetPage
 
+    val contentWidthPx = with(density) { contentWidth.toPx() }
+    var touchAnchorXRatio by remember { mutableFloatStateOf(0.5f) }
+    var touchPullXPx by remember { mutableFloatStateOf(0f) }
+    var touchPullYPx by remember { mutableFloatStateOf(0f) }
+
+    val animatedPullX by animateFloatAsState(
+        targetValue = if (isPressed || isDragging) touchPullXPx else 0f,
+        animationSpec = if (isPressed || isDragging) {
+            spring(dampingRatio = 0.68f, stiffness = 850f)
+        } else {
+            spring(dampingRatio = 0.52f, stiffness = 420f)
+        },
+        label = "bottomNavPullX"
+    )
+
+    val animatedPullY by animateFloatAsState(
+        targetValue = if (isPressed || isDragging) touchPullYPx else 0f,
+        animationSpec = if (isPressed || isDragging) {
+            spring(dampingRatio = 0.72f, stiffness = 950f)
+        } else {
+            spring(dampingRatio = 0.52f, stiffness = 420f)
+        },
+        label = "bottomNavPullY"
+    )
+
+    val barBounceScale by animateFloatAsState(
+        targetValue = if (isPressed || isDragging) 0.94f else 1.0f,
+        animationSpec = if (isPressed || isDragging) {
+            spring(dampingRatio = 0.72f, stiffness = 850f)
+        } else {
+            spring(dampingRatio = 0.50f, stiffness = 380f)
+        },
+        label = "bottomNavBounce"
+    )
+
     val headState = animateFloatAsState(
         targetValue = effectiveTarget,
         animationSpec = if (isDragging) {
@@ -5496,6 +5679,16 @@ internal fun GalleryBottomBar(
         Surface(
             modifier = Modifier
                 .widthIn(min = 220.dp)
+                .graphicsLayer {
+                    val s = barBounceScale
+                    val upwardStretch = (-animatedPullY * 0.0022f).coerceIn(0f, 0.12f)
+                    translationX = 0f
+                    translationY = 0f
+                    rotationZ = 0f
+                    scaleX = 1f - (1f - s) * 0.45f - upwardStretch * 0.22f
+                    scaleY = s + upwardStretch
+                    transformOrigin = TransformOrigin(touchAnchorXRatio, 1.0f)
+                }
                 .clip(containerShape),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
             shape = containerShape,
@@ -5516,7 +5709,11 @@ internal fun GalleryBottomBar(
                         coroutineScope { awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val startX = down.position.x
+                            val startY = down.position.y
                             val pointerId = down.id
+                            touchAnchorXRatio = (startX / contentWidthPx).coerceIn(0.12f, 0.88f)
+                            touchPullXPx = 0f
+                            touchPullYPx = 0f
                             var hasDragged = false
                             var lastX = startX
                             var lastHoverTab = tabForX(startX)
@@ -5538,7 +5735,11 @@ internal fun GalleryBottomBar(
                                     break
                                 }
                                 val currentX = change.position.x
+                                val currentY = change.position.y
                                 lastX = currentX
+                                touchAnchorXRatio = (currentX / contentWidthPx).coerceIn(0.12f, 0.88f)
+                                touchPullXPx = (currentX - startX).coerceIn(-48f, 48f)
+                                touchPullYPx = (currentY - startY).coerceIn(-64f, 20f)
                                 val dragDist = (change.position - down.position).getDistance()
                                 if (!hasDragged && dragDist > viewConfiguration.touchSlop) {
                                     hold?.cancel()
@@ -5566,6 +5767,8 @@ internal fun GalleryBottomBar(
                             isDragging = false
                             dragPage = null
                             isPressed = false
+                            touchPullXPx = 0f
+                            touchPullYPx = 0f
                             }
                         } }
                     }
@@ -5580,9 +5783,12 @@ internal fun GalleryBottomBar(
                             val t = tailState.value
                             val stretchPx = kotlin.math.abs(h - t) * tabStepPx * 0.42f
                             val centerP = (h + t) / 2f
-                            translationX = centerP * tabStepPx
-                            scaleX = (1f + (stretchPx / baseTabWidthPx)) * pressScale
-                            scaleY = pressScale
+                            val squeezeShiftX = (animatedPullX * 0.32f).coerceIn(-16.dp.toPx(), 16.dp.toPx())
+                            val squeezeShiftY = (animatedPullY * 0.28f).coerceIn(-12.dp.toPx(), 4.dp.toPx())
+                            translationX = centerP * tabStepPx + squeezeShiftX
+                            translationY = squeezeShiftY
+                            scaleX = (1f + (stretchPx / baseTabWidthPx) + (kotlin.math.abs(squeezeShiftX) / baseTabWidthPx) * 0.45f) * pressScale
+                            scaleY = (1f + (-squeezeShiftY / baseTabWidthPx) * 0.40f) * pressScale
                             transformOrigin = TransformOrigin(0.5f, 0.5f)
                         }
                         .clip(tabShape)

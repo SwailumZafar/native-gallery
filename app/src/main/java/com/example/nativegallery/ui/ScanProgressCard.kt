@@ -25,15 +25,30 @@ import androidx.compose.ui.unit.dp
 /** Stationary tabular glyphs never overlap or fade through each other during a fast count. */
 @Composable
 internal fun LiveScanCounter(count: Int, total: Int, baseline: Int = 0) {
-    var displayed by remember(total, baseline) { mutableIntStateOf(baseline.coerceIn(0, count.coerceAtLeast(0))) }
-    val latest by rememberUpdatedState(count.coerceAtLeast(0))
-    LaunchedEffect(total, baseline) {
-        snapshotFlow { latest }.collect {
-            if (latest < displayed || latest - displayed > 240) displayed = latest
-            while (displayed < latest) { withFrameNanos { }; displayed++ }
+    val target = count.coerceAtLeast(0).toFloat()
+    var displayed by remember(total, baseline) {
+        mutableFloatStateOf(baseline.coerceIn(0, count.coerceAtLeast(0)).toFloat())
+    }
+
+    LaunchedEffect(target, total, baseline) {
+        if (target < displayed || target - displayed > 250f) {
+            displayed = target
+            return@LaunchedEffect
+        }
+        while (displayed < target) {
+            withFrameNanos {
+                val remaining = target - displayed
+                if (remaining <= 0.05f) {
+                    displayed = target
+                } else {
+                    val step = maxOf(0.45f, remaining * 0.028f)
+                    displayed = (displayed + step).coerceAtMost(target)
+                }
+            }
         }
     }
-    Row(Modifier.testTag("live-scan-counter").semantics { stateDescription = "$displayed/$total" },
+    val displayedInt = displayed.toInt()
+    Row(Modifier.testTag("live-scan-counter").semantics { stateDescription = "$displayedInt/$total" },
         horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
         val numberStyle = MaterialTheme.typography.labelLarge.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
         val measurer = rememberTextMeasurer()
@@ -42,8 +57,8 @@ internal fun LiveScanCounter(count: Int, total: Int, baseline: Int = 0) {
             val sizes = (0..9).map { measurer.measure(it.toString(), numberStyle).size }
             androidx.compose.ui.unit.IntSize(sizes.maxOf { it.width } + 2, sizes.maxOf { it.height })
         }
-        val digits = displayed.toString().padStart(total.coerceAtLeast(displayed).toString().length, ' ')
-        Row(Modifier.semantics(mergeDescendants = true) { contentDescription = displayed.toString() }) {
+        val digits = displayedInt.toString().padStart(total.coerceAtLeast(displayedInt).toString().length, ' ')
+        Row(Modifier.semantics(mergeDescendants = true) { contentDescription = displayedInt.toString() }) {
             digits.forEach { digit ->
                 Box(Modifier.size(with(density) { cellSize.width.toDp() }, with(density) { cellSize.height.toDp() }), contentAlignment = Alignment.Center) {
                     Text(if (digit == ' ') "" else digit.toString(), Modifier.clearAndSetSemantics {},

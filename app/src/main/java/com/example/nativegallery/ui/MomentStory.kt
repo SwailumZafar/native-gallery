@@ -4,8 +4,10 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -19,13 +21,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,8 +47,13 @@ internal fun MomentStory(card: MomentCard, onDismiss: () -> Unit) {
     index = index.coerceIn(frames.indices)
     var paused by rememberSaveable(card.id) { mutableStateOf(false) }
     var held by remember { mutableStateOf(false) }
+    var audioMood by rememberSaveable(card.id) { mutableStateOf(StoryAudioMood.CalmPiano) }
+    var audioMenuOpen by remember { mutableStateOf(false) }
     val elapsed = remember(card.id, index) { mutableFloatStateOf(0f) }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+    val isMusicPlaying = !paused && !held && audioMood != StoryAudioMood.Silent && lifecycle.isAtLeast(Lifecycle.State.RESUMED)
+    rememberStoryAudioPlayer(mood = audioMood, isPlaying = isMusicPlaying)
+
     val frame = frames[index]
     var loaded by remember(frame.id) { mutableStateOf(frame.contentUri == null) }
     LaunchedEffect(frame.id) {
@@ -69,7 +73,7 @@ internal fun MomentStory(card: MomentCard, onDismiss: () -> Unit) {
     }
     fun next() { if (index < frames.lastIndex) index++ else onDismiss() }
     fun previous() { if (index > 0) index-- else elapsed.floatValue = 0f }
-    Dialog(onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    UsefulFeatureDialog(onDismiss) {
         Box(Modifier.fillMaxSize().background(Color.Black).testTag("moment-story")) {
             AnimatedContent(frame, Modifier.fillMaxSize().clipToBounds(), contentKey = { it.id }, label = "story-photo",
                 transitionSpec = { fadeIn(tween(240)) togetherWith fadeOut(tween(180)) }) { photo ->
@@ -82,9 +86,9 @@ internal fun MomentStory(card: MomentCard, onDismiss: () -> Unit) {
                 detectTapGestures(onPress = { held = true; try { tryAwaitRelease() } finally { held = false } },
                     onTap = { if (it.x < size.width * 0.33f) previous() else next() })
             })
-            Box(Modifier.fillMaxWidth().height(190.dp).align(Alignment.TopCenter)
-                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent))))
-            Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Box(Modifier.fillMaxWidth().height(210.dp).align(Alignment.TopCenter)
+                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.85f), Color.Transparent))))
+            Column(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp)) {
                 Canvas(Modifier.fillMaxWidth().height(3.dp)) {
                     val gap = 4.dp.toPx()
                     val width = ((size.width - gap * (frames.size - 1)) / frames.size).coerceAtLeast(1f)
@@ -95,10 +99,51 @@ internal fun MomentStory(card: MomentCard, onDismiss: () -> Unit) {
                         if (amount > 0f) drawRoundRect(Color.White, Offset(left, 0f), Size(width * amount, size.height), CornerRadius(size.height))
                     }
                 }
+                Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(card.name, color = Color.White, style = MaterialTheme.typography.titleMedium, maxLines = 2)
                         Text("${index + 1} of ${frames.size} · Hold to pause", color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Box {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color.White.copy(alpha = 0.16f),
+                            modifier = Modifier.clickable { audioMenuOpen = true }
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (audioMood == StoryAudioMood.Silent) {
+                                    Icon(Icons.Filled.VolumeOff, "Sound muted", tint = Color.White, modifier = Modifier.size(16.dp))
+                                } else {
+                                    StoryMusicEqualizerIcon(isPlaying = isMusicPlaying, color = Color.White)
+                                }
+                                Text(audioMood.label, color = Color.White, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        DropdownMenu(expanded = audioMenuOpen, onDismissRequest = { audioMenuOpen = false }) {
+                            for (mood in StoryAudioMood.entries) {
+                                DropdownMenuItem(
+                                    text = { Text(mood.label) },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (mood == StoryAudioMood.Silent) Icons.Filled.VolumeOff else Icons.Filled.MusicNote,
+                                            contentDescription = null
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        if (mood == audioMood) Icon(Icons.Filled.Check, null)
+                                    },
+                                    onClick = {
+                                        audioMood = mood
+                                        audioMenuOpen = false
+                                    }
+                                )
+                            }
+                        }
                     }
                     IconButton({ paused = !paused }) { Icon(if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                         if (paused) "Resume story" else "Pause story", tint = Color.White) }
@@ -107,10 +152,10 @@ internal fun MomentStory(card: MomentCard, onDismiss: () -> Unit) {
             }
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))))
-                .windowInsetsPadding(WindowInsets.safeDrawing).padding(16.dp)) {
+                .navigationBarsPadding().padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(::previous, enabled = index > 0) { Icon(Icons.Filled.ChevronLeft, "Previous story photo", tint = Color.White) }
-                    Button(onDismiss, Modifier.weight(1f)) { Text("View all photos") }
+                    Button(onDismiss, Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) { Text("View all photos") }
                     IconButton(::next) { Icon(Icons.Filled.ChevronRight, "Next story photo", tint = Color.White) }
                 }
             }
